@@ -285,3 +285,49 @@ html, body {
   .search-wrap { order: 3; max-width: 100%; flex-basis: 100%; }
   .topbar-actions { margin-left: 0; }
 }
+
+/* ---------- Auth (登录 / 注册) ---------- */
+.auth-view {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  z-index: 200;
+}
+.auth-card {
+  width: min(360px, 92vw);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 32px 28px;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.auth-logo { font-size: 44px; }
+.auth-card h1 { margin: 8px 0 4px; font-size: 22px; }
+.auth-sub { margin: 0 0 22px; color: var(--text-soft); font-size: 13px; }
+.auth-form { display: flex; flex-direction: column; gap: 12px; }
+.auth-form input {
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+.auth-form input:focus { border-color: var(--primary); }
+.auth-form .btn.block { width: 100%; padding: 11px; }
+.auth-toggle { margin: 4px 0 0; font-size: 13px; color: var(--text-soft); }
+.auth-toggle a { color: var(--primary); cursor: pointer; text-decoration: none; }
+.auth-error { margin-top: 12px; color: var(--danger); font-size: 13px; }
+
+.user-name {
+  font-size: 13px;
+  color: var(--text-soft);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

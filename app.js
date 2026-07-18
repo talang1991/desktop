@@ -1,18 +1,19 @@
-/* Web 应用导航面板 —— 本地纯前端实现，数据存于 localStorage */
+/* Web 应用导航面板 —— 后端 API 驱动，数据存 PostgreSQL */
 (function () {
   "use strict";
 
-  const STORE_KEY = "web-app-launcher:apps";
   const THEME_KEY = "web-app-launcher:theme";
   const COLORS = [
     "#4f6ef7", "#e5484d", "#12a594", "#f5a623",
     "#9b5de5", "#f15bb5", "#00bbf9", "#8ac926",
   ];
 
-  /** @type {Array<{id:string,name:string,url:string,category?:string,emoji?:string,color:string,openNew:boolean,createdAt:number}>} */
+  /** @type {Array<{id:number,name:string,url:string,category?:string,emoji?:string,color:string,openNew:boolean,createdAt:number}>} */
   let apps = [];
   let activeCategory = "全部";
   let searchTerm = "";
+  let editingId = null;
+  let selectedColor = COLORS[0];
 
   // ---------- DOM ----------
   const $ = (sel) => document.querySelector(sel);
@@ -27,27 +28,59 @@
   const colorRow = $("#colorRow");
   const categoryList = $("#categoryList");
 
-  let editingId = null;
-  let selectedColor = COLORS[0];
-
-  // ---------- Storage ----------
-  function load() {
-    try {
-      const raw = localStorage.getItem(STORE_KEY);
-      apps = raw ? JSON.parse(raw) : [];
-    } catch (e) {
-      apps = [];
+  // ---------- API ----------
+  async function api(path, opts = {}) {
+    const res = await fetch(path, {
+      headers: { "content-type": "application/json" },
+      ...opts,
+    });
+    if (res.status === 401 && path !== "/api/me") {
+      showAuth();
+      throw new Error("会话已失效，请重新登录");
     }
-    if (!Array.isArray(apps)) apps = [];
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "请求失败");
+    return data;
   }
-  function save() {
-    localStorage.setItem(STORE_KEY, JSON.stringify(apps));
+
+  async function loadLinks() {
+    const { links } = await api("/api/links");
+    apps = links;
+    renderAll();
+  }
+
+  // ---------- 登录态 ----------
+  function showAuth() {
+    $("#appView").hidden = true;
+    $("#authView").hidden = false;
+    apps = [];
+    clearAuthError();
+  }
+  async function enterApp(user) {
+    $("#authView").hidden = true;
+    $("#appView").hidden = false;
+    $("#userName").textContent = user.username;
+    await loadLinks();
+  }
+  async function checkAuth() {
+    try {
+      const { user } = await api("/api/me");
+      if (user) await enterApp(user);
+      else showAuth();
+    } catch {
+      showAuth();
+    }
+  }
+  function showAuthError(msg) {
+    const el = $("#authError");
+    el.textContent = msg;
+    el.hidden = false;
+  }
+  function clearAuthError() {
+    $("#authError").hidden = true;
   }
 
   // ---------- Helpers ----------
-  function uid() {
-    return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-  }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -74,7 +107,6 @@
       filtersEl.appendChild(b);
     });
 
-    // datalist for add form
     categoryList.innerHTML = "";
     Array.from(new Set(apps.map((a) => a.category).filter(Boolean))).forEach((c) => {
       const o = document.createElement("option");
@@ -97,13 +129,11 @@
     grid.innerHTML = "";
 
     if (filtered.length === 0) {
-      emptyState.hidden = apps.length !== 0; // 仅在确实无匹配时显示提示
-      if (apps.length === 0) emptyState.querySelector("h2").textContent = "还没有应用";
-      else emptyState.querySelector("h2").textContent = "没有匹配的应用";
+      emptyState.hidden = false;
+      emptyState.querySelector("h2").textContent = apps.length === 0 ? "还没有应用" : "没有匹配的应用";
       emptyState.querySelector("p").textContent = apps.length === 0
         ? "点击右上角「＋ 添加应用」开始收集你的常用网站。"
         : "试试更换分类或搜索关键词。";
-      emptyState.hidden = false;
       return;
     }
     emptyState.hidden = true;
@@ -207,7 +237,7 @@
   }
   function closeModal() { modal.hidden = true; editingId = null; }
 
-  form.addEventListener("submit", (e) => {
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const name = $("#fName").value.trim();
     let url = $("#fUrl").value.trim();
@@ -223,27 +253,32 @@
       openNew: $("#fOpenNew").checked,
     };
 
-    if (editingId) {
-      const idx = apps.findIndex((a) => a.id === editingId);
-      if (idx > -1) apps[idx] = { ...apps[idx], ...payload };
-      toast("已更新");
-    } else {
-      apps.unshift({ id: uid(), createdAt: Date.now(), ...payload });
-      toast("已添加");
+    try {
+      if (editingId) {
+        await api("/api/links/" + editingId, { method: "PUT", body: JSON.stringify(payload) });
+        toast("已更新");
+      } else {
+        await api("/api/links", { method: "POST", body: JSON.stringify(payload) });
+        toast("已添加");
+      }
+      closeModal();
+      await loadLinks();
+    } catch (err) {
+      toast(err.message || "保存失败");
     }
-    save();
-    closeModal();
-    renderAll();
   });
 
-  function deleteApp(id) {
+  async function deleteApp(id) {
     const app = apps.find((a) => a.id === id);
     if (!app) return;
     if (!confirm(`确定删除「${app.name}」？`)) return;
-    apps = apps.filter((a) => a.id !== id);
-    save();
-    renderAll();
-    toast("已删除");
+    try {
+      await api("/api/links/" + id, { method: "DELETE" });
+      toast("已删除");
+      await loadLinks();
+    } catch (err) {
+      toast(err.message || "删除失败");
+    }
   }
 
   // ---------- Import / Export ----------
@@ -257,27 +292,30 @@
     URL.revokeObjectURL(a.href);
     toast("已导出备份");
   }
-  function importJson(file) {
+  async function importJson(file) {
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const data = JSON.parse(reader.result);
         if (!Array.isArray(data)) throw new Error("格式错误");
-        const now = Date.now();
-        const incoming = data.map((a) => ({
-          id: a.id || uid(),
-          name: String(a.name || "未命名"),
-          url: String(a.url || ""),
-          category: a.category || "未分类",
-          emoji: a.emoji || "",
-          color: a.color || COLORS[0],
-          openNew: a.openNew !== false,
-          createdAt: a.createdAt || now,
-        })).filter((a) => a.url);
-        apps = incoming.concat(apps.filter((a) => !incoming.find((x) => x.id === a.id)));
-        save();
-        renderAll();
-        toast(`已导入 ${incoming.length} 个应用`);
+        let n = 0;
+        for (const a of data) {
+          if (!a.url) continue;
+          await api("/api/links", {
+            method: "POST",
+            body: JSON.stringify({
+              name: a.name || "未命名",
+              url: a.url,
+              category: a.category || "未分类",
+              emoji: a.emoji || "",
+              color: a.color || COLORS[0],
+              openNew: a.openNew !== false,
+            }),
+          });
+          n++;
+        }
+        await loadLinks();
+        toast(`已导入 ${n} 个应用`);
       } catch (e) {
         toast("导入失败：文件格式不正确");
       }
@@ -302,6 +340,58 @@
     localStorage.setItem(THEME_KEY, theme);
   }
 
+  // ---------- Auth events ----------
+  $("#loginForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const user = (await api("/api/login", {
+        method: "POST",
+        body: JSON.stringify({
+          username: $("#loginUser").value.trim(),
+          password: $("#loginPass").value,
+        }),
+      })).user;
+      $("#loginForm").reset();
+      await enterApp(user);
+    } catch (err) {
+      showAuthError(err.message || "登录失败");
+    }
+  });
+  $("#registerForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const user = (await api("/api/register", {
+        method: "POST",
+        body: JSON.stringify({
+          username: $("#regUser").value.trim(),
+          password: $("#regPass").value,
+        }),
+      })).user;
+      $("#registerForm").reset();
+      await enterApp(user);
+    } catch (err) {
+      showAuthError(err.message || "注册失败");
+    }
+  });
+  $("#toRegister").onclick = (e) => {
+    e.preventDefault();
+    $("#loginForm").hidden = true;
+    $("#registerForm").hidden = false;
+    $("#authSub").textContent = "创建账号以保存你的应用";
+    clearAuthError();
+  };
+  $("#toLogin").onclick = (e) => {
+    e.preventDefault();
+    $("#registerForm").hidden = true;
+    $("#loginForm").hidden = false;
+    $("#authSub").textContent = "登录以同步你的应用";
+    clearAuthError();
+  };
+  $("#logoutBtn").onclick = async () => {
+    try { await api("/api/logout", { method: "POST" }); } catch {}
+    showAuth();
+  };
+
   // ---------- Events ----------
   $("#addBtn").onclick = () => openModal(null);
   $("#exportBtn").onclick = exportJson;
@@ -316,9 +406,11 @@
 
   // ---------- Init ----------
   function init() {
-    applyTheme(localStorage.getItem(THEME_KEY) || (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
-    load();
-    renderAll();
+    applyTheme(
+      localStorage.getItem(THEME_KEY) ||
+      (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+    );
+    checkAuth();
   }
   init();
 })();
