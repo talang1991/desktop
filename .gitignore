@@ -1,0 +1,5 @@
+# 本地记忆 / 工作数据，不纳入版本控制
+.workbuddy/
+
+# 依赖缓存（Deno 无 node_modules）
+node_modules/

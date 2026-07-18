@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Web 应用导航面板</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-logo">🚀</span>
+      <div class="brand-text">
+        <h1>Web 应用导航</h1>
+        <p id="appCount">0 个应用</p>
+      </div>
+    </div>
+
+    <div class="search-wrap">
+      <input id="searchInput" type="search" placeholder="搜索应用名称或网址…" autocomplete="off" />
+    </div>
+
+    <div class="topbar-actions">
+      <button id="importBtn" class="btn ghost" title="从 JSON 文件导入">导入</button>
+      <button id="exportBtn" class="btn ghost" title="导出为 JSON 备份">导出</button>
+      <button id="themeBtn" class="btn ghost" title="切换深色/浅色">🌓</button>
+      <button id="addBtn" class="btn primary">＋ 添加应用</button>
+      <input id="importFile" type="file" accept="application/json" hidden />
+    </div>
+  </header>
+
+  <nav class="filters" id="categoryFilters"></nav>
+
+  <main class="content">
+    <section id="appGrid" class="grid" aria-live="polite"></section>
+    <div id="emptyState" class="empty-state" hidden>
+      <div class="empty-emoji">🗂️</div>
+      <h2>还没有应用</h2>
+      <p>点击右上角「＋ 添加应用」开始收集你的常用网站。</p>
+    </div>
+  </main>
+
+  <!-- 添加 / 编辑 弹窗 -->
+  <div id="modal" class="modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <h2 id="modalTitle">添加应用</h2>
+      <form id="appForm">
+        <label class="field">
+          <span>名称 <em>*</em></span>
+          <input id="fName" name="name" type="text" required placeholder="例如：Gmail" />
+        </label>
+
+        <label class="field">
+          <span>网址 <em>*</em></span>
+          <input id="fUrl" name="url" type="url" required placeholder="https://mail.google.com" />
+        </label>
+
+        <div class="field-row">
+          <label class="field">
+            <span>分类</span>
+            <input id="fCategory" name="category" type="text" list="categoryList" placeholder="工作 / 工具 / 娱乐" />
+            <datalist id="categoryList"></datalist>
+          </label>
+          <label class="field">
+            <span>图标 Emoji</span>
+            <input id="fEmoji" name="emoji" type="text" maxlength="4" placeholder="🌟" />
+          </label>
+        </div>
+
+        <label class="field">
+          <span>主题色</span>
+          <div class="color-row" id="colorRow"></div>
+        </label>
+
+        <label class="check">
+          <input id="fOpenNew" type="checkbox" checked />
+          <span>点击时在新标签页打开</span>
+        </label>
+
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" data-close>取消</button>
+          <button type="submit" class="btn primary" id="saveBtn">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 右键/卡片操作菜单容器由 JS 生成 -->
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
