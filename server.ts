@@ -50,7 +50,12 @@ async function serveStatic(req: Request): Promise<Response> {
     }
     const data = await Deno.readFile(abs);
     return new Response(data, {
-      headers: { "content-type": contentType(target), "cache-control": "no-cache" },
+      headers: {
+        "content-type": contentType(target),
+        // no-store：禁止浏览器/CDN 缓存，避免旧版 app.js 导致“点击没反应”
+        "cache-control": "no-store",
+        "pragma": "no-cache",
+      },
     });
   } catch {
     return new Response("404 Not Found", { status: 404 });

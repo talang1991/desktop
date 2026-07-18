@@ -30,10 +30,16 @@
 
   // ---------- API ----------
   async function api(path, opts = {}) {
-    const res = await fetch(path, {
-      headers: { "content-type": "application/json" },
-      ...opts,
-    });
+    let res;
+    try {
+      res = await fetch(path, {
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        ...opts,
+      });
+    } catch {
+      throw new Error("网络请求失败，请确认服务已启动（本地应为 http://localhost:8000）");
+    }
     if (res.status === 401 && path !== "/api/me") {
       showAuth();
       throw new Error("会话已失效，请重新登录");
@@ -343,6 +349,9 @@
   // ---------- Auth events ----------
   $("#loginForm").addEventListener("submit", async (e) => {
     e.preventDefault();
+    const btn = e.target.querySelector("button[type=submit]");
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = "登录中…";
     try {
       const user = (await api("/api/login", {
         method: "POST",
@@ -355,10 +364,15 @@
       await enterApp(user);
     } catch (err) {
       showAuthError(err.message || "登录失败");
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
     }
   });
   $("#registerForm").addEventListener("submit", async (e) => {
     e.preventDefault();
+    const btn = e.target.querySelector("button[type=submit]");
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = "注册中…";
     try {
       const user = (await api("/api/register", {
         method: "POST",
@@ -371,6 +385,8 @@
       await enterApp(user);
     } catch (err) {
       showAuthError(err.message || "注册失败");
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
     }
   });
   $("#toRegister").onclick = (e) => {
