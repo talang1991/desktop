@@ -1,5 +1,5 @@
 // db.ts —— PostgreSQL 连接、自动建表、密码哈希、会话令牌
-import { Pool } from "https://deno.land/x/postgres@v0.19.3/mod.ts";
+import { Client } from "https://deno.land/x/postgres@v0.19.3/mod.ts";
 
 const rawUrl = Deno.env.get("DATABASE_URL");
 if (!rawUrl) {
@@ -11,17 +11,70 @@ if (!rawUrl) {
 const parsed = new URL(rawUrl.split("?")[0]);
 const dbName = parsed.pathname.replace(/^\//, "") || "postgres";
 
-const pool = new Pool(
-  {
-    user: decodeURIComponent(parsed.username),
-    password: decodeURIComponent(parsed.password),
-    hostname: parsed.hostname,
-    port: Number(parsed.port) || 5432,
-    database: dbName,
-    tls: { enabled: true }, // 等价于 sslmode=verify-full（Deno 内置 CA 校验服务器证书）
-  },
-  5,
-);
+// 注意：deno.land/x/postgres 的 Pool 在 TLS 下对此实例会挂起，
+// 故改用单例 Client；并针对沙箱网络偶发卡顿做超时+重试+断线重连。
+const client = new Client({
+  user: decodeURIComponent(parsed.username),
+  password: decodeURIComponent(parsed.password),
+  hostname: parsed.hostname,
+  port: Number(parsed.port) || 5432,
+  database: dbName,
+  tls: { enabled: true }, // 等价于 sslmode=verify-full（Deno 内置 CA 校验服务器证书）
+});
+
+const CONNECT_TIMEOUT_MS = 6000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, rej) =>
+      setTimeout(() => rej(new Error("连接超时")), ms)
+    ),
+  ]);
+}
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+let connected = false;
+let connecting: Promise<void> | null = null;
+
+// 无限重试连接：沙箱到 Prisma 的出口网络偶发卡顿，连上即止（生产环境通常一次成功）
+async function doConnect(): Promise<void> {
+  let attempt = 0;
+  for (;;) {
+    attempt++;
+    try {
+      await withTimeout(client.connect(), CONNECT_TIMEOUT_MS);
+      connected = true;
+      console.error(`[db] 已连接数据库（第 ${attempt} 次尝试）`);
+      return;
+    } catch (e) {
+      connected = false;
+      const backoff = Math.min(2000 + 800 * attempt, 8000);
+      console.error(
+        `[db] 连接失败(第 ${attempt} 次): ${(e as Error).message}，将在 ${backoff}ms 后重试`,
+      );
+      if (!connecting) break; // 防止并发重入死循环
+      await sleep(backoff);
+    }
+  }
+}
+
+// 保证已连接（并发安全，单次重连）
+function ensureConnected(): Promise<void> {
+  if (connected) return Promise.resolve();
+  if (!connecting) connecting = doConnect().finally(() => (connecting = null));
+  return connecting;
+}
+
+// 串行化所有查询，避免单 Client 被并发请求交错破坏协议
+let chain: Promise<unknown> = Promise.resolve();
+function enqueue<T>(fn: () => Promise<T>): Promise<T> {
+  const run = chain.then(fn, fn);
+  chain = run.catch(() => {});
+  return run;
+}
 
 export interface QueryRow {
   [k: string]: unknown;
@@ -31,16 +84,26 @@ export async function query<T = QueryRow>(
   text: string,
   params: unknown[] = [],
 ): Promise<T[]> {
-  const client = await pool.connect();
-  try {
-    const result = await client.queryObject<T>(text, params);
-    return result.rows;
-  } finally {
-    client.release();
-  }
+  return enqueue(async () => {
+    let lastErr: unknown;
+    for (let i = 0; i < 3; i++) {
+      try {
+        await ensureConnected();
+        const result = await client.queryObject<T>(text, params);
+        return result.rows;
+      } catch (e) {
+        connected = false;
+        lastErr = e;
+        console.error(`[db] 查询失败(重试 ${i + 1}/3): ${(e as Error).message}`);
+        if (i < 2) await sleep(400);
+      }
+    }
+    throw lastErr;
+  });
 }
 
 export async function initDb(): Promise<void> {
+  await ensureConnected();
   const statements = [
     `CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -76,7 +139,13 @@ export async function initDb(): Promise<void> {
       console.error("initDb 语句执行失败:", (e as Error).message);
     }
   }
+  console.error("[db] 建表完成");
 }
+
+// 模块加载即后台启动建表（无限重试连接，网络恢复后自动完成）
+export const dbReady: Promise<void> = initDb().catch((e) =>
+  console.error("[db] 初始化异常（连接恢复后会继续重试）:", (e as Error).message)
+);
 
 // ---------- 密码哈希（Web Crypto PBKDF2，零原生依赖）----------
 const PBKDF2_ITER = 120_000;

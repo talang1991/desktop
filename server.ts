@@ -1,10 +1,11 @@
 // Deno 静态文件服务器 + API —— 同时用于本地运行与 Deno Deploy 部署
 // 本地: deno task start   |   云端: 推送到 Git 后在 Deno Deploy 选本文件为入口
 import { handleApi } from "./api.ts";
-import { initDb } from "./db.ts";
+import { dbReady } from "./db.ts";
 
-// 启动时建表（users / links / sessions），缺表则自动创建
-await initDb();
+// db.ts 模块加载时已后台启动建表（无限重试连接）；
+// 这里不 await，确保 HTTP 服务立即可用——沙箱到 Prisma 出口网络偶发卡顿时，
+// 网络恢复即自动连上，登录页始终可打开。
 
 const ROOT = "."; // 站点根目录（与 index.html 同级）
 

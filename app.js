@@ -3,6 +3,7 @@
   "use strict";
 
   const THEME_KEY = "web-app-launcher:theme";
+  const TOKEN_KEY = "web-app-launcher:token";
   const COLORS = [
     "#4f6ef7", "#e5484d", "#12a594", "#f5a623",
     "#9b5de5", "#f15bb5", "#00bbf9", "#8ac926",
@@ -30,11 +31,13 @@
 
   // ---------- API ----------
   async function api(path, opts = {}) {
+    const headers = { "content-type": "application/json" };
+    const tk = localStorage.getItem(TOKEN_KEY);
+    if (tk) headers["authorization"] = "Bearer " + tk;
     let res;
     try {
       res = await fetch(path, {
-        headers: { "content-type": "application/json" },
-        credentials: "same-origin",
+        headers,
         ...opts,
       });
     } catch {
@@ -353,15 +356,16 @@
     const orig = btn.textContent;
     btn.disabled = true; btn.textContent = "登录中…";
     try {
-      const user = (await api("/api/login", {
+      const data = await api("/api/login", {
         method: "POST",
         body: JSON.stringify({
           username: $("#loginUser").value.trim(),
           password: $("#loginPass").value,
         }),
-      })).user;
+      });
+      localStorage.setItem(TOKEN_KEY, data.token);
       $("#loginForm").reset();
-      await enterApp(user);
+      await enterApp(data.user);
     } catch (err) {
       showAuthError(err.message || "登录失败");
     } finally {
@@ -374,15 +378,16 @@
     const orig = btn.textContent;
     btn.disabled = true; btn.textContent = "注册中…";
     try {
-      const user = (await api("/api/register", {
+      const data = await api("/api/register", {
         method: "POST",
         body: JSON.stringify({
           username: $("#regUser").value.trim(),
           password: $("#regPass").value,
         }),
-      })).user;
+      });
+      localStorage.setItem(TOKEN_KEY, data.token);
       $("#registerForm").reset();
-      await enterApp(user);
+      await enterApp(data.user);
     } catch (err) {
       showAuthError(err.message || "注册失败");
     } finally {
@@ -405,6 +410,7 @@
   };
   $("#logoutBtn").onclick = async () => {
     try { await api("/api/logout", { method: "POST" }); } catch {}
+    localStorage.removeItem(TOKEN_KEY);
     showAuth();
   };
 

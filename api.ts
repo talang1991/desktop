@@ -12,14 +12,19 @@ interface User {
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "access-control-allow-origin": "*",
+      "access-control-allow-headers": "authorization, content-type",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    },
   });
 }
 
 function setCookie(res: Response, token: string | null) {
   const value = token
-    ? `sid=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_SECONDS}`
-    : `sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
+    ? `sid=${token}; HttpOnly; SameSite=None; Secure; Path=/; Max-Age=${SESSION_SECONDS}`
+    : `sid=; HttpOnly; SameSite=None; Secure; Path=/; Max-Age=0`;
   res.headers.append("set-cookie", value);
 }
 
@@ -34,7 +39,10 @@ function getCookie(req: Request, name: string): string | null {
 }
 
 async function requireUser(req: Request): Promise<User | null> {
-  const token = getCookie(req, "sid");
+  const auth = req.headers.get("authorization");
+  let token: string | null = null;
+  if (auth && auth.toLowerCase().startsWith("bearer ")) token = auth.slice(7).trim();
+  if (!token) token = getCookie(req, "sid"); // 回退到 cookie
   if (!token) return null;
   const rows = await query<{
     user_id: number;
@@ -81,6 +89,18 @@ export async function handleApi(req: Request): Promise<Response> {
   const path = url.pathname;
   const method = req.method;
 
+  // 预检请求（跨源携带 Authorization 头会触发浏览器 OPTIONS 预检）
+  if (method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "access-control-allow-origin": "*",
+        "access-control-allow-headers": "authorization, content-type",
+        "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+      },
+    });
+  }
+
   try {
     // ---- 注册 ----
     if (path === "/api/register" && method === "POST") {
@@ -99,7 +119,7 @@ export async function handleApi(req: Request): Promise<Response> {
         [username, hash],
       );
       const token = await startSession(ins[0].id);
-      const res = json({ user: { id: ins[0].id, username: ins[0].username } }, 201);
+      const res = json({ user: { id: ins[0].id, username: ins[0].username }, token }, 201);
       setCookie(res, token);
       return res;
     }
@@ -115,14 +135,17 @@ export async function handleApi(req: Request): Promise<Response> {
       const ok = await verifyPassword(String(password), rows[0].password_hash);
       if (!ok) return json({ error: "用户名或密码错误" }, 401);
       const token = await startSession(rows[0].id);
-      const res = json({ user: { id: rows[0].id, username: rows[0].username } });
+      const res = json({ user: { id: rows[0].id, username: rows[0].username }, token });
       setCookie(res, token);
       return res;
     }
 
     // ---- 登出 ----
     if (path === "/api/logout" && method === "POST") {
-      const token = getCookie(req, "sid");
+      const auth = req.headers.get("authorization");
+      let token: string | null = null;
+      if (auth && auth.toLowerCase().startsWith("bearer ")) token = auth.slice(7).trim();
+      if (!token) token = getCookie(req, "sid");
       if (token) await query("DELETE FROM sessions WHERE token=$1", [token]);
       const res = json({ ok: true });
       setCookie(res, null);
