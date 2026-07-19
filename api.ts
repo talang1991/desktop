@@ -3,11 +3,12 @@ import {
   registerUser, findUserByUsername, verifyPassword, createSession,
   getUserByToken, deleteSession, listLinks, createLink, updateLink, deleteLink,
   sendFriendRequest, listFriends, listFriendRequests, acceptFriendRequest, removeFriend,
+  updateUserAvatar,
   DbUnavailableError,
 } from "./store.ts";
 import { getWsPublicUrl, getIceServers, isOnline } from "./signaling.ts";
 
-interface User { id: number; username: string; }
+interface User { id: number; username: string; avatar: string; }
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -53,17 +54,17 @@ export async function handleApi(req: Request): Promise<Response> {
   try {
     // ---- 注册 ----
     if (path === "/api/register" && method === "POST") {
-      const { username, password } = await req.json();
+      const { username, password, avatar } = await req.json();
       let user: User;
       try {
-        user = await registerUser(String(username), String(password));
+        user = await registerUser(String(username), String(password), avatar ? String(avatar) : "");
       } catch (e) {
         const msg = (e as Error).message;
         const status = /已存在/.test(msg) ? 409 : 400;
         return json({ error: msg }, status);
       }
       const token = await createSession(user.id);
-      return json({ user: { id: user.id, username: user.username }, token }, 201);
+      return json({ user: { id: user.id, username: user.username, avatar: user.avatar }, token }, 201);
     }
 
     // ---- 登录 ----
@@ -74,7 +75,7 @@ export async function handleApi(req: Request): Promise<Response> {
       const ok = await verifyPassword(String(password), u.password_hash);
       if (!ok) return json({ error: "用户名或密码错误" }, 401);
       const token = await createSession(u.id);
-      return json({ user: { id: u.id, username: u.username }, token });
+      return json({ user: { id: u.id, username: u.username, avatar: u.avatar }, token });
     }
 
     // ---- 登出 ----
@@ -87,7 +88,16 @@ export async function handleApi(req: Request): Promise<Response> {
     // ---- 当前用户 ----
     if (path === "/api/me" && method === "GET") {
       const user = await requireUser(req);
-      return json({ user: user ? { id: user.id, username: user.username } : null });
+      return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar } : null });
+    }
+
+    // ---- 更新当前用户资料（头像）----
+    if (path === "/api/me" && method === "PUT") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const b = await req.json();
+      await updateUserAvatar(user.id, String(b.avatar ?? "").slice(0, 2048));
+      return json({ user: { id: user.id, username: user.username, avatar: String(b.avatar ?? "") } });
     }
 
     // ---- 信令服务地址 + ICE 配置（P2P 聊天用）----

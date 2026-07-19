@@ -22,6 +22,7 @@ export interface StoredUser {
   id: number;
   username: string;
   password_hash: string;
+  avatar: string;
   created_at: string;
 }
 interface LinkRow {
@@ -132,49 +133,73 @@ export async function initStore(): Promise<void> {
   try {
     const cfg = parseDatabaseUrl(raw);
     pool = new Pool(cfg, 5);
-    await withClient(async (c) => {
-      await c.queryObject(
-        `CREATE TABLE IF NOT EXISTS users (
-          id SERIAL PRIMARY KEY,
-          username TEXT NOT NULL UNIQUE,
-          password_hash TEXT NOT NULL,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        )`,
+    // 反向代理（Prisma 池化）偶发连接抖动：启动建表重试几次，提高一次启动即连上的概率
+    let schemaOk = false;
+    let lastErr = "";
+    for (let attempt = 1; attempt <= 6 && !schemaOk; attempt++) {
+      try {
+        await withClient(async (c) => {
+          await c.queryObject(
+            `CREATE TABLE IF NOT EXISTS users (
+              id SERIAL PRIMARY KEY,
+              username TEXT NOT NULL UNIQUE,
+              password_hash TEXT NOT NULL,
+              avatar TEXT NOT NULL DEFAULT '',
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )`,
+          );
+          // 兼容已存在的 users 表（线上生产库）：非破坏性补充 avatar 列
+          await c.queryObject(
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT NOT NULL DEFAULT ''`,
+          );
+          await c.queryObject(
+            `CREATE TABLE IF NOT EXISTS links (
+              id SERIAL PRIMARY KEY,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              title TEXT NOT NULL,
+              url TEXT NOT NULL,
+              category TEXT NOT NULL DEFAULT '未分类',
+              icon TEXT NOT NULL DEFAULT '',
+              color TEXT NOT NULL DEFAULT '#4f6ef7',
+              open_new BOOLEAN NOT NULL DEFAULT true,
+              sort_order INTEGER NOT NULL DEFAULT 0,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )`,
+          );
+          await c.queryObject(
+            `CREATE TABLE IF NOT EXISTS sessions (
+              token TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              expires_at TIMESTAMPTZ NOT NULL
+            )`,
+          );
+          await c.queryObject(
+            `CREATE TABLE IF NOT EXISTS friendships (
+              id SERIAL PRIMARY KEY,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              friend_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              status TEXT NOT NULL DEFAULT 'pending',  -- pending | accepted
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              UNIQUE (user_id, friend_id)
+            )`,
+          );
+        });
+        schemaOk = true;
+      } catch (e) {
+        lastErr = (e as Error).message;
+        if (attempt < 6) await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
+    if (schemaOk) {
+      console.error("[store] PostgreSQL 已连接，表结构已就绪。");
+      await migrateFromJson();
+    } else {
+      // 保留 pool，后续请求会自动重试重连
+      console.error(
+        "[store] 数据库初始化失败（已重试），降级运行（静态/聊天可用，认证/链接不可用，连接恢复后自动重试）：",
+        lastErr,
       );
-      await c.queryObject(
-        `CREATE TABLE IF NOT EXISTS links (
-          id SERIAL PRIMARY KEY,
-          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          title TEXT NOT NULL,
-          url TEXT NOT NULL,
-          category TEXT NOT NULL DEFAULT '未分类',
-          icon TEXT NOT NULL DEFAULT '',
-          color TEXT NOT NULL DEFAULT '#4f6ef7',
-          open_new BOOLEAN NOT NULL DEFAULT true,
-          sort_order INTEGER NOT NULL DEFAULT 0,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        )`,
-      );
-      await c.queryObject(
-        `CREATE TABLE IF NOT EXISTS sessions (
-          token TEXT PRIMARY KEY,
-          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          expires_at TIMESTAMPTZ NOT NULL
-        )`,
-      );
-      await c.queryObject(
-        `CREATE TABLE IF NOT EXISTS friendships (
-          id SERIAL PRIMARY KEY,
-          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          friend_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          status TEXT NOT NULL DEFAULT 'pending',  -- pending | accepted
-          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-          UNIQUE (user_id, friend_id)
-        )`,
-      );
-    });
-    console.error("[store] PostgreSQL 已连接，表结构已就绪。");
-    await migrateFromJson();
+    }
   } catch (e) {
     // 保留 pool，后续请求会自动重试重连
     console.error(
@@ -231,24 +256,25 @@ function validUsername(u: string): boolean {
   return /^[a-zA-Z0-9_\-]{3,32}$/.test(u);
 }
 
-export async function registerUser(username: string, password: string): Promise<StoredUser> {
+export async function registerUser(username: string, password: string, avatar = ""): Promise<StoredUser> {
   if (!validUsername(username)) throw new Error("用户名需为 3-32 位字母/数字/下划线/连字符");
   if (password.length < 6) throw new Error("密码至少 6 位");
   ensureDb();
   const exist = await query<{ id: number }>(`SELECT id FROM users WHERE username = $1`, [username]);
   if (exist.length) throw new Error("用户名已存在");
   const hash = await hashPassword(password);
+  const av = String(avatar || "").slice(0, ICON_MAX);
   const rows = await query<{ id: number; username: string }>(
-    `INSERT INTO users (username, password_hash) VALUES ($1,$2) RETURNING id, username`,
-    [username, hash],
+    `INSERT INTO users (username, password_hash, avatar) VALUES ($1,$2,$3) RETURNING id, username`,
+    [username, hash, av],
   );
-  return { id: rows[0].id, username: rows[0].username, password_hash: hash, created_at: new Date().toISOString() };
+  return { id: rows[0].id, username: rows[0].username, password_hash: hash, avatar: av, created_at: new Date().toISOString() };
 }
 
 export async function findUserByUsername(username: string): Promise<StoredUser | null> {
   ensureDb();
   const rows = await query<StoredUser>(
-    `SELECT id, username, password_hash, created_at FROM users WHERE username = $1`,
+    `SELECT id, username, password_hash, avatar, created_at FROM users WHERE username = $1`,
     [username],
   );
   return rows[0] ?? null;
@@ -266,10 +292,10 @@ export async function createSession(userId: number): Promise<string> {
   return token;
 }
 
-export async function getUserByToken(token: string): Promise<{ id: number; username: string } | null> {
+export async function getUserByToken(token: string): Promise<{ id: number; username: string; avatar: string } | null> {
   ensureDb();
-  const rows = await query<{ id: number; username: string; expires_at: string }>(
-    `SELECT u.id, u.username, s.expires_at FROM sessions s
+  const rows = await query<{ id: number; username: string; avatar: string; expires_at: string }>(
+    `SELECT u.id, u.username, u.avatar, s.expires_at FROM sessions s
      JOIN users u ON u.id = s.user_id WHERE s.token = $1`,
     [token],
   );
@@ -279,7 +305,17 @@ export async function getUserByToken(token: string): Promise<{ id: number; usern
     await query(`DELETE FROM sessions WHERE token = $1`, [token]).catch(() => {});
     return null;
   }
-  return { id: r.id, username: r.username };
+  return { id: r.id, username: r.username, avatar: r.avatar };
+}
+
+// 更新当前用户头像（emoji 或图片链接）
+export async function updateUserAvatar(userId: number, avatar: string): Promise<boolean> {
+  ensureDb();
+  const rows = await query<{ id: number }>(
+    `UPDATE users SET avatar = $1 WHERE id = $2 RETURNING id`,
+    [String(avatar || "").slice(0, ICON_MAX), userId],
+  );
+  return rows.length > 0;
 }
 
 export async function deleteSession(token: string): Promise<void> {
@@ -382,11 +418,13 @@ export async function deleteLink(userId: number, id: number): Promise<boolean> {
 interface FriendOut {
   id: number;
   username: string;
+  avatar: string;
 }
 interface FriendRequestOut {
   id: number;
   userId: number;
   username: string;
+  avatar: string;
 }
 
 // 发送好友请求（按用户名）。若对方已向我发过请求，则直接互为好友。
@@ -431,7 +469,7 @@ export async function sendFriendRequest(
 export async function listFriends(userId: number): Promise<FriendOut[]> {
   ensureDb();
   const rows = await query<FriendOut>(
-    `SELECT u.id, u.username FROM friendships f
+    `SELECT u.id, u.username, u.avatar AS "avatar" FROM friendships f
      JOIN users u ON u.id = CASE WHEN f.user_id = $1 THEN f.friend_id ELSE f.user_id END
      WHERE (f.user_id = $1 OR f.friend_id = $1) AND f.status = 'accepted'
      ORDER BY u.username`,
@@ -444,7 +482,7 @@ export async function listFriends(userId: number): Promise<FriendOut[]> {
 export async function listFriendRequests(userId: number): Promise<FriendRequestOut[]> {
   ensureDb();
   const rows = await query<FriendRequestOut>(
-    `SELECT f.id, f.user_id AS "userId", u.username FROM friendships f
+    `SELECT f.id, f.user_id AS "userId", u.username, u.avatar AS "avatar" FROM friendships f
      JOIN users u ON u.id = f.user_id
      WHERE f.friend_id = $1 AND f.status = 'pending'
      ORDER BY f.created_at DESC`,

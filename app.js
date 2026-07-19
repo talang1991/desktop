@@ -15,6 +15,8 @@
   let searchTerm = "";
   let editingId = null;
   let selectedColor = COLORS[0];
+  let currentUsername = "";
+  let myAvatar = "";
 
   // ---------- DOM ----------
   const $ = (sel) => document.querySelector(sel);
@@ -28,6 +30,7 @@
   const form = $("#appForm");
   const colorRow = $("#colorRow");
   const categoryList = $("#categoryList");
+  const profileModal = $("#profileModal");
 
   // ---------- API ----------
   async function api(path, opts = {}) {
@@ -68,7 +71,10 @@
   async function enterApp(user) {
     $("#authView").hidden = true;
     $("#appView").hidden = false;
+    currentUsername = user.username;
+    myAvatar = user.avatar || "";
     $("#userName").textContent = user.username;
+    renderAvatarInto($("#userAvatar"), myAvatar, (user.username || "?").charAt(0).toUpperCase());
     await loadLinks();
   }
   async function checkAuth() {
@@ -109,6 +115,19 @@
   }
   function fallbackChar(url) {
     return (hostnameOf(url).charAt(0) || "?").toUpperCase();
+  }
+  // 渲染头像：emoji 文本 / 图片链接 / 兜底首字母
+  function renderAvatar(val, fallback) {
+    const v = val || "";
+    if (isIconUrl(v)) {
+      return `<img src="${escapeHtml(v)}" alt="" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml((fallback || "?").toString().charAt(0).toUpperCase())}'"/>`;
+    }
+    if (v) return escapeHtml(v);
+    return escapeHtml((fallback || "?").toString().charAt(0).toUpperCase());
+  }
+  function renderAvatarInto(el, val, fallback) {
+    if (!el) return;
+    el.innerHTML = renderAvatar(val, fallback);
   }
 
   // ---------- Render ----------
@@ -238,7 +257,7 @@
   document.addEventListener("click", (e) => {
     if (ctxEl && !ctxEl.contains(e.target)) closeContextMenu();
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeContextMenu(); closeModal(); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeContextMenu(); closeModal(); closeProfileModal(); } });
 
   // ---------- Modal ----------
   function renderColorRow() {
@@ -286,6 +305,36 @@
     el.innerHTML = inner;
   }
   function closeModal() { modal.hidden = true; editingId = null; }
+
+  // ---------- 个人资料 / 头像 ----------
+  function openProfileModal() {
+    $("#profileUsername").textContent = currentUsername;
+    $("#pAvatar").value = myAvatar;
+    updateAvatarPreview();
+    profileModal.hidden = false;
+  }
+  function updateAvatarPreview() {
+    const el = $("#avatarPreview");
+    if (!el) return;
+    const val = $("#pAvatar").value.trim();
+    el.style.background = "var(--surface-2)";
+    el.innerHTML = renderAvatar(val, (currentUsername || "?").charAt(0).toUpperCase());
+  }
+  async function saveAvatar() {
+    try {
+      const r = await api("/api/me", {
+        method: "PUT",
+        body: JSON.stringify({ avatar: $("#pAvatar").value.trim() }),
+      });
+      myAvatar = r.user.avatar;
+      renderAvatarInto($("#userAvatar"), myAvatar, (currentUsername || "?").charAt(0).toUpperCase());
+      closeProfileModal();
+      toast("头像已更新");
+    } catch (e) {
+      toast(e.message || "保存失败");
+    }
+  }
+  function closeProfileModal() { profileModal.hidden = true; }
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -466,6 +515,12 @@
   };
   searchInput.oninput = (e) => { searchTerm = e.target.value; renderGrid(); };
   modal.querySelectorAll("[data-close]").forEach((el) => el.onclick = closeModal);
+
+  // 个人资料 / 头像
+  $("#userAvatarBtn").onclick = openProfileModal;
+  $("#pAvatar").addEventListener("input", updateAvatarPreview);
+  $("#saveAvatar").onclick = saveAvatar;
+  profileModal.querySelectorAll("[data-close]").forEach((el) => el.onclick = closeProfileModal);
 
   // 图标预览实时更新 + 一键填入网站默认 favicon
   $("#fEmoji").addEventListener("input", updateIconPreview);
@@ -682,12 +737,15 @@
         const row = document.createElement("div");
         row.className = "friend-row" + (f.id === currentPeer ? " active" : "");
         row.innerHTML =
+          `<span class="avatar-wrap">` +
+          `<span class="avatar sm">${renderAvatar(f.avatar, f.username.charAt(0).toUpperCase())}</span>` +
           `<span class="dot ${f.online ? "on" : "off"}"></span>` +
+          `</span>` +
           `<span class="fname">${escapeHtml(f.username)}</span>` +
           `<button class="friend-remove" title="移除好友">✕</button>`;
         const open = () => openConversation(f);
         row.querySelector(".fname").onclick = open;
-        row.querySelector(".dot").onclick = open;
+        row.querySelector(".avatar-wrap").onclick = open;
         row.querySelector(".friend-remove").onclick = (e) => {
           e.stopPropagation();
           removeFriend(f);
@@ -738,6 +796,7 @@
     currentPeer = f.id;
     currentPeerName = f.username;
     chatPeerName.textContent = f.username;
+    renderAvatarInto($("#chatPeerAvatar"), f.avatar, f.username.charAt(0).toUpperCase());
     renderFriends();
     resetChatMessages(f.username);
     await connectSignaling();
@@ -759,11 +818,12 @@
     startOffer();
   }
   function handleIncomingCall(from) {
-    const f = friends.find((x) => x.id === from) || { id: from, username: String(from), online: true };
+    const f = friends.find((x) => x.id === from) || { id: from, username: String(from), online: true, avatar: "" };
     if (currentPeer !== from) {
       currentPeer = from;
       currentPeerName = f.username;
       chatPeerName.textContent = f.username;
+      renderAvatarInto($("#chatPeerAvatar"), f.avatar || "", f.username.charAt(0).toUpperCase());
       renderFriends();
       resetChatMessages(f.username);
     }
@@ -781,6 +841,7 @@
     currentPeer = null;
     currentPeerName = "";
     chatPeerName.textContent = "选择一个好友开始聊天";
+    renderAvatarInto($("#chatPeerAvatar"), "", "?");
     setChatStatus("未连接");
     disableChatInput();
     renderFriends();

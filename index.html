@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=8" />
+  <link rel="stylesheet" href="styles.css?v=9" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -48,6 +48,9 @@
       </div>
 
       <div class="topbar-actions">
+        <button id="userAvatarBtn" class="avatar-btn" title="个人资料">
+          <span id="userAvatar" class="avatar"></span>
+        </button>
         <span id="userName" class="user-name"></span>
         <button id="importBtn" class="btn ghost" title="从 JSON 文件导入">导入</button>
         <button id="exportBtn" class="btn ghost" title="导出为 JSON 备份">导出</button>
@@ -120,6 +123,29 @@
     </div>
 
     <div id="toast" class="toast" hidden></div>
+
+    <!-- 个人资料 / 头像 弹窗 -->
+    <div id="profileModal" class="modal" hidden>
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="profileTitle">
+        <h2 id="profileTitle">个人资料</h2>
+        <label class="field">
+          <span>头像（Emoji 或图片链接）</span>
+          <div class="icon-input-row">
+            <input id="pAvatar" type="text" placeholder="🌟 或 https://…/avatar.png" autocomplete="off" />
+            <span class="icon-preview" id="avatarPreview" aria-hidden="true"></span>
+          </div>
+        </label>
+        <label class="field">
+          <span>用户名</span>
+          <div id="profileUsername" class="profile-username"></div>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" data-close>取消</button>
+          <button type="button" class="btn primary" id="saveAvatar">保存</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- 好友聊天抽屉 -->
@@ -139,6 +165,7 @@
     </aside>
     <section class="chat-main">
       <div class="chat-header">
+        <span id="chatPeerAvatar" class="avatar sm"></span>
         <div class="chat-title" id="chatPeerName">选择一个好友开始聊天</div>
         <div class="chat-status" id="chatStatus">未连接</div>
       </div>
@@ -151,6 +178,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=9"></script>
 </body>
 </html>
