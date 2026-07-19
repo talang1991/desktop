@@ -572,6 +572,7 @@
   let myId = null;
   let currentPeer = null;        // 当前对话好友 userId（number）
   let currentPeerName = "";
+  let currentPeerAvatar = "";
   let p2pReady = false;
   let relayActive = false;
   let enteringMsg = null;
@@ -795,6 +796,7 @@
     if (currentPeer && currentPeer !== f.id) endCurrent();
     currentPeer = f.id;
     currentPeerName = f.username;
+    currentPeerAvatar = f.avatar || "";
     chatPeerName.textContent = f.username;
     renderAvatarInto($("#chatPeerAvatar"), f.avatar, f.username.charAt(0).toUpperCase());
     renderFriends();
@@ -822,6 +824,7 @@
     if (currentPeer !== from) {
       currentPeer = from;
       currentPeerName = f.username;
+      currentPeerAvatar = f.avatar || "";
       chatPeerName.textContent = f.username;
       renderAvatarInto($("#chatPeerAvatar"), f.avatar || "", f.username.charAt(0).toUpperCase());
       renderFriends();
@@ -840,6 +843,7 @@
     teardownP2P();
     currentPeer = null;
     currentPeerName = "";
+    currentPeerAvatar = "";
     chatPeerName.textContent = "选择一个好友开始聊天";
     renderAvatarInto($("#chatPeerAvatar"), "", "?");
     setChatStatus("未连接");
@@ -949,14 +953,31 @@
       div.style.fontSize = "12px";
       div.textContent = text;
     } else {
-      div.className = "chat-msg " + (role === "me" ? "me" : "peer");
-      div.textContent = text;
+      const isMe = role === "me";
+      const row = document.createElement("div");
+      row.className = "chat-msg-row " + (isMe ? "me" : "peer");
+
+      const avatar = document.createElement("div");
+      avatar.className = "chat-msg-avatar sm";
+      avatar.innerHTML = isMe
+        ? renderAvatar(myAvatar, (currentUsername || "?").charAt(0).toUpperCase())
+        : renderAvatar(currentPeerAvatar, (currentPeerName || "?").charAt(0).toUpperCase());
+
+      const bubble = document.createElement("div");
+      bubble.className = "chat-msg " + (isMe ? "me" : "peer");
+      bubble.textContent = text;
       if (ts) {
         const meta = document.createElement("span");
         meta.className = "meta";
         meta.textContent = new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        div.appendChild(meta);
+        bubble.appendChild(meta);
       }
+
+      row.appendChild(avatar);
+      row.appendChild(bubble);
+      chatMessages.appendChild(row);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return row;
     }
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
