@@ -76,6 +76,10 @@
     $("#userName").textContent = user.username;
     renderAvatarInto($("#userAvatar"), myAvatar, (user.username || "?").charAt(0).toUpperCase());
     await loadLinks();
+    // 登录即建立持久信令连接（标记为在线 + 接收好友在线状态），断线会自动重连
+    sigStopReconnect = false;
+    connectSignaling();
+    loadFriends();
   }
   async function checkAuth() {
     try {
@@ -499,6 +503,7 @@
     clearAuthError();
   };
   $("#logoutBtn").onclick = async () => {
+    disconnectSignaling();
     try { await api("/api/logout", { method: "POST" }); } catch {}
     localStorage.removeItem(TOKEN_KEY);
     showAuth();
@@ -567,6 +572,9 @@
 
   // ---------- 状态 ----------
   let sigSocket = null;
+  let sigReconnectTimer = null;
+  let sigReconnectDelay = 1000;
+  let sigStopReconnect = false;
   let pc = null;
   let dc = null;
   let myId = null;
@@ -608,8 +616,9 @@
   }
   function closeChat() { chatPanel.hidden = true; }
 
-  // ---------- 信令连接（带 token 鉴权）----------
+  // ---------- 信令连接（带 token 鉴权，全程持久 + 自动重连）----------
   async function connectSignaling() {
+    if (sigStopReconnect) return;
     if (sigSocket && (sigSocket.readyState === WebSocket.OPEN || sigSocket.readyState === WebSocket.CONNECTING)) return;
     try {
       const res = await fetch("/api/ws-info");
@@ -624,15 +633,18 @@
     const ws = new WebSocket(wsUrl);
     sigSocket = ws;
     return new Promise((resolve) => {
-      ws.onopen = () => { setChatStatus("信令已连接", "ok"); subscribePresence(); resolve(); };
+      ws.onopen = () => {
+        sigReconnectDelay = 1000; // 连接成功，重置退避
+        setChatStatus("信令已连接", "ok");
+        subscribePresence();
+        if (currentPeer) reCall(); // 重连后恢复进行中的对话
+        resolve();
+      };
       ws.onclose = () => {
+        if (sigSocket === ws) sigSocket = null;
         setChatStatus("信令断开", "warn");
-        // 面板仍打开时自动重连，并重发正在进行的呼叫
-        if (!chatPanel.hidden) {
-          setTimeout(() => {
-            if (!chatPanel.hidden) connectSignaling().then(() => { if (currentPeer) reCall(); });
-          }, 1500);
-        }
+        scheduleReconnect();
+        resolve();
       };
       ws.onerror = () => {};
       ws.onmessage = (e) => {
@@ -640,6 +652,21 @@
         onSignalMessage(m);
       };
     });
+  }
+
+  // 断线后按指数退避自动重连（无论聊天面板是否打开），保证在线状态/好友在线点在重启后恢复
+  function scheduleReconnect() {
+    if (sigStopReconnect) return;
+    clearTimeout(sigReconnectTimer);
+    sigReconnectTimer = setTimeout(() => { connectSignaling(); }, sigReconnectDelay);
+    sigReconnectDelay = Math.min(sigReconnectDelay * 2, 15000);
+  }
+
+  // 登出时停止重连并关闭连接
+  function disconnectSignaling() {
+    sigStopReconnect = true;
+    clearTimeout(sigReconnectTimer);
+    if (sigSocket) { try { sigSocket.close(); } catch {} sigSocket = null; }
   }
 
   function subscribePresence() {

@@ -118,8 +118,88 @@ export function attachSignaling(server: Server): void {
   wss.on("close", () => clearInterval(heartbeat));
 
   wss.on("connection", async (ws: WebSocket, req: any) => {
-    // ---- 鉴权：从 query 取 token ----
+    // 先同步挂好消息/关闭/错误处理器，避免鉴权 await 期间到达的消息被丢弃（竞态会导致在线订阅/呼叫丢失）
+    const s = ws as unknown as { isAlive?: boolean };
+    s.isAlive = true;
+    ws.on("pong", () => { s.isAlive = true; });
+
     let user: { id: number; username: string } | null = null;
+    const pending: Array<{ type?: string; [k: string]: unknown }> = [];
+    let authed = false;
+
+    const handleMessage = (msg: { type?: string; [k: string]: unknown }) => {
+      if (!msg || typeof msg.type !== "string") return;
+      switch (msg.type) {
+        // 订阅好友在线状态
+        case "presence": {
+          const ids = Array.isArray(msg.friends) ? (msg.friends as unknown[]).map(Number) : [];
+          friendsByWs.set(ws, new Set(ids.filter((n) => Number.isFinite(n))));
+          // 立即回送当前状态
+          for (const id of ids) send(ws, { type: "presence", userId: id, online: isOnline(id) });
+          return;
+        }
+
+        // A 呼叫好友 B（按 userId 定向）
+        case "call": {
+          const to = Number(msg.to);
+          if (!to) return;
+          const ok = routeTo(to, { type: "incoming-call", from: user!.id });
+          if (!ok) send(ws, { type: "call-offline", to });
+          return;
+        }
+
+        // WebRTC 信令（offer/answer/ICE），按目标 userId 转发
+        case "signal": {
+          const to = Number(msg.to);
+          if (!to) return;
+          routeTo(to, { type: "signal", from: user!.id, data: msg.data });
+          return;
+        }
+
+        // 中继聊天消息，按目标 userId 转发
+        case "chat": {
+          const to = Number(msg.to);
+          if (!to) return;
+          routeTo(to, {
+            type: "chat",
+            from: user!.id,
+            text: String(msg.text ?? "").slice(0, 4000),
+            ts: Date.now(),
+          });
+          return;
+        }
+
+        // 结束当前对话
+        case "bye": {
+          const to = Number(msg.to);
+          if (!to) return;
+          routeTo(to, { type: "peer-left", from: user!.id });
+          return;
+        }
+
+        case "ping":
+          send(ws, { type: "pong" });
+          return;
+      }
+    };
+
+    ws.on("message", (data: Buffer | string) => {
+      let msg: { type?: string; [k: string]: unknown };
+      try {
+        msg = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+      if (!authed) { pending.push(msg); return; } // 鉴权完成前先缓存
+      try { handleMessage(msg); } catch (err) {
+        console.error("[signaling] message handler error:", (err as Error).message);
+      }
+    });
+
+    ws.on("close", () => removeOnline(ws));
+    ws.on("error", () => removeOnline(ws));
+
+    // ---- 鉴权：从 query 取 token ----
     try {
       const u = new URL(req.url || "/ws", "http://localhost");
       const token = u.searchParams.get("token") || "";
@@ -133,81 +213,14 @@ export function attachSignaling(server: Server): void {
       return;
     }
 
-    const s = ws as unknown as { isAlive?: boolean };
-    s.isAlive = true;
-    ws.on("pong", () => { s.isAlive = true; });
-
+    authed = true;
     addOnline(user.id, ws);
     send(ws, { type: "welcome", userId: user.id, username: user.username });
-
-    ws.on("message", (data: Buffer | string) => {
-      try {
-        let msg: { type?: string; [k: string]: unknown };
-        try {
-          msg = JSON.parse(data.toString());
-        } catch {
-          return;
-        }
-        if (!msg || typeof msg.type !== "string") return;
-
-        switch (msg.type) {
-          // 订阅好友在线状态
-          case "presence": {
-            const ids = Array.isArray(msg.friends) ? (msg.friends as unknown[]).map(Number) : [];
-            friendsByWs.set(ws, new Set(ids.filter((n) => Number.isFinite(n))));
-            // 立即回送当前状态
-            for (const id of ids) send(ws, { type: "presence", userId: id, online: isOnline(id) });
-            return;
-          }
-
-          // A 呼叫好友 B（按 userId 定向）
-          case "call": {
-            const to = Number(msg.to);
-            if (!to) return;
-            const ok = routeTo(to, { type: "incoming-call", from: user!.id });
-            if (!ok) send(ws, { type: "call-offline", to });
-            return;
-          }
-
-          // WebRTC 信令（offer/answer/ICE），按目标 userId 转发
-          case "signal": {
-            const to = Number(msg.to);
-            if (!to) return;
-            routeTo(to, { type: "signal", from: user!.id, data: msg.data });
-            return;
-          }
-
-          // 中继聊天消息，按目标 userId 转发
-          case "chat": {
-            const to = Number(msg.to);
-            if (!to) return;
-            routeTo(to, {
-              type: "chat",
-              from: user!.id,
-              text: String(msg.text ?? "").slice(0, 4000),
-              ts: Date.now(),
-            });
-            return;
-          }
-
-          // 结束当前对话
-          case "bye": {
-            const to = Number(msg.to);
-            if (!to) return;
-            routeTo(to, { type: "peer-left", from: user!.id });
-            return;
-          }
-
-          case "ping":
-            send(ws, { type: "pong" });
-            return;
-        }
-      } catch (err) {
-        console.error("[signaling] message handler error:", (err as Error).message);
+    // 处理鉴权期间缓存的消息（如客户端 onopen 即发的 presence 订阅 / call）
+    for (const m of pending.splice(0)) {
+      try { handleMessage(m); } catch (err) {
+        console.error("[signaling] pending message error:", (err as Error).message);
       }
-    });
-
-    ws.on("close", () => removeOnline(ws));
-    ws.on("error", () => removeOnline(ws));
+    }
   });
 }
