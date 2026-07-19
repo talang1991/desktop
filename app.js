@@ -389,43 +389,39 @@
     }
   }
 
-  // ---------- Import / Export ----------
-  function exportJson() {
-    if (apps.length === 0) { toast("暂无数据可导出"); return; }
-    const blob = new Blob([JSON.stringify(apps, null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `web-apps-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    toast("已导出备份");
+  // ---------- Import / Export（走服务端 PostgreSQL）----------
+  async function exportJson() {
+    try {
+      const data = await api("/api/export");
+      if (!data.links || data.links.length === 0) { toast("暂无数据可导出"); return; }
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `web-apps-${data.username || "backup"}-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast(`已导出备份（${data.links.length} 条）`);
+    } catch (e) {
+      toast("导出失败：" + (e.message || "请稍后重试"));
+    }
   }
   async function importJson(file) {
     const reader = new FileReader();
     reader.onload = async () => {
       try {
-        const data = JSON.parse(reader.result);
-        if (!Array.isArray(data)) throw new Error("格式错误");
-        let n = 0;
-        for (const a of data) {
-          if (!a.url) continue;
-          await api("/api/links", {
-            method: "POST",
-            body: JSON.stringify({
-              name: a.name || "未命名",
-              url: a.url,
-              category: a.category || "未分类",
-              emoji: a.emoji || "",
-              color: a.color || COLORS[0],
-              openNew: a.openNew !== false,
-            }),
-          });
-          n++;
-        }
+        const parsed = JSON.parse(reader.result);
+        const links = Array.isArray(parsed)
+          ? parsed
+          : (parsed && Array.isArray(parsed.links) ? parsed.links : null);
+        if (!links) throw new Error("格式不正确");
+        const data = await api("/api/import", {
+          method: "POST",
+          body: JSON.stringify({ links }),
+        });
         await loadLinks();
-        toast(`已导入 ${n} 个应用`);
+        toast(`已导入 ${data.created} 条，跳过重复 ${data.skipped} 条`);
       } catch (e) {
-        toast("导入失败：文件格式不正确");
+        toast("导入失败：" + (e.message || "文件格式不正确"));
       }
     };
     reader.readAsText(file);

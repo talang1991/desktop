@@ -414,6 +414,54 @@ export async function deleteLink(userId: number, id: number): Promise<boolean> {
   return rows.length > 0;
 }
 
+// ---------------- 批量导入（备份还原，直接落 PostgreSQL）----------------
+// 兼容两种文件格式：① 纯数组 [link, ...]；② 导出格式 { links: [...] }。
+// 按 url 去重（同用户已存在相同 url 则跳过），返回创建/跳过计数。
+export async function bulkImportLinks(
+  userId: number,
+  items: Array<{ name?: string; url?: string; category?: string; emoji?: string; color?: string; openNew?: boolean }>,
+): Promise<{ created: number; skipped: number; total: number }> {
+  ensureDb();
+  const valid = (items || [])
+    .filter((a) => a && a.url)
+    .map((a) => ({
+      name: String(a.name || "未命名").trim(),
+      url: String(a.url).trim(),
+      category: String(a.category || "未分类").trim(),
+      emoji: String(a.emoji || "").slice(0, ICON_MAX),
+      color: String(a.color || "#4f6ef7"),
+      openNew: a.openNew !== false,
+    }));
+  if (valid.length === 0) return { created: 0, skipped: 0, total: 0 };
+
+  return withClient(async (c: any) => {
+    const existRows = await c.queryObject<{ url: string }>(
+      `SELECT url FROM links WHERE user_id = $1`,
+      [userId],
+    );
+    const exist = new Set(existRows.rows.map((r: { url: string }) => r.url));
+    let created = 0;
+    let skipped = 0;
+    await c.queryObject(`BEGIN`);
+    try {
+      for (const it of valid) {
+        if (exist.has(it.url)) { skipped++; continue; }
+        await c.queryObject(
+          `INSERT INTO links (user_id, title, url, category, icon, color, open_new, sort_order)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [userId, it.name, it.url, it.category, it.emoji, it.color, it.openNew, 0],
+        );
+        created++;
+      }
+      await c.queryObject(`COMMIT`);
+    } catch (e) {
+      await c.queryObject(`ROLLBACK`).catch(() => {});
+      throw e;
+    }
+    return { created, skipped, total: valid.length };
+  });
+}
+
 // ---------------- 好友关系 ----------------
 interface FriendOut {
   id: number;

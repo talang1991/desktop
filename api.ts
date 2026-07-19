@@ -2,6 +2,7 @@
 import {
   registerUser, findUserByUsername, verifyPassword, createSession,
   getUserByToken, deleteSession, listLinks, createLink, updateLink, deleteLink,
+  bulkImportLinks,
   sendFriendRequest, listFriends, listFriendRequests, acceptFriendRequest, removeFriend,
   updateUserAvatar, areFriends,
   DbUnavailableError,
@@ -199,6 +200,37 @@ export async function handleApi(req: Request): Promise<Response> {
         openNew: b.openNew !== false,
       });
       return json({ link }, 201);
+    }
+
+    // ---- 数据备份导出（直接从 PostgreSQL 读取当前用户全部链接）----
+    if (path === "/api/export" && method === "GET") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const links = await listLinks(user.id);
+      return json({
+        app: "web-nav-panel",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        userId: user.id,
+        username: user.username,
+        links,
+      });
+    }
+
+    // ---- 数据备份导入（批量写入 PostgreSQL，按 url 去重）----
+    // 兼容纯数组 [link,...] 与导出格式 { links:[...] }；忽略非 url 项。
+    if (path === "/api/import" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const b = await req.json().catch(() => ({}));
+      const items = Array.isArray(b)
+        ? b
+        : Array.isArray(b?.links)
+          ? b.links
+          : [];
+      if (!Array.isArray(items)) return json({ error: "文件格式不正确" }, 400);
+      const res = await bulkImportLinks(user.id, items);
+      return json({ ok: true, ...res });
     }
 
     // ---- 好友：删除（移除好友关系）----
