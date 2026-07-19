@@ -311,18 +311,21 @@ export async function listLinks(userId: number): Promise<unknown[]> {
   return rows.map(toLinkShape);
 }
 
+const ICON_MAX = 2048; // 图标字段可存 emoji 或 favicon 链接，限制长度避免撑爆 DB
+
 export async function createLink(
   userId: number,
   data: { name: string; url: string; category: string; emoji: string; color: string; openNew: boolean },
 ): Promise<unknown> {
   ensureDb();
+  const icon = String(data.emoji || "").slice(0, ICON_MAX);
   const rows = await query<LinkRow>(
     `INSERT INTO links (user_id, title, url, category, icon, color, open_new, sort_order)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      RETURNING id, user_id, title AS name, url, category, icon AS emoji, color, open_new, created_at`,
     [
       userId, data.name, data.url,
-      data.category || "未分类", data.emoji || "", data.color || "#4f6ef7",
+      data.category || "未分类", icon, data.color || "#4f6ef7",
       data.openNew !== false, 0,
     ],
   );
@@ -340,7 +343,7 @@ export async function updateLink(
     name: ["title", fields.name],
     url: ["url", fields.url],
     category: ["category", fields.category],
-    emoji: ["icon", fields.emoji],
+    emoji: ["icon", fields.emoji == null ? undefined : String(fields.emoji).slice(0, ICON_MAX)],
     color: ["color", fields.color],
     openNew: ["open_new", fields.openNew],
   };

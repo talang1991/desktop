@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=6" />
+  <link rel="stylesheet" href="styles.css?v=7" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -93,8 +93,12 @@
               <datalist id="categoryList"></datalist>
             </label>
             <label class="field">
-              <span>图标 Emoji</span>
-              <input id="fEmoji" name="emoji" type="text" maxlength="4" placeholder="🌟" />
+              <span>图标（Emoji 或 favicon 链接）</span>
+              <div class="icon-input-row">
+                <input id="fEmoji" name="emoji" type="text" placeholder="🌟 或 https://…/favicon.ico" autocomplete="off" />
+                <button type="button" id="fEmojiAuto" class="btn ghost small" title="使用网站默认 favicon">📎</button>
+                <span class="icon-preview" id="iconPreview" aria-hidden="true"></span>
+              </div>
             </label>
           </div>
 
@@ -148,6 +152,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>

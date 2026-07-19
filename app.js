@@ -103,6 +103,13 @@
     try { return new URL(url).origin + "/favicon.ico"; }
     catch (e) { return ""; }
   }
+  // 图标字段可存 emoji，也可存 favicon 链接（http(s)/相对路径/data:image）
+  function isIconUrl(s) {
+    return !!s && /^(https?:\/\/|\/|data:image\/)/i.test(String(s).trim());
+  }
+  function fallbackChar(url) {
+    return (hostnameOf(url).charAt(0) || "?").toUpperCase();
+  }
 
   // ---------- Render ----------
   function renderCategories() {
@@ -155,9 +162,22 @@
       card.rel = "noopener noreferrer";
       card.title = a.url;
 
-      const iconHtml = a.emoji
-        ? `<div class="icon" style="background:${a.color}22">${escapeHtml(a.emoji)}</div>`
-        : `<div class="icon" style="background:${a.color}22"><img src="${escapeHtml(faviconUrl(a.url))}" alt="" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(hostnameOf(a.url).charAt(0).toUpperCase())}'"/></div>`;
+      const iconVal = a.emoji || "";
+      let iconHtml;
+      if (isIconUrl(iconVal)) {
+        // 自定义 favicon 链接
+        iconHtml =
+          `<div class="icon" style="background:${a.color}22"><img src="${escapeHtml(iconVal)}" alt="" ` +
+          `onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar(a.url))}'"/></div>`;
+      } else if (iconVal) {
+        // emoji 文本
+        iconHtml = `<div class="icon" style="background:${a.color}22">${escapeHtml(iconVal)}</div>`;
+      } else {
+        // 未设置 -> 用网站默认 favicon
+        iconHtml =
+          `<div class="icon" style="background:${a.color}22"><img src="${escapeHtml(faviconUrl(a.url))}" alt="" ` +
+          `onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar(a.url))}'"/></div>`;
+      }
 
       card.innerHTML = `
         ${a.category ? `<span class="cat-tag">${escapeHtml(a.category)}</span>` : ""}
@@ -241,8 +261,29 @@
     $("#fOpenNew").checked = app ? app.openNew !== false : true;
     selectedColor = app && app.color ? app.color : COLORS[0];
     renderColorRow();
+    updateIconPreview();
     modal.hidden = false;
     setTimeout(() => $("#fName").focus(), 50);
+  }
+  // 图标预览：emoji 显示文字，链接显示图片，空则显示网站默认 favicon
+  function updateIconPreview() {
+    const el = $("#iconPreview");
+    if (!el) return;
+    const val = $("#fEmoji").value.trim();
+    const color = selectedColor || COLORS[0];
+    let inner = "";
+    if (isIconUrl(val)) {
+      inner = `<img src="${escapeHtml(val)}" alt="" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar($("#fUrl").value))}'"/>`;
+    } else if (val) {
+      inner = escapeHtml(val);
+    } else if ($("#fUrl").value.trim()) {
+      const fv = faviconUrl($("#fUrl").value.trim());
+      inner = `<img src="${escapeHtml(fv)}" alt="" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar($("#fUrl").value))}'"/>`;
+    } else {
+      inner = "🌐";
+    }
+    el.style.background = color + "22";
+    el.innerHTML = inner;
   }
   function closeModal() { modal.hidden = true; editingId = null; }
 
@@ -425,6 +466,16 @@
   };
   searchInput.oninput = (e) => { searchTerm = e.target.value; renderGrid(); };
   modal.querySelectorAll("[data-close]").forEach((el) => el.onclick = closeModal);
+
+  // 图标预览实时更新 + 一键填入网站默认 favicon
+  $("#fEmoji").addEventListener("input", updateIconPreview);
+  $("#fUrl").addEventListener("input", updateIconPreview);
+  $("#fEmojiAuto").onclick = () => {
+    const u = $("#fUrl").value.trim();
+    if (!u) { toast("请先填写网址"); return; }
+    $("#fEmoji").value = faviconUrl(u);
+    updateIconPreview();
+  };
 
   // =====================================================================
   // 好友聊天（P2P + 中继兜底）
