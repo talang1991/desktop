@@ -1,13 +1,23 @@
-// Deno 静态文件服务器 + API —— 同时用于本地运行与 Deno Deploy 部署
+// Deno 静态文件服务器 + API + WebSocket 信令 —— 同时用于本地运行与 Deno Deploy 部署
+// 统一使用 node:http 单服务器：HTTP 静态资源、/api/* 路由、/ws 信令 同端口同源。
 // 本地: deno task start   |   云端: 推送到 Git 后在 Deno Deploy 选本文件为入口
+import { createServer } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { Buffer } from "node:buffer";
+import process from "node:process";
+
+// 捕获 node 事件回调（如 ws 消息处理）中未捕获的异常，避免整个进程退出
+process.on("uncaughtException", (e) => console.error("[uncaughtException]", e));
+process.on("unhandledRejection", (e) => console.error("[unhandledRejection]", e));
 import { handleApi } from "./api.ts";
-import { dbReady } from "./db.ts";
+import { initStore } from "./store.ts";
+import { attachSignaling, getWsPublicUrl } from "./signaling.ts";
 
-// db.ts 模块加载时已后台启动建表（无限重试连接）；
-// 这里不 await，确保 HTTP 服务立即可用——沙箱到 Prisma 出口网络偶发卡顿时，
-// 网络恢复即自动连上，登录页始终可打开。
+// 初始化本地存储：读取本地 data.json（快），并“尽力”从 PostgreSQL 导入已有数据（最多 5s）。
+// 即使 PostgreSQL 连不上，本地存储照常工作，应用 100% 可用。
+await initStore();
 
-const ROOT = "."; // 站点根目录（与 index.html 同级）
+const ROOT = ".";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -38,7 +48,6 @@ async function serveStatic(req: Request): Promise<Response> {
   let pathname = decodeURIComponent(url.pathname);
   if (pathname === "/") pathname = "/index.html";
 
-  // 阻止路径穿越 + 限定在 ROOT 内
   const safe = pathname.replace(/\.{2,}/g, "").replace(/^\/+/, "");
   const filePath = `${ROOT}/${safe}`;
   try {
@@ -53,7 +62,6 @@ async function serveStatic(req: Request): Promise<Response> {
     return new Response(data, {
       headers: {
         "content-type": contentType(target),
-        // no-store：禁止浏览器/CDN 缓存，避免旧版 app.js 导致“点击没反应”
         "cache-control": "no-store",
         "pragma": "no-cache",
       },
@@ -63,14 +71,52 @@ async function serveStatic(req: Request): Promise<Response> {
   }
 }
 
-async function handler(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  if (url.pathname.startsWith("/api/")) {
-    return await handleApi(req);
+// ---- Node http <-> Web Request/Response 适配 ----
+async function toWebRequest(req: IncomingMessage): Promise<Request> {
+  const host = req.headers.host || "localhost";
+  const url = `http://${host}${req.url || "/"}`;
+  const headers = new Headers();
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (v == null) continue;
+    if (Array.isArray(v)) v.forEach((x) => headers.append(k, x));
+    else headers.set(k, v);
   }
-  return await serveStatic(req);
+  const method = req.method || "GET";
+  let body: Uint8Array | undefined;
+  if (method !== "GET" && method !== "HEAD") {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    if (chunks.length) body = new Uint8Array(Buffer.concat(chunks));
+  }
+  return new Request(url, { method, headers, body });
 }
 
-Deno.serve(handler);
+async function writeWeb(res: ServerResponse, response: Response): Promise<void> {
+  res.statusCode = response.status;
+  response.headers.forEach((v, k) => res.setHeader(k, v));
+  const buf = new Uint8Array(await response.arrayBuffer());
+  res.end(buf);
+}
 
-console.log("🚀 Web 应用导航面板已启动");
+const server = createServer(async (req, res) => {
+  try {
+    const webReq = await toWebRequest(req);
+    const url = new URL(webReq.url);
+    const webRes = url.pathname.startsWith("/api/") ? await handleApi(webReq) : await serveStatic(webReq);
+    await writeWeb(res, webRes);
+  } catch (e) {
+    console.error("request error:", (e as Error).message);
+    res.statusCode = 500;
+    res.setHeader("content-type", "text/plain; charset=utf-8");
+    res.end("500 Server Error");
+  }
+});
+
+// 把 WebSocket 信令服务附着到同一个服务器（同端口同源）
+attachSignaling(server);
+
+const PORT = Number(Deno.env.get("PORT") || "8000");
+// 监听双栈 "::"（IPv4+IPv6 共存），避免 localhost 解析到 ::1 时连不上/进程崩溃
+server.listen(PORT, "::", () => {
+  console.error(`🚀 Web 应用导航面板已启动：http://localhost:${PORT}/`);
+});

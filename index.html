@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=5" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -53,6 +53,7 @@
         <button id="exportBtn" class="btn ghost" title="导出为 JSON 备份">导出</button>
         <button id="themeBtn" class="btn ghost" title="切换深色/浅色">🌓</button>
         <button id="addBtn" class="btn primary">＋ 添加应用</button>
+        <button id="chatBtn" class="btn ghost" title="P2P 聊天">💬 聊天</button>
         <button id="logoutBtn" class="btn ghost">登出</button>
         <input id="importFile" type="file" accept="application/json" hidden />
       </div>
@@ -118,6 +119,27 @@
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <script src="app.js?v=4"></script>
+  <!-- P2P 聊天抽屉 -->
+  <div id="chatPanel" class="chat-panel" hidden>
+    <div class="chat-header">
+      <div class="chat-title">💬 P2P 聊天</div>
+      <div class="chat-status" id="chatStatus">未连接</div>
+      <button id="chatClose" class="chat-x" title="关闭">✕</button>
+    </div>
+    <div class="chat-room" id="chatRoomBar">
+      <input id="chatRoom" type="text" placeholder="房间号（自定义，如 abc123）" maxlength="32"
+             autocomplete="off" />
+      <button id="chatJoin" class="btn primary">进入</button>
+      <button id="chatLeave" class="btn ghost" hidden>离开</button>
+    </div>
+    <div id="chatMessages" class="chat-messages"></div>
+    <div class="chat-input-row">
+      <textarea id="chatInput" rows="1" placeholder="连接后输入消息…（Enter 发送，Shift+Enter 换行）"
+                disabled></textarea>
+      <button id="chatSend" class="btn primary" disabled>发送</button>
+    </div>
+  </div>
+
+  <script src="app.js?v=5"></script>
 </body>
 </html>

@@ -426,6 +426,271 @@
   searchInput.oninput = (e) => { searchTerm = e.target.value; renderGrid(); };
   modal.querySelectorAll("[data-close]").forEach((el) => el.onclick = closeModal);
 
+  // ---------- Chat (P2P) ----------
+  // 真正的端到端 P2P：聊天内容经 WebRTC DataChannel 在两位对端浏览器间直连收发；
+  // Deno 的 /ws 仅做信令中转（offer/answer/ICE），并在无法直连时兜底中继消息。
+  // 注意：DOM 常量必须先于事件绑定声明，否则事件回调访问到 TDZ 中的 const 会抛 ReferenceError。
+  const chatPanel = $("#chatPanel");
+  const chatStatus = $("#chatStatus");
+  const chatMessages = $("#chatMessages");
+  const chatRoomInput = $("#chatRoom");
+  const chatJoinBtn = $("#chatJoin");
+  const chatLeaveBtn = $("#chatLeave");
+  const chatInput = $("#chatInput");
+  const chatSendBtn = $("#chatSend");
+
+  // ---------- Chat (P2P) 事件 ----------
+  $("#chatBtn").onclick = openChat;
+  $("#chatClose").onclick = closeChat;
+  $("#chatJoin").onclick = joinRoom;
+  $("#chatLeave").onclick = leaveRoom;
+  $("#chatSend").onclick = sendChat;
+  chatRoomInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); joinRoom(); } });
+  chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+  chatInput.addEventListener("input", () => {
+    chatInput.style.height = "auto";
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + "px";
+  });
+
+  let sigSocket = null;
+  let pc = null;
+  let dc = null;
+  let myId = null;
+  let myRole = null;
+  let currentRoom = null;
+  let p2pReady = false;
+  let relayActive = false;
+  let enteringMsg = null; // 进入房间的临时系统提示，joined 后移除
+
+  const RTC_CONFIG = {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+    ],
+  };
+
+  function setChatStatus(text, cls) {
+    chatStatus.textContent = text;
+    chatStatus.className = "chat-status" + (cls ? " " + cls : "");
+  }
+  function resetChatMessages() {
+    chatMessages.innerHTML = '<div class="chat-empty">进入房间后即可与对方 P2P 聊天</div>';
+  }
+  function openChat() { chatPanel.hidden = false; }
+  function closeChat() { chatPanel.hidden = true; }
+
+  let cachedWsUrl = null;
+  function connectSignaling() {
+    if (sigSocket && (sigSocket.readyState === WebSocket.OPEN || sigSocket.readyState === WebSocket.CONNECTING)) return Promise.resolve();
+    // 从后端获取信令服务地址（与页面同源同端口，仅 /ws 路径）
+    if (!cachedWsUrl) {
+      try {
+        const r = fetch("/api/ws-info");
+        r.then((res) => res.json()).then((j) => { if (j && j.wsUrl) cachedWsUrl = j.wsUrl; }).catch(() => {});
+      } catch { /* 忽略 */ }
+    }
+    const fallback = (location.protocol === "https:" ? "wss" : "ws") + "//" + location.host + "/ws";
+    const wsUrl = cachedWsUrl || fallback;
+    const ws = new WebSocket(wsUrl);
+    sigSocket = ws;
+    return new Promise((resolve) => {
+      ws.onopen = () => { setChatStatus("信令已连接", "ok"); resolve(); };
+      ws.onclose = () => {
+        setChatStatus("信令断开", "warn");
+        if (currentRoom) setTimeout(() => {
+          if (currentRoom) connectSignaling().then(() => { if (sigSocket) joinWhenReady(currentRoom); });
+        }, 1500);
+      };
+      ws.onerror = () => {};
+      ws.onmessage = (e) => {
+        let m; try { m = JSON.parse(e.data); } catch { return; }
+        onSignalMessage(m);
+      };
+    });
+  }
+  function joinWhenReady(room) {
+    const send = () => sigSocket.send(JSON.stringify({ type: "join", room }));
+    if (sigSocket.readyState === WebSocket.OPEN) send();
+    else sigSocket.addEventListener("open", send, { once: true });
+  }
+
+  function onSignalMessage(m) {
+    switch (m.type) {
+      case "joined":
+        myId = m.peerId; myRole = m.role; currentRoom = m.room;
+        chatRoomInput.value = m.room;
+        chatJoinBtn.hidden = true;
+        chatLeaveBtn.hidden = false;
+        if (enteringMsg && enteringMsg.parentNode) { enteringMsg.remove(); enteringMsg = null; }
+        setChatStatus(m.role === "initiator" ? `房间 ${m.room}：等待对方加入…` : `房间 ${m.room}：协商中…`);
+        // 直连较慢时的兜底：8s 内未直连则启用中继
+        setTimeout(() => {
+          if (currentRoom && !p2pReady) { setChatStatus("直连较慢，已启用中继兜底", "warn"); enableRelay(); }
+        }, 8000);
+        break;
+      case "peer-joined":
+        if (myRole === "initiator") startOffer();
+        break;
+      case "signal":
+        handleSignal(m.data);
+        break;
+      case "peer-left":
+        setChatStatus("对方已离开，等待重新加入…", "warn");
+        teardownP2P();
+        disableChatInput();
+        break;
+      case "chat":
+        addChatMessage("peer", m.text, m.ts);
+        break;
+      case "error":
+        setChatStatus("错误：" + m.error, "warn");
+        if (enteringMsg && enteringMsg.parentNode) { enteringMsg.remove(); enteringMsg = null; }
+        chatJoinBtn.hidden = false;
+        chatLeaveBtn.hidden = true;
+        break;
+      case "ping":
+        try { sigSocket.send(JSON.stringify({ type: "pong" })); } catch {}
+        break;
+    }
+  }
+
+  async function joinRoom() {
+    const room = chatRoomInput.value.trim();
+    if (!room) { setChatStatus("请先输入房间号", "warn"); return; }
+    resetChatMessages();
+    await connectSignaling();
+    if (!sigSocket) return;
+    currentRoom = room;
+    joinWhenReady(room);
+    enteringMsg = addChatMessage("system", "正在进入房间 " + room + " …");
+  }
+
+  function leaveRoom() {
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) sigSocket.send(JSON.stringify({ type: "bye" }));
+    teardownP2P();
+    currentRoom = null; myRole = null; myId = null;
+    chatJoinBtn.hidden = false;
+    chatLeaveBtn.hidden = true;
+    chatRoomInput.value = "";
+    disableChatInput();
+    setChatStatus("未连接");
+    resetChatMessages();
+  }
+
+  function teardownP2P() {
+    p2pReady = false;
+    if (dc) { try { dc.close(); } catch {} dc = null; }
+    if (pc) { try { pc.close(); } catch {} pc = null; }
+  }
+
+  function startOffer() {
+    try {
+      pc = new RTCPeerConnection(RTC_CONFIG);
+      setupPc();
+      dc = pc.createDataChannel("chat");
+      setupDataChannel(dc);
+      pc.createOffer().then((offer) => pc.setLocalDescription(offer))
+        .then(() => sendSignal({ sdp: pc.localDescription }))
+        .catch(() => enableRelay());
+    } catch { enableRelay(); }
+  }
+
+  function setupPc() {
+    pc.onicecandidate = (e) => { if (e.candidate) sendSignal({ candidate: e.candidate }); };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "failed") { setChatStatus("直连失败，改用中继", "warn"); enableRelay(); }
+    };
+    pc.ondatachannel = (e) => { dc = e.channel; setupDataChannel(dc); };
+  }
+
+  function handleSignal(data) {
+    if (!data) return;
+    if (data.sdp) {
+      const desc = new RTCSessionDescription(data.sdp);
+      if (desc.type === "offer") {
+        if (!pc) { pc = new RTCPeerConnection(RTC_CONFIG); setupPc(); }
+        pc.setRemoteDescription(desc).then(() => pc.createAnswer())
+          .then((answer) => pc.setLocalDescription(answer))
+          .then(() => sendSignal({ sdp: pc.localDescription }))
+          .catch(() => enableRelay());
+      } else if (desc.type === "answer") {
+        if (pc) pc.setRemoteDescription(desc).catch(() => enableRelay());
+      }
+    } else if (data.candidate) {
+      if (pc) pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
+    }
+  }
+
+  function setupDataChannel(ch) {
+    ch.onopen = () => { p2pReady = true; setChatStatus("P2P 已直连 🔗", "ok"); enableChatInput(); };
+    ch.onmessage = (e) => addChatMessage("peer", String(e.data));
+    ch.onclose = () => { p2pReady = false; setChatStatus("直连关闭，改用中继", "warn"); enableRelay(); };
+    ch.onerror = () => {};
+  }
+
+  function sendSignal(data) {
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) sigSocket.send(JSON.stringify({ type: "signal", data }));
+  }
+
+  function enableRelay() {
+    if (relayActive) return;
+    relayActive = true;
+    p2pReady = false;
+    setChatStatus("中继模式（服务器转发）", "warn");
+    enableChatInput();
+  }
+  function enableChatInput() {
+    chatInput.disabled = false; chatSendBtn.disabled = false; chatInput.focus();
+  }
+  function disableChatInput() {
+    chatInput.disabled = true; chatSendBtn.disabled = true; relayActive = false;
+  }
+
+  function sendChat() {
+    const text = chatInput.value.trim();
+    if (!text) return;
+    if (p2pReady && dc && dc.readyState === "open") {
+      dc.send(text);
+    } else if (sigSocket && sigSocket.readyState === WebSocket.OPEN && currentRoom) {
+      sigSocket.send(JSON.stringify({ type: "chat", text }));
+    } else {
+      setChatStatus("未连接，无法发送", "warn");
+      return;
+    }
+    addChatMessage("me", text);
+    chatInput.value = "";
+    chatInput.style.height = "auto";
+  }
+
+  function addChatMessage(role, text, ts) {
+    const empty = chatMessages.querySelector(".chat-empty");
+    if (empty) empty.remove();
+    const div = document.createElement("div");
+    if (role === "system") {
+      div.className = "chat-msg system";
+      div.style.alignSelf = "center";
+      div.style.background = "transparent";
+      div.style.color = "var(--text-soft)";
+      div.style.fontSize = "12px";
+      div.textContent = text;
+    } else {
+      div.className = "chat-msg " + (role === "me" ? "me" : "peer");
+      div.textContent = text;
+      if (ts) {
+        const meta = document.createElement("span");
+        meta.className = "meta";
+        meta.textContent = new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        div.appendChild(meta);
+      }
+    }
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return div;  }
+
+  resetChatMessages();
+
   // ---------- Init ----------
   function init() {
     applyTheme(
