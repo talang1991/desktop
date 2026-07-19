@@ -1,25 +1,30 @@
 // store.ts
-// 本地可靠存储（JSON 文件，纯 JS，零原生依赖）。
-// 为什么需要它：Prisma 池化连接(db.prisma.io)在当前运行环境极不稳定
-// （约 50% 几率 TLS 握手超时），导致登录/查询随机 500。
-// 因此应用默认使用本地文件存储，100% 可用；并在启动时“尽力”从
-// PostgreSQL 导入已有的账号与链接，避免数据丢失。
-// 当你在稳定网络或部署到 Deno Deploy（网络可达 Prisma）时，可改回纯 Postgres。
+// 真正的 PostgreSQL 持久层（Deno 原生驱动 deno.land/x/postgres）。
+// 通过 DATABASE_URL 连接；启动时自动建表（幂等）。
+// 若 DB 暂时不可用，服务器仍会启动并提供静态页面与聊天；认证/链接接口会返回 503，
+// 连接恢复后下一次请求自动重试（连接池重连）。
 
-import { Client } from "https://deno.land/x/postgres@v0.19.3/mod.ts";
+import { Pool } from "https://deno.land/x/postgres@v0.19.3/mod.ts";
 
-const DATA_FILE = "./data.json";
 const SESSION_DAYS = 30;
 const SESSION_MS = SESSION_DAYS * 24 * 3600 * 1000;
 
-// ---------------- 内存数据 ----------------
-interface LocalUser {
+// 数据库不可用时抛出，api 层据此返回 503
+export class DbUnavailableError extends Error {
+  constructor(msg = "数据库暂时不可用") {
+    super(msg);
+    this.name = "DbUnavailableError";
+  }
+}
+
+// ---------------- 类型 ----------------
+export interface StoredUser {
   id: number;
   username: string;
   password_hash: string;
   created_at: string;
 }
-interface LocalLink {
+interface LinkRow {
   id: number;
   user_id: number;
   name: string;
@@ -27,31 +32,57 @@ interface LocalLink {
   category: string;
   emoji: string;
   color: string;
-  openNew: boolean;
-  createdAt: number;
-}
-interface LocalSession {
-  token: string;
-  user_id: number;
-  expires_at: string; // ISO
+  open_new: boolean;
+  created_at: string;
 }
 
-let users: LocalUser[] = [];
-let links: LocalLink[] = [];
-let sessions: LocalSession[] = [];
-let nextUserId = 1;
-let nextLinkId = 1;
+// ---------------- 连接池 ----------------
+let pool: Pool | null = null;
 
-// 写文件互斥，避免并发写损坏
-let writeChain: Promise<void> = Promise.resolve();
-function persist(): Promise<void> {
-  const snapshot = JSON.stringify({ users, links, sessions }, null, 2);
-  const run = writeChain.then(() => Deno.writeTextFile(DATA_FILE, snapshot));
-  writeChain = run.catch(() => {});
-  return run;
+function parseDatabaseUrl(raw: string) {
+  const url = new URL(raw.split("?")[0]);
+  const dbName = url.pathname.replace(/^\//, "") || "postgres";
+  const sslmode = (raw.match(/[?&]sslmode=([a-z\-]+)/i)?.[1] ?? "").toLowerCase();
+  const tlsEnabled = sslmode !== "disable"; // require/prefer/verify-full/verify-ca/默认 -> 启用 TLS
+  return {
+    user: decodeURIComponent(url.username),
+    password: decodeURIComponent(url.password),
+    hostname: url.hostname,
+    port: Number(url.port) || 5432,
+    database: dbName,
+    tls: { enabled: tlsEnabled },
+  };
 }
 
-// ---------------- 密码哈希（与旧 Postgres 版本格式兼容 pbkdf2$iter$saltB64$keyB64）----------------
+// 连接池执行：成功自动释放；连接失败抛 DbUnavailableError（api 返回 503）
+async function withClient<T>(fn: (c: any) => Promise<T>): Promise<T> {
+  if (!pool) throw new DbUnavailableError();
+  let client: any;
+  try {
+    client = await pool.connect();
+  } catch (e) {
+    throw new DbUnavailableError("数据库连接失败：" + (e as Error).message);
+  }
+  try {
+    return await fn(client);
+  } finally {
+    client.release();
+  }
+}
+
+// 单条查询/写入助手：返回 rows（已按 T 断言）
+async function query<T>(sql: string, params: unknown[] = []): Promise<T[]> {
+  return withClient(async (c: any) => {
+    const res = await c.queryObject(sql, params);
+    return res.rows as T[];
+  });
+}
+
+function ensureDb() {
+  if (!pool) throw new DbUnavailableError();
+}
+
+// ---------------- 密码哈希（pbkdf2$iter$saltB64$keyB64，兼容历史账号）----------------
 const PBKDF2_ITER = 120_000;
 function bufToB64(buf: Uint8Array): string {
   let bin = "";
@@ -89,89 +120,99 @@ export function newSessionToken(): string {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// ---------------- 初始化 / 导入 ----------------
-function reloadIds() {
-  nextUserId = users.reduce((m, u) => Math.max(m, u.id), 0) + 1;
-  nextLinkId = links.reduce((m, l) => Math.max(m, l.id), 0) + 1;
-}
-
+// ---------------- 初始化 / 建表 / 迁移 ----------------
 export async function initStore(): Promise<void> {
-  // 读取本地文件
-  try {
-    const txt = await Deno.readTextFile(DATA_FILE);
-    const data = JSON.parse(txt);
-    users = data.users ?? [];
-    links = data.links ?? [];
-    sessions = data.sessions ?? [];
-    reloadIds();
-    console.error(`[store] 已加载本地数据：${users.length} 用户 / ${links.length} 链接`);
-  } catch {
-    console.error("[store] 无本地数据，初始化空存储");
-    users = []; links = []; sessions = [];
-    reloadIds();
+  const raw = Deno.env.get("DATABASE_URL");
+  if (!raw) {
+    console.error(
+      "[store] 未设置 DATABASE_URL：数据库不可用。静态页面与聊天仍可用，登录/链接接口将返回 503。",
+    );
+    return;
   }
-  // 尽力从 PostgreSQL 导入已有账号与链接（失败不影响本地运行）
-  await importFromPostgres().catch((e) =>
-    console.error("[store] PostgreSQL 导入跳过（连接不稳定，已忽略）：", (e as Error).message)
-  );
+  try {
+    const cfg = parseDatabaseUrl(raw);
+    pool = new Pool(cfg, 5);
+    await withClient(async (c) => {
+      await c.queryObject(
+        `CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          username TEXT NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`,
+      );
+      await c.queryObject(
+        `CREATE TABLE IF NOT EXISTS links (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          url TEXT NOT NULL,
+          category TEXT NOT NULL DEFAULT '未分类',
+          icon TEXT NOT NULL DEFAULT '',
+          color TEXT NOT NULL DEFAULT '#4f6ef7',
+          open_new BOOLEAN NOT NULL DEFAULT true,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`,
+      );
+      await c.queryObject(
+        `CREATE TABLE IF NOT EXISTS sessions (
+          token TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          expires_at TIMESTAMPTZ NOT NULL
+        )`,
+      );
+    });
+    console.error("[store] PostgreSQL 已连接，表结构已就绪。");
+    await migrateFromJson();
+  } catch (e) {
+    // 保留 pool，后续请求会自动重试重连
+    console.error(
+      "[store] 数据库初始化失败，降级运行（静态/聊天可用，认证/链接不可用，连接恢复后自动重试）：",
+      (e as Error).message,
+    );
+  }
 }
 
-async function importFromPostgres(): Promise<void> {
-  const rawUrl = Deno.env.get("DATABASE_URL");
-  if (!rawUrl) return;
-  const parsed = new URL(rawUrl.split("?")[0]);
-  const dbName = parsed.pathname.replace(/^\//, "") || "postgres";
-  const client = new Client({
-    user: decodeURIComponent(parsed.username),
-    password: decodeURIComponent(parsed.password),
-    hostname: parsed.hostname,
-    port: Number(parsed.port) || 5432,
-    database: dbName,
-    tls: { enabled: true },
-  });
-  // 5s 握手超时，连不上就放弃（本地存储照常工作）
-  await Promise.race([
-    client.connect(),
-    new Promise((_, r) => setTimeout(() => r(new Error("PostgreSQL 连接超时")), 5000)),
-  ]);
-
-  const pgUsers = await client.queryObject<{ id: number; username: string; password_hash: string }>(
-    "SELECT id, username, password_hash FROM users"
-  );
-  const pgLinks = await client.queryObject<{
-    id: number; user_id: number; title: string; url: string;
-    category: string; icon: string; color: string; open_new: boolean; created_at: string;
-  }>("SELECT id, user_id, title, url, category, icon, color, open_new, created_at FROM links");
-
-  let importedUsers = 0, importedLinks = 0;
-  const idMap = new Map<number, number>();
-  for (const u of pgUsers.rows) {
-    if (users.some((x) => x.username === u.username)) continue;
-    const localId = nextUserId++;
-    idMap.set(u.id, localId);
-    users.push({ id: localId, username: u.username, password_hash: u.password_hash, created_at: new Date().toISOString() });
-    importedUsers++;
+// 首次启动且 PG 为空时，把本地 data.json 的账号/链接迁移进 PostgreSQL（一次性）
+async function migrateFromJson(): Promise<void> {
+  let data: { users?: any[]; links?: any[] };
+  try {
+    const txt = await Deno.readTextFile("./data.json");
+    data = JSON.parse(txt);
+  } catch {
+    return;
   }
-  for (const l of pgLinks.rows) {
-    const localUserId = idMap.get(l.user_id);
-    if (!localUserId) continue; // 仅导入已导入用户拥有的链接
-    links.push({
-      id: nextLinkId++,
-      user_id: localUserId,
-      name: l.title,
-      url: l.url,
-      category: l.category || "未分类",
-      emoji: l.icon || "",
-      color: l.color || "#4f6ef7",
-      openNew: l.open_new !== false,
-      createdAt: l.created_at ? new Date(l.created_at).getTime() : Date.now(),
+  const ju = data.users ?? [];
+  const jl = data.links ?? [];
+  if (!ju.length && !jl.length) return;
+  try {
+    await withClient(async (c) => {
+      const cnt = await c.queryObject(`SELECT COUNT(*)::int AS n FROM users`);
+      if ((cnt.rows[0]?.n ?? 0) > 0) return; // 已有数据则跳过
+      for (const u of ju) {
+        await c.queryObject(
+          `INSERT INTO users (id, username, password_hash, created_at) VALUES ($1,$2,$3,$4)
+           ON CONFLICT (username) DO NOTHING`,
+          [u.id, u.username, u.password_hash, u.created_at ?? new Date().toISOString()],
+        );
+      }
+      for (const l of jl) {
+        await c.queryObject(
+          `INSERT INTO links (id, user_id, name, url, category, emoji, color, open_new, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            l.id, l.user_id, l.name, l.url,
+            l.category ?? "未分类", l.emoji ?? "", l.color ?? "#4f6ef7",
+            l.openNew !== false, new Date(l.createdAt ?? Date.now()).toISOString(),
+          ],
+        );
+      }
+      console.error(`[store] 已从本地 data.json 迁移 ${ju.length} 用户 / ${jl.length} 链接到 PostgreSQL。`);
     });
-    importedLinks++;
-  }
-  await client.end().catch(() => {});
-  if (importedUsers || importedLinks) {
-    await persist();
-    console.error(`[store] 已从 PostgreSQL 导入 ${importedUsers} 用户 / ${importedLinks} 链接`);
+  } catch (e) {
+    console.error("[store] 本地数据迁移跳过：", (e as Error).message);
   }
 }
 
@@ -180,47 +221,64 @@ function validUsername(u: string): boolean {
   return /^[a-zA-Z0-9_\-]{3,32}$/.test(u);
 }
 
-export async function registerUser(username: string, password: string): Promise<LocalUser> {
+export async function registerUser(username: string, password: string): Promise<StoredUser> {
   if (!validUsername(username)) throw new Error("用户名需为 3-32 位字母/数字/下划线/连字符");
   if (password.length < 6) throw new Error("密码至少 6 位");
-  if (users.some((u) => u.username === username)) throw new Error("用户名已存在");
+  ensureDb();
+  const exist = await query<{ id: number }>(`SELECT id FROM users WHERE username = $1`, [username]);
+  if (exist.length) throw new Error("用户名已存在");
   const hash = await hashPassword(password);
-  const user: LocalUser = { id: nextUserId++, username, password_hash: hash, created_at: new Date().toISOString() };
-  users.push(user);
-  await persist();
-  return user;
+  const rows = await query<{ id: number; username: string }>(
+    `INSERT INTO users (username, password_hash) VALUES ($1,$2) RETURNING id, username`,
+    [username, hash],
+  );
+  return { id: rows[0].id, username: rows[0].username, password_hash: hash, created_at: new Date().toISOString() };
 }
 
-export function findUserByUsername(username: string): LocalUser | null {
-  return users.find((u) => u.username === username) ?? null;
+export async function findUserByUsername(username: string): Promise<StoredUser | null> {
+  ensureDb();
+  const rows = await query<StoredUser>(
+    `SELECT id, username, password_hash, created_at FROM users WHERE username = $1`,
+    [username],
+  );
+  return rows[0] ?? null;
 }
 
 // ---------------- 会话 ----------------
 export async function createSession(userId: number): Promise<string> {
+  ensureDb();
   const token = newSessionToken();
   const expires = new Date(Date.now() + SESSION_MS);
-  sessions.push({ token, user_id: userId, expires_at: expires.toISOString() });
-  await persist();
+  await query(
+    `INSERT INTO sessions (token, user_id, expires_at) VALUES ($1,$2,$3)`,
+    [token, userId, expires.toISOString()],
+  );
   return token;
 }
-export function getUserByToken(token: string): { id: number; username: string } | null {
-  const s = sessions.find((x) => x.token === token);
-  if (!s) return null;
-  if (new Date(s.expires_at).getTime() < Date.now()) {
-    sessions = sessions.filter((x) => x.token !== token);
-    persist();
+
+export async function getUserByToken(token: string): Promise<{ id: number; username: string } | null> {
+  ensureDb();
+  const rows = await query<{ id: number; username: string; expires_at: string }>(
+    `SELECT u.id, u.username, s.expires_at FROM sessions s
+     JOIN users u ON u.id = s.user_id WHERE s.token = $1`,
+    [token],
+  );
+  const r = rows[0];
+  if (!r) return null;
+  if (new Date(r.expires_at).getTime() < Date.now()) {
+    await query(`DELETE FROM sessions WHERE token = $1`, [token]).catch(() => {});
     return null;
   }
-  const u = users.find((x) => x.id === s.user_id);
-  return u ? { id: u.id, username: u.username } : null;
+  return { id: r.id, username: r.username };
 }
+
 export async function deleteSession(token: string): Promise<void> {
-  sessions = sessions.filter((x) => x.token !== token);
-  await persist();
+  ensureDb();
+  await query(`DELETE FROM sessions WHERE token = $1`, [token]).catch(() => {});
 }
 
 // ---------------- 链接 ----------------
-function toLinkShape(l: LocalLink) {
+function toLinkShape(l: LinkRow) {
   return {
     id: l.id,
     name: l.name,
@@ -228,33 +286,37 @@ function toLinkShape(l: LocalLink) {
     category: l.category,
     emoji: l.emoji,
     color: l.color,
-    openNew: l.openNew,
-    createdAt: l.createdAt,
+    openNew: l.open_new,
+    createdAt: new Date(l.created_at).getTime(),
   };
 }
 
-export function listLinks(userId: number): unknown[] {
-  return links.filter((l) => l.user_id === userId).sort((a, b) => b.createdAt - a.createdAt).map(toLinkShape);
+export async function listLinks(userId: number): Promise<unknown[]> {
+  ensureDb();
+  const rows = await query<LinkRow>(
+    `SELECT id, user_id, title AS name, url, category, icon AS emoji, color, open_new, created_at
+     FROM links WHERE user_id = $1 ORDER BY created_at DESC`,
+    [userId],
+  );
+  return rows.map(toLinkShape);
 }
 
 export async function createLink(
   userId: number,
   data: { name: string; url: string; category: string; emoji: string; color: string; openNew: boolean },
 ): Promise<unknown> {
-  const link: LocalLink = {
-    id: nextLinkId++,
-    user_id: userId,
-    name: data.name,
-    url: data.url,
-    category: data.category || "未分类",
-    emoji: data.emoji || "",
-    color: data.color || "#4f6ef7",
-    openNew: data.openNew !== false,
-    createdAt: Date.now(),
-  };
-  links.push(link);
-  await persist();
-  return toLinkShape(link);
+  ensureDb();
+  const rows = await query<LinkRow>(
+    `INSERT INTO links (user_id, title, url, category, icon, color, open_new, sort_order)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     RETURNING id, user_id, title AS name, url, category, icon AS emoji, color, open_new, created_at`,
+    [
+      userId, data.name, data.url,
+      data.category || "未分类", data.emoji || "", data.color || "#4f6ef7",
+      data.openNew !== false, 0,
+    ],
+  );
+  return toLinkShape(rows[0]);
 }
 
 export async function updateLink(
@@ -262,22 +324,43 @@ export async function updateLink(
   id: number,
   fields: Record<string, unknown>,
 ): Promise<unknown | null> {
-  const link = links.find((l) => l.id === id && l.user_id === userId);
-  if (!link) return null;
-  if (fields.name != null) link.name = String(fields.name);
-  if (fields.url != null) link.url = String(fields.url);
-  if (fields.category != null) link.category = String(fields.category) || "未分类";
-  if (fields.emoji != null) link.emoji = String(fields.emoji);
-  if (fields.color != null) link.color = String(fields.color);
-  if (fields.openNew != null) link.openNew = Boolean(fields.openNew);
-  await persist();
-  return toLinkShape(link);
+  ensureDb();
+  // 线上 links 表列名为 title / icon（历史 schema），此处映射
+  const map: Record<string, [string, unknown]> = {
+    name: ["title", fields.name],
+    url: ["url", fields.url],
+    category: ["category", fields.category],
+    emoji: ["icon", fields.emoji],
+    color: ["color", fields.color],
+    openNew: ["open_new", fields.openNew],
+  };
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  let i = 1;
+  for (const key of Object.keys(map)) {
+    const [col, val] = map[key];
+    if (fields[key] != null) {
+      sets.push(`${col} = $${i}`);
+      params.push(val);
+      i++;
+    }
+  }
+  const SEL = `id, user_id, title AS name, url, category, icon AS emoji, color, open_new, created_at`;
+  if (!sets.length) {
+    const cur = await query<LinkRow>(`SELECT ${SEL} FROM links WHERE id = $1 AND user_id = $2`, [id, userId]);
+    return cur[0] ? toLinkShape(cur[0]) : null;
+  }
+  params.push(id, userId);
+  const sql = `UPDATE links SET ${sets.join(", ")} WHERE id = $${i} AND user_id = $${i + 1} RETURNING ${SEL}`;
+  const rows = await query<LinkRow>(sql, params);
+  return rows[0] ? toLinkShape(rows[0]) : null;
 }
 
 export async function deleteLink(userId: number, id: number): Promise<boolean> {
-  const before = links.length;
-  links = links.filter((l) => !(l.id === id && l.user_id === userId));
-  const removed = links.length < before;
-  if (removed) await persist();
-  return removed;
+  ensureDb();
+  const rows = await query<{ id: number }>(
+    `DELETE FROM links WHERE id = $1 AND user_id = $2 RETURNING id`,
+    [id, userId],
+  );
+  return rows.length > 0;
 }

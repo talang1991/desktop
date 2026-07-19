@@ -13,8 +13,8 @@ import { handleApi } from "./api.ts";
 import { initStore } from "./store.ts";
 import { attachSignaling, getWsPublicUrl } from "./signaling.ts";
 
-// 初始化本地存储：读取本地 data.json（快），并“尽力”从 PostgreSQL 导入已有数据（最多 5s）。
-// 即使 PostgreSQL 连不上，本地存储照常工作，应用 100% 可用。
+// 初始化 PostgreSQL 持久层：连接连接池并自动建表（幂等）。
+// 若数据库暂不可用，服务器仍会启动并提供静态页面与聊天；认证/链接接口会返回 503，连接恢复后自动重试。
 await initStore();
 
 const ROOT = ".";

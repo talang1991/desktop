@@ -2,6 +2,7 @@
 import {
   registerUser, findUserByUsername, verifyPassword, createSession,
   getUserByToken, deleteSession, listLinks, createLink, updateLink, deleteLink,
+  DbUnavailableError,
 } from "./store.ts";
 import { getWsPublicUrl, getIceServers } from "./signaling.ts";
 
@@ -25,9 +26,9 @@ function getBearer(req: Request): string | null {
   return null;
 }
 
-function requireUser(req: Request): User | null {
+function requireUser(req: Request): Promise<User | null> {
   const token = getBearer(req);
-  if (!token) return null;
+  if (!token) return Promise.resolve(null);
   return getUserByToken(token);
 }
 
@@ -67,7 +68,7 @@ export async function handleApi(req: Request): Promise<Response> {
     // ---- 登录 ----
     if (path === "/api/login" && method === "POST") {
       const { username, password } = await req.json();
-      const u = findUserByUsername(String(username));
+      const u = await findUserByUsername(String(username));
       if (!u) return json({ error: "用户名或密码错误" }, 401);
       const ok = await verifyPassword(String(password), u.password_hash);
       if (!ok) return json({ error: "用户名或密码错误" }, 401);
@@ -84,7 +85,7 @@ export async function handleApi(req: Request): Promise<Response> {
 
     // ---- 当前用户 ----
     if (path === "/api/me" && method === "GET") {
-      const user = requireUser(req);
+      const user = await requireUser(req);
       return json({ user: user ? { id: user.id, username: user.username } : null });
     }
 
@@ -95,14 +96,14 @@ export async function handleApi(req: Request): Promise<Response> {
 
     // ---- 链接列表 ----
     if (path === "/api/links" && method === "GET") {
-      const user = requireUser(req);
+      const user = await requireUser(req);
       if (!user) return json({ error: "未登录" }, 401);
-      return json({ links: listLinks(user.id) });
+      return json({ links: await listLinks(user.id) });
     }
 
     // ---- 新建链接 ----
     if (path === "/api/links" && method === "POST") {
-      const user = requireUser(req);
+      const user = await requireUser(req);
       if (!user) return json({ error: "未登录" }, 401);
       const b = await req.json();
       const name = String(b.name ?? "").trim();
@@ -124,7 +125,7 @@ export async function handleApi(req: Request): Promise<Response> {
     const m = path.match(/^\/api\/links\/(\d+)$/);
     if (m) {
       const id = Number(m[1]);
-      const user = requireUser(req);
+      const user = await requireUser(req);
       if (!user) return json({ error: "未登录" }, 401);
 
       if (method === "PUT") {
@@ -145,6 +146,9 @@ export async function handleApi(req: Request): Promise<Response> {
 
     return json({ error: "Not Found" }, 404);
   } catch (e) {
+    if (e instanceof DbUnavailableError) {
+      return json({ error: "数据库暂时不可用，请稍后重试" }, 503);
+    }
     console.error("API error:", (e as Error).message);
     return json({ error: "服务器错误" }, 500);
   }
