@@ -588,7 +588,7 @@ html, body {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  max-width: 100%;
+  max-width: 82%;
 }
 .chat-msg-row.me { align-self: flex-end; flex-direction: row-reverse; }
 .chat-msg-row.peer { align-self: flex-start; }
@@ -610,7 +610,8 @@ html, body {
 .chat-msg-avatar.sm { width: 30px; height: 30px; font-size: 13px; }
 .chat-msg-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .chat-msg {
-  max-width: calc(82% - 42px);
+  min-width: 0;
+  max-width: 100%;
   padding: 9px 12px;
   border-radius: 14px;
   font-size: 14px;
