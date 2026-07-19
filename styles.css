@@ -209,6 +209,7 @@ html, body {
   border-radius: 18px;
   padding: 24px;
   box-shadow: var(--shadow);
+  overflow: hidden;
 }
 .modal-card h2 { margin: 0 0 18px; font-size: 18px; }
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
@@ -226,8 +227,22 @@ html, body {
 .field input:focus { border-color: var(--primary); }
 .field-row { display: flex; gap: 12px; }
 .field-row .field { flex: 1; }
-.icon-input-row { display: flex; align-items: center; gap: 8px; }
-.icon-input-row input { flex: 1; min-width: 0; }
+.icon-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+}
+.icon-input-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.icon-input-row button { flex: 0 0 auto; }
 .icon-preview {
   width: 34px; height: 34px; flex: 0 0 34px;
   border-radius: 10px; display: grid; place-items: center;
