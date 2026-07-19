@@ -24,6 +24,30 @@ export function getWsPublicUrl(req: Request): string {
   return `${secure ? "wss" : "ws"}://${host}:${port}/ws`;
 }
 
+// ICE 服务器列表（下发给浏览器，用于 WebRTC 候选收集）。
+// 默认仅放 STUN，且换成国内相对可达的服务器（Google STUN 在多数国内网络不通，已移除）。
+// 真正的跨网 P2P 需要 TURN：部署一台 coturn 后，用环境变量注入，
+// TURN_URL / TURN_USERNAME / TURN_CREDENTIAL，即可在对称 NAT / STUN 不通时中继数据通道。
+const DEFAULT_STUN: Array<{ urls: string }> = [
+  { urls: "stun:stun.miwifi.com:3478" },
+  { urls: "stun:stun.chat.bilibili.com:3478" },
+  { urls: "stun:stun.qq.com:3478" },
+];
+
+export function getIceServers(): Array<{ urls: string; username?: string; credential?: string }> {
+  const list: Array<{ urls: string; username?: string; credential?: string }> = DEFAULT_STUN.map((s) => ({ ...s }));
+  const turnUrl = Deno.env.get("TURN_URL");
+  if (turnUrl) {
+    const entry: { urls: string; username?: string; credential?: string } = { urls: turnUrl };
+    const u = Deno.env.get("TURN_USERNAME");
+    const c = Deno.env.get("TURN_CREDENTIAL");
+    if (u) entry.username = u;
+    if (c) entry.credential = c;
+    list.push(entry);
+  }
+  return list;
+}
+
 interface Peer {
   ws: WebSocket;
   room: string;

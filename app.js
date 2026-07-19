@@ -464,12 +464,18 @@
   let relayActive = false;
   let enteringMsg = null; // 进入房间的临时系统提示，joined 后移除
 
-  const RTC_CONFIG = {
-    iceServers: [
-      { urls: "stun:stun.l.google.com:19302" },
-      { urls: "stun:stun1.l.google.com:19302" },
-    ],
-  };
+  // 默认 ICE 配置。Google STUN 在国内多数网络不通，已移除；
+  // 实际优先使用后端 /api/ws-info 下发的 iceServers（含可选 TURN）。
+  const DEFAULT_ICE = [
+    { urls: "stun:stun.miwifi.com:3478" },
+    { urls: "stun:stun.chat.bilibili.com:3478" },
+    { urls: "stun:stun.qq.com:3478" },
+  ];
+  let cachedIceServers = null;
+  function rtcConfig() {
+    const servers = (cachedIceServers && cachedIceServers.length) ? cachedIceServers : DEFAULT_ICE;
+    return { iceServers: servers };
+  }
 
   function setChatStatus(text, cls) {
     chatStatus.textContent = text;
@@ -482,15 +488,15 @@
   function closeChat() { chatPanel.hidden = true; }
 
   let cachedWsUrl = null;
-  function connectSignaling() {
-    if (sigSocket && (sigSocket.readyState === WebSocket.OPEN || sigSocket.readyState === WebSocket.CONNECTING)) return Promise.resolve();
-    // 从后端获取信令服务地址（与页面同源同端口，仅 /ws 路径）
-    if (!cachedWsUrl) {
-      try {
-        const r = fetch("/api/ws-info");
-        r.then((res) => res.json()).then((j) => { if (j && j.wsUrl) cachedWsUrl = j.wsUrl; }).catch(() => {});
-      } catch { /* 忽略 */ }
-    }
+  async function connectSignaling() {
+    if (sigSocket && (sigSocket.readyState === WebSocket.OPEN || sigSocket.readyState === WebSocket.CONNECTING)) return;
+    // 从后端获取信令地址与 ICE 配置（同源同端口，仅 /ws 路径）
+    try {
+      const res = await fetch("/api/ws-info");
+      const j = await res.json();
+      if (j && j.wsUrl) cachedWsUrl = j.wsUrl;
+      if (Array.isArray(j && j.iceServers) && j.iceServers.length) cachedIceServers = j.iceServers;
+    } catch { /* 忽略，使用兜底地址与默认 STUN */ }
     const fallback = (location.protocol === "https:" ? "wss" : "ws") + "//" + location.host + "/ws";
     const wsUrl = cachedWsUrl || fallback;
     const ws = new WebSocket(wsUrl);
@@ -524,11 +530,10 @@
         chatJoinBtn.hidden = true;
         chatLeaveBtn.hidden = false;
         if (enteringMsg && enteringMsg.parentNode) { enteringMsg.remove(); enteringMsg = null; }
-        setChatStatus(m.role === "initiator" ? `房间 ${m.room}：等待对方加入…` : `房间 ${m.room}：协商中…`);
-        // 直连较慢时的兜底：8s 内未直连则启用中继
-        setTimeout(() => {
-          if (currentRoom && !p2pReady) { setChatStatus("直连较慢，已启用中继兜底", "warn"); enableRelay(); }
-        }, 8000);
+        // 国内网络 STUN 常不通，直接进入“中继兜底”保证聊天立即可用；
+        // 同时仍在后台尝试 P2P，若直连成功，dc.onopen 会自动升级状态为“P2P 已直连”。
+        enableRelay();
+        setChatStatus(m.role === "initiator" ? `房间 ${m.room}：已连接（中继），等待对方时尝试直连…` : `房间 ${m.room}：已连接（中继），协商中…`);
         break;
       case "peer-joined":
         if (myRole === "initiator") startOffer();
@@ -587,7 +592,7 @@
 
   function startOffer() {
     try {
-      pc = new RTCPeerConnection(RTC_CONFIG);
+      pc = new RTCPeerConnection(rtcConfig());
       setupPc();
       dc = pc.createDataChannel("chat");
       setupDataChannel(dc);
@@ -610,7 +615,7 @@
     if (data.sdp) {
       const desc = new RTCSessionDescription(data.sdp);
       if (desc.type === "offer") {
-        if (!pc) { pc = new RTCPeerConnection(RTC_CONFIG); setupPc(); }
+        if (!pc) { pc = new RTCPeerConnection(rtcConfig()); setupPc(); }
         pc.setRemoteDescription(desc).then(() => pc.createAnswer())
           .then((answer) => pc.setLocalDescription(answer))
           .then(() => sendSignal({ sdp: pc.localDescription }))

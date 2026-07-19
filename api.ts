@@ -3,7 +3,7 @@ import {
   registerUser, findUserByUsername, verifyPassword, createSession,
   getUserByToken, deleteSession, listLinks, createLink, updateLink, deleteLink,
 } from "./store.ts";
-import { getWsPublicUrl } from "./signaling.ts";
+import { getWsPublicUrl, getIceServers } from "./signaling.ts";
 
 interface User { id: number; username: string; }
 
@@ -88,9 +88,9 @@ export async function handleApi(req: Request): Promise<Response> {
       return json({ user: user ? { id: user.id, username: user.username } : null });
     }
 
-    // ---- 信令服务地址（P2P 聊天用）----
+    // ---- 信令服务地址 + ICE 配置（P2P 聊天用）----
     if (path === "/api/ws-info" && method === "GET") {
-      return json({ wsUrl: getWsPublicUrl(req) });
+      return json({ wsUrl: getWsPublicUrl(req), iceServers: getIceServers() });
     }
 
     // ---- 链接列表 ----
