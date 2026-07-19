@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=11" />
+  <link rel="stylesheet" href="styles.css?v=14" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -56,7 +56,7 @@
         <button id="exportBtn" class="btn ghost" title="导出为 JSON 备份">导出</button>
         <button id="themeBtn" class="btn ghost" title="切换深色/浅色">🌓</button>
         <button id="addBtn" class="btn primary">＋ 添加应用</button>
-        <button id="chatBtn" class="btn ghost" title="P2P 聊天">💬 聊天</button>
+        <button id="chatBtn" class="btn ghost" title="P2P 聊天">💬 聊天<span id="chatUnreadBadge" class="nav-badge" hidden></span></button>
         <button id="logoutBtn" class="btn ghost">登出</button>
         <input id="importFile" type="file" accept="application/json" hidden />
       </div>
@@ -171,13 +171,13 @@
       </div>
       <div id="chatMessages" class="chat-messages"></div>
       <div class="chat-input-row">
-        <textarea id="chatInput" rows="1" placeholder="连接后输入消息…（Enter 发送，Shift+Enter 换行）"
+        <textarea id="chatInput" rows="1" placeholder="输入消息…（Enter 发送，Shift+Enter 换行）"
                   disabled></textarea>
         <button id="chatSend" class="btn primary" disabled>发送</button>
       </div>
     </section>
   </div>
 
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=21"></script>
 </body>
 </html>

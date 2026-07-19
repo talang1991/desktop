@@ -12,10 +12,13 @@ process.on("unhandledRejection", (e) => console.error("[unhandledRejection]", e)
 import { handleApi } from "./api.ts";
 import { initStore } from "./store.ts";
 import { attachSignaling, getWsPublicUrl } from "./signaling.ts";
+import { initChatStore } from "./chatstore.ts";
 
 // 初始化 PostgreSQL 持久层：连接连接池并自动建表（幂等）。
 // 若数据库暂不可用，服务器仍会启动并提供静态页面与聊天；认证/链接接口会返回 503，连接恢复后自动重试。
 await initStore();
+// 初始化聊天历史服务端存储（Deno KV，保留 3 个月）。不可用时降级，本地缓存仍工作。
+await initChatStore();
 
 const ROOT = ".";
 

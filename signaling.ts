@@ -13,6 +13,7 @@
 import type { Server } from "node:http";
 import { WebSocketServer, WebSocket } from "npm:ws@8.18.0";
 import { getUserByToken } from "./store.ts";
+import { saveMessage } from "./chatstore.ts";
 
 // 根据请求推导前端应连接的 ws URL（与页面同源同端口，仅协议换 ws/wss）。
 export function getWsPublicUrl(req: Request): string {
@@ -160,12 +161,18 @@ export function attachSignaling(server: Server): void {
         case "chat": {
           const to = Number(msg.to);
           if (!to) return;
+          const id = String(msg.id || crypto.randomUUID());
+          const ts = Number(msg.ts) || Date.now();
+          const text = String(msg.text ?? "").slice(0, 4000);
           routeTo(to, {
             type: "chat",
             from: user!.id,
-            text: String(msg.text ?? "").slice(0, 4000),
-            ts: Date.now(),
+            id,
+            ts,
+            text,
           });
+          // 服务端留存（本地优先，这里是兜底 + 换设备同步源），保留 3 个月由 KV 自动过期
+          saveMessage({ id, from: user!.id, to, text, ts });
           return;
         }
 

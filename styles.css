@@ -530,6 +530,44 @@ html, body {
 }
 .friend-row:hover .friend-remove { opacity: 1; }
 .friend-row .friend-remove:hover { background: var(--surface-2); color: var(--danger); }
+/* 未读消息红点提醒 */
+.friend-row .unread-badge {
+  flex-shrink: 0;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 4px;
+  border-radius: 9px;
+  background: var(--danger, #ff4d4f);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  box-sizing: border-box;
+  box-shadow: 0 0 0 2px var(--surface-2);
+}
+
+/* 顶栏 💬 按钮上的未读总数徽标（抽屉关闭时仍始终可见） */
+#chatBtn { position: relative; }
+.nav-badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--danger, #ff4d4f);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  box-sizing: border-box;
+  box-shadow: 0 0 0 2px var(--surface-2);
+  pointer-events: none;
+}
 
 /* 右侧会话区 */
 .chat-main {

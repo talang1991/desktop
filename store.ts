@@ -512,3 +512,17 @@ export async function removeFriend(userId: number, friendId: number): Promise<bo
   );
   return rows.length > 0;
 }
+
+// 判断两人是否已是好友（用于聊天历史的访问控制）
+export async function areFriends(a: number, b: number): Promise<boolean> {
+  ensureDb();
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) return false;
+  const rows = await query<{ id: number }>(
+    `SELECT id FROM friendships
+     WHERE status = 'accepted'
+       AND ((user_id = $1 AND friend_id = $2) OR (user_id = $2 AND friend_id = $1))
+     LIMIT 1`,
+    [a, b],
+  );
+  return rows.length > 0;
+}

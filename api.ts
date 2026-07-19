@@ -3,10 +3,11 @@ import {
   registerUser, findUserByUsername, verifyPassword, createSession,
   getUserByToken, deleteSession, listLinks, createLink, updateLink, deleteLink,
   sendFriendRequest, listFriends, listFriendRequests, acceptFriendRequest, removeFriend,
-  updateUserAvatar,
+  updateUserAvatar, areFriends,
   DbUnavailableError,
 } from "./store.ts";
 import { getWsPublicUrl, getIceServers, isOnline } from "./signaling.ts";
+import { saveMessage, getMessages, chatKvReady } from "./chatstore.ts";
 
 interface User { id: number; username: string; avatar: string; }
 
@@ -103,6 +104,42 @@ export async function handleApi(req: Request): Promise<Response> {
     // ---- 信令服务地址 + ICE 配置（P2P 聊天用）----
     if (path === "/api/ws-info" && method === "GET") {
       return json({ wsUrl: getWsPublicUrl(req), iceServers: getIceServers() });
+    }
+
+    // ---- 聊天历史：客户端补推（落服务端 Deno KV，保留 3 个月）----
+    // 每条消息本地已写 IndexedDB；此处把本地产生/收到的消息同步给服务端，
+    // 以便换设备或本地缺失时能从服务端取回。仅好友之间可存。
+    if (path === "/api/messages" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const b = await req.json().catch(() => ({}));
+      const to = Number(b.to);
+      if (!to) return json({ error: "缺少接收方" }, 400);
+      if (!(await areFriends(user.id, to))) return json({ error: "只能与好友聊天" }, 403);
+      const msgs = Array.isArray(b.messages) ? b.messages : [];
+      let count = 0;
+      for (const mm of msgs.slice(0, 200)) {
+        const text = String(mm?.text ?? "").slice(0, 4000);
+        if (!text) continue;
+        const id = String(mm?.id || crypto.randomUUID());
+        const ts = Number(mm?.ts) || Date.now();
+        await saveMessage({ id, from: user.id, to, text, ts });
+        count++;
+      }
+      return json({ ok: true, stored: chatKvReady(), count });
+    }
+
+    // ---- 聊天历史：拉取（本地缺失/换设备时从服务端同步）----
+    // since 之后的消息（不含 since），按时间升序；服务端仅保留最近 3 个月。
+    if (path === "/api/messages" && method === "GET") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const peer = Number(url.searchParams.get("peer"));
+      const since = Number(url.searchParams.get("since") || "0");
+      if (!peer) return json({ error: "缺少好友参数" }, 400);
+      if (!(await areFriends(user.id, peer))) return json({ error: "只能与好友聊天" }, 403);
+      const messages = await getMessages(user.id, peer, since);
+      return json({ messages, stored: chatKvReady() });
     }
 
     // ---- 好友：发送好友请求（按用户名）----
