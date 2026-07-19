@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=5" />
+  <link rel="stylesheet" href="styles.css?v=6" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -119,27 +119,35 @@
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <!-- P2P 聊天抽屉 -->
+  <!-- 好友聊天抽屉 -->
   <div id="chatPanel" class="chat-panel" hidden>
-    <div class="chat-header">
-      <div class="chat-title">💬 P2P 聊天</div>
-      <div class="chat-status" id="chatStatus">未连接</div>
-      <button id="chatClose" class="chat-x" title="关闭">✕</button>
-    </div>
-    <div class="chat-room" id="chatRoomBar">
-      <input id="chatRoom" type="text" placeholder="房间号（自定义，如 abc123）" maxlength="32"
-             autocomplete="off" />
-      <button id="chatJoin" class="btn primary">进入</button>
-      <button id="chatLeave" class="btn ghost" hidden>离开</button>
-    </div>
-    <div id="chatMessages" class="chat-messages"></div>
-    <div class="chat-input-row">
-      <textarea id="chatInput" rows="1" placeholder="连接后输入消息…（Enter 发送，Shift+Enter 换行）"
-                disabled></textarea>
-      <button id="chatSend" class="btn primary" disabled>发送</button>
-    </div>
+    <aside class="chat-sidebar">
+      <div class="chat-sidebar-head">
+        <div class="chat-title">💬 好友</div>
+        <button id="chatClose" class="chat-x" title="关闭">✕</button>
+      </div>
+      <div class="friend-add">
+        <input id="friendSearch" type="text" placeholder="输入用户名添加好友" maxlength="32" autocomplete="off" />
+        <button id="friendAdd" class="btn primary">添加</button>
+      </div>
+      <div id="friendRequests" class="friend-requests" hidden></div>
+      <div id="friendList" class="friend-list"></div>
+      <div id="friendEmpty" class="friend-empty">还没有好友，添加好友后即可开始聊天</div>
+    </aside>
+    <section class="chat-main">
+      <div class="chat-header">
+        <div class="chat-title" id="chatPeerName">选择一个好友开始聊天</div>
+        <div class="chat-status" id="chatStatus">未连接</div>
+      </div>
+      <div id="chatMessages" class="chat-messages"></div>
+      <div class="chat-input-row">
+        <textarea id="chatInput" rows="1" placeholder="连接后输入消息…（Enter 发送，Shift+Enter 换行）"
+                  disabled></textarea>
+        <button id="chatSend" class="btn primary" disabled>发送</button>
+      </div>
+    </section>
   </div>
 
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>

@@ -2,9 +2,10 @@
 import {
   registerUser, findUserByUsername, verifyPassword, createSession,
   getUserByToken, deleteSession, listLinks, createLink, updateLink, deleteLink,
+  sendFriendRequest, listFriends, listFriendRequests, acceptFriendRequest, removeFriend,
   DbUnavailableError,
 } from "./store.ts";
-import { getWsPublicUrl, getIceServers } from "./signaling.ts";
+import { getWsPublicUrl, getIceServers, isOnline } from "./signaling.ts";
 
 interface User { id: number; username: string; }
 
@@ -94,6 +95,38 @@ export async function handleApi(req: Request): Promise<Response> {
       return json({ wsUrl: getWsPublicUrl(req), iceServers: getIceServers() });
     }
 
+    // ---- 好友：发送好友请求（按用户名）----
+    if (path === "/api/friends" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const b = await req.json();
+      try {
+        const r = await sendFriendRequest(user.id, String(b.username ?? "").trim());
+        return json({ friend: r }, r.status === "accepted" ? 200 : 201);
+      } catch (e) {
+        return json({ error: (e as Error).message }, 400);
+      }
+    }
+
+    // ---- 好友：列表（含在线状态）+ 待通过请求 ----
+    if (path === "/api/friends" && method === "GET") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const friends = (await listFriends(user.id)).map((f) => ({ ...f, online: isOnline(f.id) }));
+      const requests = await listFriendRequests(user.id);
+      return json({ friends, requests });
+    }
+
+    // ---- 好友：通过请求 ----
+    if (path === "/api/friends/accept" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const b = await req.json();
+      const ok = await acceptFriendRequest(user.id, Number(b.requestId));
+      if (!ok) return json({ error: "请求不存在或已处理" }, 404);
+      return json({ ok: true });
+    }
+
     // ---- 链接列表 ----
     if (path === "/api/links" && method === "GET") {
       const user = await requireUser(req);
@@ -119,6 +152,19 @@ export async function handleApi(req: Request): Promise<Response> {
         openNew: b.openNew !== false,
       });
       return json({ link }, 201);
+    }
+
+    // ---- 好友：删除（移除好友关系）----
+    const fm = path.match(/^\/api\/friends\/(\d+)$/);
+    if (fm) {
+      const id = Number(fm[1]);
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      if (method === "DELETE") {
+        const ok = await removeFriend(user.id, id);
+        if (!ok) return json({ error: "好友关系不存在" }, 404);
+        return json({ ok: true });
+      }
     }
 
     // ---- 更新 / 删除单条 ----

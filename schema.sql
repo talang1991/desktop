@@ -29,3 +29,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at  TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS friendships (
+  id          SERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,  -- 请求方
+  friend_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,  -- 被请求方
+  status      TEXT NOT NULL DEFAULT 'pending',  -- pending | accepted
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, friend_id)
+);
+CREATE INDEX IF NOT EXISTS idx_friendships_user ON friendships(user_id);
+CREATE INDEX IF NOT EXISTS idx_friendships_friend ON friendships(friend_id);

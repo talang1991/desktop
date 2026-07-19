@@ -426,26 +426,31 @@
   searchInput.oninput = (e) => { searchTerm = e.target.value; renderGrid(); };
   modal.querySelectorAll("[data-close]").forEach((el) => el.onclick = closeModal);
 
-  // ---------- Chat (P2P) ----------
-  // 真正的端到端 P2P：聊天内容经 WebRTC DataChannel 在两位对端浏览器间直连收发；
-  // Deno 的 /ws 仅做信令中转（offer/answer/ICE），并在无法直连时兜底中继消息。
+  // =====================================================================
+  // 好友聊天（P2P + 中继兜底）
+  // 鉴权后的 WebSocket 按好友 userId 定向路由信令与消息；聊天内容默认走 WebRTC
+  // DataChannel 在两位好友浏览器间直连收发，无法直连时由服务器中继转发（仅转发不落盘）。
   // 注意：DOM 常量必须先于事件绑定声明，否则事件回调访问到 TDZ 中的 const 会抛 ReferenceError。
+  // =====================================================================
   const chatPanel = $("#chatPanel");
   const chatStatus = $("#chatStatus");
   const chatMessages = $("#chatMessages");
-  const chatRoomInput = $("#chatRoom");
-  const chatJoinBtn = $("#chatJoin");
-  const chatLeaveBtn = $("#chatLeave");
   const chatInput = $("#chatInput");
   const chatSendBtn = $("#chatSend");
+  const chatPeerName = $("#chatPeerName");
+  const chatClose = $("#chatClose");
+  const friendListEl = $("#friendList");
+  const friendRequestsEl = $("#friendRequests");
+  const friendEmptyEl = $("#friendEmpty");
+  const friendSearch = $("#friendSearch");
+  const friendAddBtn = $("#friendAdd");
 
-  // ---------- Chat (P2P) 事件 ----------
+  // ---------- 事件 ----------
   $("#chatBtn").onclick = openChat;
-  $("#chatClose").onclick = closeChat;
-  $("#chatJoin").onclick = joinRoom;
-  $("#chatLeave").onclick = leaveRoom;
-  $("#chatSend").onclick = sendChat;
-  chatRoomInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); joinRoom(); } });
+  chatClose.onclick = closeChat;
+  chatSendBtn.onclick = sendChat;
+  friendAddBtn.onclick = addFriend;
+  friendSearch.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addFriend(); } });
   chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
   });
@@ -454,15 +459,19 @@
     chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + "px";
   });
 
+  // ---------- 状态 ----------
   let sigSocket = null;
   let pc = null;
   let dc = null;
   let myId = null;
-  let myRole = null;
-  let currentRoom = null;
+  let currentPeer = null;        // 当前对话好友 userId（number）
+  let currentPeerName = "";
   let p2pReady = false;
   let relayActive = false;
-  let enteringMsg = null; // 进入房间的临时系统提示，joined 后移除
+  let enteringMsg = null;
+  let friends = [];              // [{id, username, online}]
+  let friendRequests = [];       // [{id, userId, username}]
+  let presenceFriends = new Set();
 
   // 默认 ICE 配置。Google STUN 在国内多数网络不通，已移除；
   // 实际优先使用后端 /api/ws-info 下发的 iceServers（含可选 TURN）。
@@ -481,34 +490,42 @@
     chatStatus.textContent = text;
     chatStatus.className = "chat-status" + (cls ? " " + cls : "");
   }
-  function resetChatMessages() {
-    chatMessages.innerHTML = '<div class="chat-empty">进入房间后即可与对方 P2P 聊天</div>';
+  function resetChatMessages(peerName) {
+    chatMessages.innerHTML =
+      `<div class="chat-empty">${peerName ? "与 " + escapeHtml(peerName) + " 聊天" : "选择一个好友开始聊天"}</div>`;
   }
-  function openChat() { chatPanel.hidden = false; }
+  function openChat() {
+    chatPanel.hidden = false;
+    connectSignaling();
+    loadFriends();
+  }
   function closeChat() { chatPanel.hidden = true; }
 
+  // ---------- 信令连接（带 token 鉴权）----------
   async function connectSignaling() {
     if (sigSocket && (sigSocket.readyState === WebSocket.OPEN || sigSocket.readyState === WebSocket.CONNECTING)) return;
-    // 从后端获取 ICE 配置（同源同端口，仅 /ws 路径）
     try {
       const res = await fetch("/api/ws-info");
       const j = await res.json();
       if (Array.isArray(j && j.iceServers) && j.iceServers.length) cachedIceServers = j.iceServers;
     } catch { /* 忽略，使用默认 STUN */ }
-    // WebSocket 地址一律以【浏览器当前页面协议】为准：HTTPS 页必须用 wss://，
-    // 否则会触发 Mixed Content 被拦截。不信任后端下发的 wsUrl（反向代理终止 TLS 后，
-    // 后端收到的请求是 http，会错生成 ws://）。
+
+    // WebSocket 地址以【浏览器当前页面协议】为准；token 通过 query 传给信令服务做鉴权。
     const scheme = location.protocol === "https:" ? "wss" : "ws";
-    const wsUrl = `${scheme}://${location.host}/ws`;
+    const token = localStorage.getItem(TOKEN_KEY) || "";
+    const wsUrl = `${scheme}://${location.host}/ws?token=${encodeURIComponent(token)}`;
     const ws = new WebSocket(wsUrl);
     sigSocket = ws;
     return new Promise((resolve) => {
-      ws.onopen = () => { setChatStatus("信令已连接", "ok"); resolve(); };
+      ws.onopen = () => { setChatStatus("信令已连接", "ok"); subscribePresence(); resolve(); };
       ws.onclose = () => {
         setChatStatus("信令断开", "warn");
-        if (currentRoom) setTimeout(() => {
-          if (currentRoom) connectSignaling().then(() => { if (sigSocket) joinWhenReady(currentRoom); });
-        }, 1500);
+        // 面板仍打开时自动重连，并重发正在进行的呼叫
+        if (!chatPanel.hidden) {
+          setTimeout(() => {
+            if (!chatPanel.hidden) connectSignaling().then(() => { if (currentPeer) reCall(); });
+          }, 1500);
+        }
       };
       ws.onerror = () => {};
       ws.onmessage = (e) => {
@@ -517,44 +534,47 @@
       };
     });
   }
-  function joinWhenReady(room) {
-    const send = () => sigSocket.send(JSON.stringify({ type: "join", room }));
-    if (sigSocket.readyState === WebSocket.OPEN) send();
-    else sigSocket.addEventListener("open", send, { once: true });
+
+  function subscribePresence() {
+    if (!sigSocket || sigSocket.readyState !== WebSocket.OPEN) return;
+    presenceFriends = new Set(friends.map((f) => f.id));
+    sigSocket.send(JSON.stringify({ type: "presence", friends: [...presenceFriends] }));
   }
 
   function onSignalMessage(m) {
     switch (m.type) {
-      case "joined":
-        myId = m.peerId; myRole = m.role; currentRoom = m.room;
-        chatRoomInput.value = m.room;
-        chatJoinBtn.hidden = true;
-        chatLeaveBtn.hidden = false;
-        if (enteringMsg && enteringMsg.parentNode) { enteringMsg.remove(); enteringMsg = null; }
-        // 国内网络 STUN 常不通，直接进入“中继兜底”保证聊天立即可用；
-        // 同时仍在后台尝试 P2P，若直连成功，dc.onopen 会自动升级状态为“P2P 已直连”。
-        enableRelay();
-        setChatStatus(m.role === "initiator" ? `房间 ${m.room}：已连接（中继），等待对方时尝试直连…` : `房间 ${m.room}：已连接（中继），协商中…`);
+      case "welcome":
+        myId = m.userId;
         break;
-      case "peer-joined":
-        if (myRole === "initiator") startOffer();
+      case "presence":
+        updateFriendOnline(m.userId, m.online);
+        break;
+      case "incoming-call":
+        handleIncomingCall(m.from);
+        break;
+      case "call-offline":
+        if (currentPeer === m.to) {
+          setChatStatus("对方不在线", "warn");
+          clearEntering();
+          disableChatInput();
+        }
         break;
       case "signal":
-        handleSignal(m.data);
-        break;
-      case "peer-left":
-        setChatStatus("对方已离开，等待重新加入…", "warn");
-        teardownP2P();
-        disableChatInput();
+        handleSignal(m.data, m.from);
         break;
       case "chat":
+        clearEntering();
         addChatMessage("peer", m.text, m.ts);
+        break;
+      case "peer-left":
+        if (currentPeer === m.from) {
+          setChatStatus("对方已结束对话", "warn");
+          teardownP2P();
+          disableChatInput();
+        }
         break;
       case "error":
         setChatStatus("错误：" + m.error, "warn");
-        if (enteringMsg && enteringMsg.parentNode) { enteringMsg.remove(); enteringMsg = null; }
-        chatJoinBtn.hidden = false;
-        chatLeaveBtn.hidden = true;
         break;
       case "ping":
         try { sigSocket.send(JSON.stringify({ type: "pong" })); } catch {}
@@ -562,29 +582,160 @@
     }
   }
 
-  async function joinRoom() {
-    const room = chatRoomInput.value.trim();
-    if (!room) { setChatStatus("请先输入房间号", "warn"); return; }
-    resetChatMessages();
+  // ---------- 好友列表 / 请求 ----------
+  async function loadFriends() {
+    try {
+      const data = await api("/api/friends");
+      friends = data.friends || [];
+      friendRequests = data.requests || [];
+      renderFriends();
+      subscribePresence();
+    } catch (e) {
+      // 鉴权失效等：忽略，面板仍可用（点击好友时会再次尝试）
+    }
+  }
+  function updateFriendOnline(userId, online) {
+    const f = friends.find((x) => x.id === userId);
+    if (f) { f.online = online; renderFriends(); }
+  }
+  function renderFriends() {
+    // 待通过请求
+    friendRequestsEl.innerHTML = "";
+    if (friendRequests.length) {
+      friendRequestsEl.hidden = false;
+      friendRequests.forEach((r) => {
+        const row = document.createElement("div");
+        row.className = "req-row";
+        const label = document.createElement("span");
+        label.className = "req-name";
+        label.textContent = `${r.username} 请求加你好友`;
+        const btn = document.createElement("button");
+        btn.className = "btn primary small";
+        btn.textContent = "接受";
+        btn.onclick = () => acceptRequest(r.id);
+        row.appendChild(label);
+        row.appendChild(btn);
+        friendRequestsEl.appendChild(row);
+      });
+    } else {
+      friendRequestsEl.hidden = true;
+    }
+
+    // 好友列表
+    friendListEl.innerHTML = "";
+    if (friends.length === 0) {
+      friendEmptyEl.hidden = false;
+    } else {
+      friendEmptyEl.hidden = true;
+      friends.forEach((f) => {
+        const row = document.createElement("div");
+        row.className = "friend-row" + (f.id === currentPeer ? " active" : "");
+        row.innerHTML =
+          `<span class="dot ${f.online ? "on" : "off"}"></span>` +
+          `<span class="fname">${escapeHtml(f.username)}</span>` +
+          `<button class="friend-remove" title="移除好友">✕</button>`;
+        const open = () => openConversation(f);
+        row.querySelector(".fname").onclick = open;
+        row.querySelector(".dot").onclick = open;
+        row.querySelector(".friend-remove").onclick = (e) => {
+          e.stopPropagation();
+          removeFriend(f);
+        };
+        friendListEl.appendChild(row);
+      });
+    }
+  }
+
+  async function addFriend() {
+    const username = friendSearch.value.trim();
+    if (!username) return;
+    try {
+      const r = await api("/api/friends", { method: "POST", body: JSON.stringify({ username }) });
+      friendSearch.value = "";
+      toast(r.friend.status === "accepted"
+        ? `已与 ${r.friend.username} 成为好友`
+        : `已向 ${r.friend.username} 发送好友请求`);
+      await loadFriends();
+    } catch (e) {
+      toast(e.message || "添加失败");
+    }
+  }
+  async function acceptRequest(id) {
+    try {
+      await api("/api/friends/accept", { method: "POST", body: JSON.stringify({ requestId: id }) });
+      toast("已添加为好友");
+      await loadFriends();
+    } catch (e) {
+      toast(e.message || "操作失败");
+    }
+  }
+  async function removeFriend(f) {
+    if (!confirm(`确定移除好友「${f.username}」？`)) return;
+    try {
+      await api("/api/friends/" + f.id, { method: "DELETE" });
+      toast("已移除好友");
+      if (currentPeer === f.id) endCurrent();
+      await loadFriends();
+    } catch (e) {
+      toast(e.message || "操作失败");
+    }
+  }
+
+  // ---------- 会话（1:1）----------
+  async function openConversation(f) {
+    if (currentPeer && currentPeer !== f.id) endCurrent();
+    currentPeer = f.id;
+    currentPeerName = f.username;
+    chatPeerName.textContent = f.username;
+    renderFriends();
+    resetChatMessages(f.username);
     await connectSignaling();
     if (!sigSocket) return;
-    currentRoom = room;
-    joinWhenReady(room);
-    enteringMsg = addChatMessage("system", "正在进入房间 " + room + " …");
+    startCall(f.id, f.username);
   }
-
-  function leaveRoom() {
-    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) sigSocket.send(JSON.stringify({ type: "bye" }));
+  function reCall() {
+    const f = friends.find((x) => x.id === currentPeer);
+    if (f) startCall(f.id, f.username);
+  }
+  function startCall(to, name) {
+    setChatStatus(`正在连接 ${name} …`, "warn");
+    enteringMsg = addChatMessage("system", `正在连接 ${name} …`);
+    // 立即启用中继兜底，后台尝试 P2P 直连
+    enableRelay();
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "call", to }));
+    }
+    startOffer();
+  }
+  function handleIncomingCall(from) {
+    const f = friends.find((x) => x.id === from) || { id: from, username: String(from), online: true };
+    if (currentPeer !== from) {
+      currentPeer = from;
+      currentPeerName = f.username;
+      chatPeerName.textContent = f.username;
+      renderFriends();
+      resetChatMessages(f.username);
+    }
+    setChatStatus(`收到 ${f.username} 的聊天请求，连接中…`, "warn");
+    clearEntering();
+    enableRelay();
+    // 接收方准备 pc（等待对方 offer）
+    if (!pc) { pc = new RTCPeerConnection(rtcConfig()); setupPc(); }
+  }
+  function endCurrent() {
+    if (sigSocket && currentPeer) {
+      try { sigSocket.send(JSON.stringify({ type: "bye", to: currentPeer })); } catch {}
+    }
     teardownP2P();
-    currentRoom = null; myRole = null; myId = null;
-    chatJoinBtn.hidden = false;
-    chatLeaveBtn.hidden = true;
-    chatRoomInput.value = "";
-    disableChatInput();
+    currentPeer = null;
+    currentPeerName = "";
+    chatPeerName.textContent = "选择一个好友开始聊天";
     setChatStatus("未连接");
-    resetChatMessages();
+    disableChatInput();
+    renderFriends();
   }
 
+  // ---------- WebRTC ----------
   function teardownP2P() {
     p2pReady = false;
     if (dc) { try { dc.close(); } catch {} dc = null; }
@@ -611,11 +762,12 @@
     pc.ondatachannel = (e) => { dc = e.channel; setupDataChannel(dc); };
   }
 
-  function handleSignal(data) {
+  function handleSignal(data, from) {
     if (!data) return;
     if (data.sdp) {
       const desc = new RTCSessionDescription(data.sdp);
       if (desc.type === "offer") {
+        if (currentPeer == null && from != null) currentPeer = from;
         if (!pc) { pc = new RTCPeerConnection(rtcConfig()); setupPc(); }
         pc.setRemoteDescription(desc).then(() => pc.createAnswer())
           .then((answer) => pc.setLocalDescription(answer))
@@ -630,14 +782,16 @@
   }
 
   function setupDataChannel(ch) {
-    ch.onopen = () => { p2pReady = true; setChatStatus("P2P 已直连 🔗", "ok"); enableChatInput(); };
+    ch.onopen = () => { p2pReady = true; clearEntering(); setChatStatus("P2P 已直连 🔗", "ok"); enableChatInput(); };
     ch.onmessage = (e) => addChatMessage("peer", String(e.data));
     ch.onclose = () => { p2pReady = false; setChatStatus("直连关闭，改用中继", "warn"); enableRelay(); };
     ch.onerror = () => {};
   }
 
   function sendSignal(data) {
-    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) sigSocket.send(JSON.stringify({ type: "signal", data }));
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN && currentPeer != null) {
+      sigSocket.send(JSON.stringify({ type: "signal", to: currentPeer, data }));
+    }
   }
 
   function enableRelay() {
@@ -657,10 +811,11 @@
   function sendChat() {
     const text = chatInput.value.trim();
     if (!text) return;
+    if (currentPeer == null) { setChatStatus("请先选择一个好友", "warn"); return; }
     if (p2pReady && dc && dc.readyState === "open") {
       dc.send(text);
-    } else if (sigSocket && sigSocket.readyState === WebSocket.OPEN && currentRoom) {
-      sigSocket.send(JSON.stringify({ type: "chat", text }));
+    } else if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "chat", to: currentPeer, text }));
     } else {
       setChatStatus("未连接，无法发送", "warn");
       return;
@@ -693,7 +848,11 @@
     }
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
-    return div;  }
+    return div;
+  }
+  function clearEntering() {
+    if (enteringMsg && enteringMsg.parentNode) { enteringMsg.remove(); enteringMsg = null; }
+  }
 
   resetChatMessages();
 

@@ -162,6 +162,16 @@ export async function initStore(): Promise<void> {
           expires_at TIMESTAMPTZ NOT NULL
         )`,
       );
+      await c.queryObject(
+        `CREATE TABLE IF NOT EXISTS friendships (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          friend_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          status TEXT NOT NULL DEFAULT 'pending',  -- pending | accepted
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          UNIQUE (user_id, friend_id)
+        )`,
+      );
     });
     console.error("[store] PostgreSQL 已连接，表结构已就绪。");
     await migrateFromJson();
@@ -361,6 +371,103 @@ export async function deleteLink(userId: number, id: number): Promise<boolean> {
   const rows = await query<{ id: number }>(
     `DELETE FROM links WHERE id = $1 AND user_id = $2 RETURNING id`,
     [id, userId],
+  );
+  return rows.length > 0;
+}
+
+// ---------------- 好友关系 ----------------
+interface FriendOut {
+  id: number;
+  username: string;
+}
+interface FriendRequestOut {
+  id: number;
+  userId: number;
+  username: string;
+}
+
+// 发送好友请求（按用户名）。若对方已向我发过请求，则直接互为好友。
+export async function sendFriendRequest(
+  userId: number,
+  friendUsername: string,
+): Promise<{ id: number; username: string; status: string }> {
+  if (!validUsername(friendUsername)) throw new Error("用户名格式不正确");
+  ensureDb();
+  const fu = await query<{ id: number }>(`SELECT id FROM users WHERE username = $1`, [friendUsername]);
+  if (!fu.length) throw new Error("用户不存在");
+  const friendId = fu[0].id;
+  if (friendId === userId) throw new Error("不能添加自己为好友");
+
+  const exist = await query<{ id: number; status: string }>(
+    `SELECT id, status FROM friendships WHERE user_id = $1 AND friend_id = $2`,
+    [userId, friendId],
+  );
+  if (exist.length) {
+    if (exist[0].status === "accepted") throw new Error("你们已经是好友了");
+    throw new Error("好友请求已发送，等待对方通过");
+  }
+
+  // 对方已向我发过请求 -> 直接通过，互为好友
+  const rev = await query<{ id: number }>(
+    `SELECT id FROM friendships WHERE user_id = $2 AND friend_id = $1 AND status = 'pending'`,
+    [userId, friendId],
+  );
+  if (rev.length) {
+    await query(`UPDATE friendships SET status = 'accepted' WHERE id = $1`, [rev[0].id]);
+    return { id: friendId, username: friendUsername, status: "accepted" };
+  }
+
+  const rows = await query<{ id: number }>(
+    `INSERT INTO friendships (user_id, friend_id, status) VALUES ($1, $2, 'pending') RETURNING id`,
+    [userId, friendId],
+  );
+  return { id: friendId, username: friendUsername, status: "pending" };
+}
+
+// 已通过的好友列表（双向）
+export async function listFriends(userId: number): Promise<FriendOut[]> {
+  ensureDb();
+  const rows = await query<FriendOut>(
+    `SELECT u.id, u.username FROM friendships f
+     JOIN users u ON u.id = CASE WHEN f.user_id = $1 THEN f.friend_id ELSE f.user_id END
+     WHERE (f.user_id = $1 OR f.friend_id = $1) AND f.status = 'accepted'
+     ORDER BY u.username`,
+    [userId],
+  );
+  return rows;
+}
+
+// 收到的待通过好友请求（我是被请求方）
+export async function listFriendRequests(userId: number): Promise<FriendRequestOut[]> {
+  ensureDb();
+  const rows = await query<FriendRequestOut>(
+    `SELECT f.id, f.user_id AS "userId", u.username FROM friendships f
+     JOIN users u ON u.id = f.user_id
+     WHERE f.friend_id = $1 AND f.status = 'pending'
+     ORDER BY f.created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+// 通过好友请求（仅被请求方可操作）
+export async function acceptFriendRequest(userId: number, requestId: number): Promise<boolean> {
+  ensureDb();
+  const rows = await query<{ id: number }>(
+    `UPDATE friendships SET status = 'accepted' WHERE id = $1 AND friend_id = $2 RETURNING id`,
+    [requestId, userId],
+  );
+  return rows.length > 0;
+}
+
+// 删除好友（双向都删）
+export async function removeFriend(userId: number, friendId: number): Promise<boolean> {
+  ensureDb();
+  const rows = await query<{ id: number }>(
+    `DELETE FROM friendships
+     WHERE (user_id = $1 AND friend_id = $2) OR (user_id = $2 AND friend_id = $1)
+     RETURNING id`,
+    [userId, friendId],
   );
   return rows.length > 0;
 }
