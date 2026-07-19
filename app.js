@@ -487,18 +487,19 @@
   function openChat() { chatPanel.hidden = false; }
   function closeChat() { chatPanel.hidden = true; }
 
-  let cachedWsUrl = null;
   async function connectSignaling() {
     if (sigSocket && (sigSocket.readyState === WebSocket.OPEN || sigSocket.readyState === WebSocket.CONNECTING)) return;
-    // 从后端获取信令地址与 ICE 配置（同源同端口，仅 /ws 路径）
+    // 从后端获取 ICE 配置（同源同端口，仅 /ws 路径）
     try {
       const res = await fetch("/api/ws-info");
       const j = await res.json();
-      if (j && j.wsUrl) cachedWsUrl = j.wsUrl;
       if (Array.isArray(j && j.iceServers) && j.iceServers.length) cachedIceServers = j.iceServers;
-    } catch { /* 忽略，使用兜底地址与默认 STUN */ }
-    const fallback = (location.protocol === "https:" ? "wss" : "ws") + "//" + location.host + "/ws";
-    const wsUrl = cachedWsUrl || fallback;
+    } catch { /* 忽略，使用默认 STUN */ }
+    // WebSocket 地址一律以【浏览器当前页面协议】为准：HTTPS 页必须用 wss://，
+    // 否则会触发 Mixed Content 被拦截。不信任后端下发的 wsUrl（反向代理终止 TLS 后，
+    // 后端收到的请求是 http，会错生成 ws://）。
+    const scheme = location.protocol === "https:" ? "wss" : "ws";
+    const wsUrl = `${scheme}://${location.host}/ws`;
     const ws = new WebSocket(wsUrl);
     sigSocket = ws;
     return new Promise((resolve) => {

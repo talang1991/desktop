@@ -15,11 +15,14 @@
 import type { Server } from "node:http";
 import { WebSocketServer, WebSocket } from "npm:ws@8.18.0";
 
-// 根据请求推导前端应连接的 ws URL（与页面同源同端口，仅协议换 ws/wss）
+// 根据请求推导前端应连接的 ws URL（与页面同源同端口，仅协议换 ws/wss）。
+// 注意：若服务部署在反向代理（Cloudflare/NGINX 等）后，代理会终止 TLS，后端收到的请求是
+// http，因此必须同时看 x-forwarded-proto 才能正确给出 wss://，否则前端会 Mixed Content 报错。
 export function getWsPublicUrl(req: Request): string {
   const u = new URL(req.url);
-  const secure = u.protocol === "https:";
-  const host = u.hostname;
+  const fwdProto = req.headers.get("x-forwarded-proto");
+  const secure = u.protocol === "https:" || fwdProto === "https" || fwdProto === "wss";
+  const host = u.hostname || req.headers.get("host")?.split(":")[0] || "localhost";
   const port = u.port || (secure ? "443" : "80");
   return `${secure ? "wss" : "ws"}://${host}:${port}/ws`;
 }
