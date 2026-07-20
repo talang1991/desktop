@@ -680,15 +680,14 @@
   let sigReconnectTimer = null;
   let sigReconnectDelay = 1000;
   let sigStopReconnect = false;
-  let pc = null;
-  let dc = null;
   let myId = null;
-  let currentPeer = null;        // 当前对话好友 userId（number）
+  let currentPeer = null;        // 当前“显示中”的对话好友 userId（number）；仅用于界面，绝不被来电改动
   let chatVisible = false;       // 聊天面板是否真正打开（关闭抽屉后仍算「未在看」）
   let currentPeerName = "";
   let currentPeerAvatar = "";
-  let p2pReady = false;
-  let relayActive = false;
+  // 每个好友一条独立连接：peers = Map<peerId, { pc, dc, p2pReady, status }>
+  const peers = new Map();
+  let relayActive = false;       // 中继兜底开关（全局：只要任一好友可走中继即为 true）
   let enteringMsg = null;
   let renderedIds = new Set();   // 当前会话已渲染的消息 id，避免同步时重复渲染
   let friends = [];              // [{id, username, online}]
@@ -750,6 +749,7 @@
     return new Promise((resolve) => {
       ws.onopen = () => {
         sigReconnectDelay = 1000; // 连接成功，重置退避
+        console.log("[SIG-CLIENT] ws 已打开，信令连接成功 (token len=" + token.length + ")");
         setChatStatus("信令已连接", "ok");
         subscribePresence();
         flushPending();            // 断网恢复后把本地未同步的消息补推到服务端
@@ -766,7 +766,8 @@
       ws.onerror = () => {};
       ws.onmessage = (e) => {
         let m; try { m = JSON.parse(e.data); } catch { return; }
-        onSignalMessage(m);
+        try { onSignalMessage(m); }
+        catch (err) { console.error("[SIG-CLIENT] onSignalMessage 异常(已捕获，不影响其他消息):", (err && err.message) || err); }
       };
     });
   }
@@ -793,6 +794,7 @@
   }
 
   function onSignalMessage(m) {
+    console.log("[SIG-CLIENT] recv:", m.type, m.fromUsername ? "from=" + m.fromUsername : "", m.from ? "fromId=" + m.from : "");
     switch (m.type) {
       case "welcome":
         myId = m.userId;
@@ -800,6 +802,16 @@
         break;
       case "presence":
         updateFriendOnline(m.userId, m.online);
+        break;
+      case "friend-request":
+        // 收到好友请求：弹提示并刷新请求列表（对方主动发来，实时提醒）
+        try { toast(`收到 ${m.fromUsername || "好友"} 的好友请求`); } catch (e) { console.error("[SIG-CLIENT] toast 失败:", e); }
+        try { loadFriends(); } catch (e) { console.error("[SIG-CLIENT] loadFriends 失败:", e); }
+        break;
+      case "friend-accepted":
+        // 对方通过了我的好友请求：弹提示并刷新好友列表
+        try { toast(`${m.fromUsername || "好友"} 已通过你的好友请求`); } catch (e) { console.error("[SIG-CLIENT] toast 失败:", e); }
+        try { loadFriends(); } catch (e) { console.error("[SIG-CLIENT] loadFriends 失败:", e); }
         break;
       case "incoming-call":
         handleIncomingCall(m.from);
@@ -827,9 +839,8 @@
       case "peer-left":
         if (currentPeer === m.from) {
           setChatStatus("对方已结束对话（仍可发送离线消息）", "warn");
-          teardownP2P();
-          // 保持输入框可用：后续走服务端 KV 离线消息
         }
+        dropPeerConn(m.from); // 关闭该好友连接，不影响其它好友
         break;
       case "error":
         setChatStatus("错误：" + m.error, "warn");
@@ -1060,7 +1071,8 @@
 
   // ---------- 会话（1:1）----------
   async function openConversation(f) {
-    if (currentPeer && currentPeer !== f.id) endCurrent();
+    // 切换好友时不再“结束”上一个好友的通话——网状连接下应保留其后台 P2P 通道，
+    // 仅切换当前显示的会话；显式“结束对话”按钮才会调用 endCurrent。
     clearUnread(f.id);
     currentPeer = f.id;
     chatVisible = true;
@@ -1088,40 +1100,86 @@
     const f = friends.find((x) => x.id === currentPeer);
     if (f) startCall(f.id, f.username);
   }
+
+  // ---------- 每好友一条独立连接（网状）：A 可与 B 直连，同时后台与 C 建连 ----------
+  // currentPeer 仅表示“当前显示的是哪个会话”，来电绝不再改动它（避免抢界面）。
+  function getPeerConn(id) { return peers.get(Number(id)); }
+  function ensurePeerConn(id) {
+    id = Number(id);
+    let p = peers.get(id);
+    if (!p) { p = { pc: null, dc: null, p2pReady: false, status: "new" }; peers.set(id, p); }
+    return p;
+  }
+  // 关闭并移除某好友的连接（不影响其它好友）
+  function dropPeerConn(id) {
+    id = Number(id);
+    const p = peers.get(id);
+    if (!p) return;
+    try { if (p.dc) p.dc.close(); } catch {}
+    try { if (p.pc) p.pc.close(); } catch {}
+    peers.delete(id);
+  }
+  // 仅清理某好友旧 pc/dc（用于重协商），保留 map 条目
+  function teardownPeer(id) {
+    id = Number(id);
+    const p = peers.get(id);
+    if (!p) return;
+    p.p2pReady = false;
+    try { if (p.dc) p.dc.close(); } catch {}
+    try { if (p.pc) p.pc.close(); } catch {}
+    p.pc = null; p.dc = null;
+  }
+  // 仅当该好友是当前显示会话时，才更新聊天状态栏（C 来电不得改动 B 的界面）
+  function setPeerStatus(id, text, cls) {
+    if (currentPeer != null && Number(currentPeer) === Number(id)) setChatStatus(text, cls);
+  }
+
   function startCall(to, name) {
-    setChatStatus(`正在连接 ${name} …`, "warn");
-    enteringMsg = addChatMessage("system", `正在连接 ${name} …`);
-    // 立即启用中继兜底，后台尝试 P2P 直连
-    enableRelay();
+    to = Number(to);
+    enableChatInput();
+    const p = ensurePeerConn(to);
+    const st = p.pc ? p.pc.connectionState : null;
+    const hasLive = p.pc && (st === "connected" || st === "connecting" || st === "new");
+    if (hasLive) return; // 已有可用连接：不重复建连、不降级状态
+    // 只有该好友是当前显示会话时，才显示“正在连接”
+    if (currentPeer != null && Number(currentPeer) === to) {
+      setChatStatus(`正在连接 ${name} …`, "warn");
+      enteringMsg = addChatMessage("system", `正在连接 ${name} …`);
+    }
+    enableRelay(to);
     if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "call", to }));
     }
-    startOffer();
+    startOffer(to, name);
   }
+
   function handleIncomingCall(from) {
+    from = Number(from);
     const f = friends.find((x) => x.id === from) || { id: from, username: String(from), online: true, avatar: "" };
-    clearUnread(from);
-    if (currentPeer !== from) {
-      currentPeer = from;
-      currentPeerName = f.username;
-      currentPeerAvatar = f.avatar || "";
-      chatPeerName.textContent = f.username;
-      renderAvatarInto($("#chatPeerAvatar"), f.avatar || "", f.username.charAt(0).toUpperCase());
-      renderFriends();
-      resetChatMessages(f.username);
+    const viewingThis = currentPeer != null && Number(currentPeer) === from && chatVisible;
+    // 仅当正在查看该好友时才清未读；否则保留红点，由后续消息 onChatReceived 累加
+    if (viewingThis) clearUnread(from);
+    const p = ensurePeerConn(from);
+    // 若本端已有 offer（我方也曾主动呼叫该好友），回退为应答方，避免双向 offer 死锁
+    if (p.pc && p.pc.signalingState === "have-local-offer") teardownPeer(from);
+    // 准备该好友的连接（应答方）；绝不改动 currentPeer，绝不抢界面
+    if (!p.pc) {
+      p.pc = new RTCPeerConnection(rtcConfig());
+      p.pc._peerId = from;
+      setupPc(p);
+      if (viewingThis) {
+        setChatStatus(`收到 ${f.username} 的聊天请求，连接中…`, "warn");
+        clearEntering();
+      }
     }
-    enableChatInput();
-    setChatStatus(`收到 ${f.username} 的聊天请求，连接中…`, "warn");
-    clearEntering();
-    enableRelay();
-    // 接收方准备 pc（等待对方 offer）
-    if (!pc) { pc = new RTCPeerConnection(rtcConfig()); setupPc(); }
+    enableRelay(from);
   }
+
   function endCurrent() {
-    if (sigSocket && currentPeer) {
+    if (sigSocket && currentPeer != null) {
       try { sigSocket.send(JSON.stringify({ type: "bye", to: currentPeer })); } catch {}
     }
-    teardownP2P();
+    dropPeerConn(currentPeer); // 仅结束当前好友的通话，其它好友连接保持
     currentPeer = null;
     currentPeerName = "";
     currentPeerAvatar = "";
@@ -1132,92 +1190,106 @@
     renderFriends();
   }
 
-  // ---------- WebRTC ----------
-  function teardownP2P() {
-    p2pReady = false;
-    if (dc) { try { dc.close(); } catch {} dc = null; }
-    if (pc) { try { pc.close(); } catch {} pc = null; }
-  }
-
-  function startOffer() {
+  // ---------- WebRTC（每好友独立 pc/dc）----------
+  function startOffer(to, name) {
+    to = Number(to);
+    const p = ensurePeerConn(to);
+    teardownPeer(to); // 清理该好友旧连接
     try {
-      pc = new RTCPeerConnection(rtcConfig());
-      setupPc();
-      dc = pc.createDataChannel("chat");
-      setupDataChannel(dc);
-      pc.createOffer().then((offer) => pc.setLocalDescription(offer))
-        .then(() => sendSignal({ sdp: pc.localDescription }))
-        .catch(() => enableRelay());
-    } catch { enableRelay(); }
+      p.pc = new RTCPeerConnection(rtcConfig());
+      p.pc._peerId = to;
+      setupPc(p);
+      p.dc = p.pc.createDataChannel("chat");
+      p.dc._peerId = to;
+      setupDataChannel(p.dc);
+      p.pc.createOffer().then((offer) => p.pc.setLocalDescription(offer))
+        .then(() => sendSignal(to, { sdp: p.pc.localDescription }))
+        .catch(() => enableRelay(to));
+    } catch { enableRelay(to); }
   }
 
-  function setupPc() {
-    pc.onicecandidate = (e) => { if (e.candidate) sendSignal({ candidate: e.candidate }); };
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed") { setChatStatus("直连失败，改用中继", "warn"); enableRelay(); }
+  function setupPc(p) {
+    const id = p.pc._peerId;
+    p.pc.onicecandidate = (e) => { if (e.candidate) sendSignal(id, { candidate: e.candidate }); };
+    p.pc.onconnectionstatechange = () => {
+      p.status = p.pc.connectionState;
+      if (p.pc.connectionState === "failed") {
+        p.p2pReady = false;
+        setPeerStatus(id, "直连失败，改用中继", "warn");
+        enableRelay(id);
+      } else if (p.pc.connectionState === "connected") {
+        setPeerStatus(id, "P2P 已直连 🔗", "ok");
+      }
     };
-    pc.ondatachannel = (e) => { dc = e.channel; setupDataChannel(dc); };
+    p.pc.ondatachannel = (e) => {
+      const ch = e.channel;
+      ch._peerId = id;
+      p.dc = ch;
+      setupDataChannel(ch);
+    };
   }
 
   function handleSignal(data, from) {
+    from = Number(from);
     if (!data) return;
+    const p = ensurePeerConn(from);
     if (data.sdp) {
       const desc = new RTCSessionDescription(data.sdp);
       if (desc.type === "offer") {
-        if (currentPeer == null && from != null) currentPeer = from;
-        if (!pc) { pc = new RTCPeerConnection(rtcConfig()); setupPc(); }
-        pc.setRemoteDescription(desc).then(() => pc.createAnswer())
-          .then((answer) => pc.setLocalDescription(answer))
-          .then(() => sendSignal({ sdp: pc.localDescription }))
-          .catch(() => enableRelay());
+        // 接收方：准备 pc 应答；绝不在此切换当前显示会话（不再抢界面）
+        if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); }
+        p.pc.setRemoteDescription(desc).then(() => p.pc.createAnswer())
+          .then((answer) => p.pc.setLocalDescription(answer))
+          .then(() => sendSignal(from, { sdp: p.pc.localDescription }))
+          .catch(() => enableRelay(from));
       } else if (desc.type === "answer") {
-        if (pc) pc.setRemoteDescription(desc).catch(() => enableRelay());
+        if (p.pc) p.pc.setRemoteDescription(desc).catch(() => enableRelay(from));
       }
     } else if (data.candidate) {
-      if (pc) pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
+      if (p.pc) p.pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
     }
   }
 
   function setupDataChannel(ch) {
-    ch.onopen = () => { p2pReady = true; clearEntering(); setChatStatus("P2P 已直连 🔗", "ok"); enableChatInput(); };
+    const id = ch._peerId;
+    const p = peers.get(Number(id));
+    ch.onopen = () => {
+      if (p) p.p2pReady = true;
+      clearEntering();
+      setPeerStatus(id, "P2P 已直连 🔗", "ok");
+      enableChatInput();
+    };
     ch.onmessage = (e) => {
       const data = e.data;
       let m = null;
-      try { const p = JSON.parse(data); if (p && p.type === "chat") m = p; } catch {}
+      try { const pp = JSON.parse(data); if (pp && pp.type === "chat") m = pp; } catch {}
+      // 该数据通道专属于 id 这个好友，from 就是它（不再用全局 currentPeer）
       if (m) {
-        onChatReceived({
-          id: m.id || crypto.randomUUID(),
-          from: currentPeer,
-          to: myId,
-          text: m.text,
-          ts: m.ts || Date.now(),
-        });
+        onChatReceived({ id: m.id || crypto.randomUUID(), from: id, to: myId, text: m.text, ts: m.ts || Date.now() });
       } else {
-        // 兼容旧版（纯文本）数据通道消息
-        onChatReceived({
-          id: crypto.randomUUID(),
-          from: currentPeer,
-          to: myId,
-          text: String(data),
-          ts: Date.now(),
-        });
+        onChatReceived({ id: crypto.randomUUID(), from: id, to: myId, text: String(data), ts: Date.now() });
       }
     };
-    ch.onclose = () => { p2pReady = false; setChatStatus("直连关闭，改用中继", "warn"); enableRelay(); };
+    ch.onclose = () => { if (p) p.p2pReady = false; setPeerStatus(id, "直连关闭，改用中继", "warn"); enableRelay(id); };
     ch.onerror = () => {};
   }
 
-  function sendSignal(data) {
-    if (sigSocket && sigSocket.readyState === WebSocket.OPEN && currentPeer != null) {
-      sigSocket.send(JSON.stringify({ type: "signal", to: currentPeer, data }));
+  function sendSignal(to, data) {
+    to = Number(to);
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "signal", to, data }));
     }
   }
 
-  function enableRelay() {
-    if (relayActive) return;
+  function enableRelay(to) {
     relayActive = true;
-    p2pReady = false;
-    setChatStatus("中继模式（服务器转发）", "warn");
+    if (to != null) {
+      const p = peers.get(Number(to));
+      if (p) p.p2pReady = false;
+      setPeerStatus(to, "中继模式（服务器转发）", "warn");
+    } else {
+      setChatStatus("中继模式（服务器转发）", "warn");
+    }
     enableChatInput();
   }
   function enableChatInput() {
@@ -1244,8 +1316,9 @@
     // 若实时通道可用，额外实时送达（对方在线时立即可见）
     const peer = friends.find((f) => f.id === currentPeer);
     let delivered = false;
-    if (p2pReady && dc && dc.readyState === "open") {
-      dc.send(JSON.stringify({ type: "chat", id, ts, text }));
+    const p = getPeerConn(currentPeer);
+    if (p && p.p2pReady && p.dc && p.dc.readyState === "open") {
+      p.dc.send(JSON.stringify({ type: "chat", id, ts, text }));
       delivered = true;
     } else if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "chat", to: currentPeer, id, ts, text }));

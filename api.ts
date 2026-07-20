@@ -3,11 +3,11 @@ import {
   registerUser, findUserByUsername, verifyPassword, createSession,
   getUserByToken, deleteSession, listLinks, createLink, updateLink, deleteLink,
   bulkImportLinks,
-  sendFriendRequest, listFriends, listFriendRequests, acceptFriendRequest, removeFriend,
+  sendFriendRequest, listFriends, listFriendRequests, acceptFriendRequest, getFriendRequestRequester, removeFriend,
   updateUserAvatar, areFriends,
   DbUnavailableError,
 } from "./store.ts";
-import { getWsPublicUrl, getIceServers, isOnline } from "./signaling.ts";
+import { getWsPublicUrl, getIceServers, isOnline, pushToUser } from "./signaling.ts";
 import { saveMessage, getMessages, chatKvReady } from "./chatstore.ts";
 
 interface User { id: number; username: string; avatar: string; }
@@ -150,6 +150,15 @@ export async function handleApi(req: Request): Promise<Response> {
       const b = await req.json();
       try {
         const r = await sendFriendRequest(user.id, String(b.username ?? "").trim());
+        // 实时提醒对方：新请求 / 互为好友（对方需保持信令在线）
+        if (r.status === "pending") {
+          // r.id = 对方 userId（推送目标）；r.requestId = 请求行 id（供前端引用）
+          const delivered = pushToUser(r.id, { type: "friend-request", from: user.id, fromUsername: user.username, requestId: r.requestId });
+          console.log(`[FRIEND-REQ-DEBUG] A=${user.id} -> B=${r.id} status=pending delivered=${delivered}`);
+        } else if (r.status === "accepted") {
+          const delivered = pushToUser(r.id, { type: "friend-accepted", from: user.id, fromUsername: user.username });
+          console.log(`[FRIEND-REQ-DEBUG] A=${user.id} -> B=${r.id} status=accepted delivered=${delivered}`);
+        }
         return json({ friend: r }, r.status === "accepted" ? 200 : 201);
       } catch (e) {
         return json({ error: (e as Error).message }, 400);
@@ -172,6 +181,14 @@ export async function handleApi(req: Request): Promise<Response> {
       const b = await req.json();
       const ok = await acceptFriendRequest(user.id, Number(b.requestId));
       if (!ok) return json({ error: "请求不存在或已处理" }, 404);
+      // 实时通知发起方：对方已通过，双方应立即刷新好友列表
+      const requesterId = await getFriendRequestRequester(Number(b.requestId), user.id);
+      if (requesterId != null) {
+        const delivered = pushToUser(requesterId, { type: "friend-accepted", from: user.id, fromUsername: user.username });
+        console.log(`[FRIEND-ACCEPT-DEBUG] B=${user.id} -> A=${requesterId} delivered=${delivered}`);
+      } else {
+        console.log(`[FRIEND-ACCEPT-DEBUG] B=${user.id} requestId=${b.requestId} 找不到发起方(requesterId=null)`);
+      }
       return json({ ok: true });
     }
 

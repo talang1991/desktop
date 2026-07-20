@@ -512,7 +512,7 @@ interface FriendRequestOut {
 export async function sendFriendRequest(
   userId: number,
   friendUsername: string,
-): Promise<{ id: number; username: string; status: string }> {
+): Promise<{ id: number; username: string; status: string; requestId?: number }> {
   if (!validUsername(friendUsername)) throw new Error("用户名格式不正确");
   ensureDb();
   const fu = await query<{ id: number }>(`SELECT id FROM users WHERE username = $1`, [friendUsername]);
@@ -525,8 +525,12 @@ export async function sendFriendRequest(
     [userId, friendId],
   );
   if (exist.length) {
-    if (exist[0].status === "accepted") throw new Error("你们已经是好友了");
-    throw new Error("好友请求已发送，等待对方通过");
+    if (exist[0].status === "accepted") {
+      // 已是好友：幂等返回，不报错（前端重复点击时友好）
+      return { id: friendId, username: friendUsername, status: "accepted" };
+    }
+    // 已有 pending 请求：幂等返回，不报错（避免重复点击报 400）
+    return { id: friendId, username: friendUsername, status: "pending", requestId: exist[0].id };
   }
 
   // 对方已向我发过请求 -> 直接通过，互为好友
@@ -543,7 +547,8 @@ export async function sendFriendRequest(
     `INSERT INTO friendships (user_id, friend_id, status) VALUES ($1, $2, 'pending') RETURNING id`,
     [userId, friendId],
   );
-  return { id: friendId, username: friendUsername, status: "pending" };
+  // id 保留为「对方 userId」（用于实时推送目标）；requestId 才是好友请求行 id（供前端引用）
+  return { id: friendId, username: friendUsername, status: "pending", requestId: rows[0].id };
 }
 
 // 已通过的好友列表（双向）
@@ -580,6 +585,17 @@ export async function acceptFriendRequest(userId: number, requestId: number): Pr
     [requestId, userId],
   );
   return rows.length > 0;
+}
+
+// 取某条好友请求的发起方 userId（用于「通过」后实时通知对方）。
+// 传 friendId 做权限校验，避免越权查询他人请求。
+export async function getFriendRequestRequester(requestId: number, friendId: number): Promise<number | null> {
+  ensureDb();
+  const rows = await query<{ user_id: number }>(
+    `SELECT user_id FROM friendships WHERE id = $1 AND friend_id = $2 AND status = 'accepted'`,
+    [requestId, friendId],
+  );
+  return rows.length ? rows[0].user_id : null;
 }
 
 // 删除好友（双向都删）

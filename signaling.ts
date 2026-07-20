@@ -103,6 +103,22 @@ function routeTo(userId: number, obj: unknown): boolean {
   return true;
 }
 
+// 向指定 userId 的全部连接实时推送一条消息（如好友请求 / 通过通知）。
+// 返回是否在线（有活跃连接）。API 层（好友请求/通过）用它做实时提醒。
+export function pushToUser(userId: number, obj: unknown): boolean {
+  if (!Number.isFinite(userId)) {
+    console.log("[PUSH-DEBUG] pushToUser 无效 userId:", userId);
+    return false;
+  }
+  const s = onlineUsers.get(userId);
+  const online = !!s && s.size > 0;
+  const type = (obj && typeof obj === "object" && (obj as Record<string, unknown>).type) || "?";
+  console.log(`[PUSH-DEBUG] pushToUser userId=${userId} type=${type} online=${online} conns=${s ? s.size : 0}`);
+  const delivered = routeTo(userId, obj);
+  console.log(`[PUSH-DEBUG] pushToUser userId=${userId} type=${type} delivered=${delivered}`);
+  return delivered;
+}
+
 // 把信令服务（ws）附着到已有的 node:http 服务器上（与 HTTP/API 同端口）
 export function attachSignaling(server: Server): void {
   const wss = new WebSocketServer({ server });
