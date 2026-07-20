@@ -55,20 +55,53 @@ function parseDatabaseUrl(raw: string) {
   };
 }
 
-// 连接池执行：成功自动释放；连接失败抛 DbUnavailableError（api 返回 503）
+// 判断是否为「连接级瞬时错误」：池化代理（如 Prisma）常会杀掉空闲连接，
+// 导致查询时出现 broken pipe / connection reset / TLS 握手超时等，重试一次通常即可恢复。
+function isTransientConnError(e: unknown): boolean {
+  const msg = (e instanceof Error ? e.message : String(e)) ?? "";
+  return /broken pipe|connection reset|ECONNRESET|terminated|closed by peer|ETIMEDOUT|timeout|TLS|handshake|ECONNREFUSED|connection closed/i
+    .test(msg);
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// 连接池执行：成功自动释放；遇到瞬时连接错误时丢弃坏连接并重试（最多 MAX 次）。
+// 这样即便池化代理杀掉空闲连接，单次请求也会在内部透明重试到拿到可用连接，对外不再随机 500。
 async function withClient<T>(fn: (c: any) => Promise<T>): Promise<T> {
   if (!pool) throw new DbUnavailableError();
-  let client: any;
-  try {
-    client = await pool.connect();
-  } catch (e) {
-    throw new DbUnavailableError("数据库连接失败：" + (e as Error).message);
+  const MAX = 6;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX; attempt++) {
+    let client: any;
+    try {
+      client = await pool.connect();
+    } catch (e) {
+      lastErr = e;
+      if (attempt < MAX) { await sleep(250 * attempt); continue; }
+      break;
+    }
+    let broken = false;
+    try {
+      return await fn(client);
+    } catch (e) {
+      lastErr = e;
+      if (isTransientConnError(e) && attempt < MAX) {
+        broken = true;
+        try { await client.end(); } catch {} // 不要放回池，直接关闭坏连接
+        await sleep(250 * attempt);
+        continue;
+      }
+      throw e;
+    } finally {
+      if (!broken) {
+        try { client.release(); } catch {}
+      }
+    }
   }
-  try {
-    return await fn(client);
-  } finally {
-    client.release();
+  if (isTransientConnError(lastErr) || lastErr instanceof DbUnavailableError) {
+    throw new DbUnavailableError("数据库连接不稳定：" + ((lastErr instanceof Error ? lastErr.message : String(lastErr)) ?? ""));
   }
+  throw lastErr as Error;
 }
 
 // 单条查询/写入助手：返回 rows（已按 T 断言）
