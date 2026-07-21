@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=15" />
+  <link rel="stylesheet" href="styles.css?v=27" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -109,9 +109,13 @@
             <div class="color-row" id="colorRow"></div>
           </label>
 
-          <label class="check">
-            <input id="fOpenNew" type="checkbox" checked />
-            <span>点击时在新标签页打开</span>
+          <label class="field">
+            <span>打开方式</span>
+            <select id="fOpenMode">
+              <option value="new">新标签页打开</option>
+              <option value="self">当前窗口打开</option>
+              <option value="iframe">内嵌窗口（iframe）打开</option>
+            </select>
           </label>
 
           <div class="modal-actions">
@@ -148,6 +152,9 @@
     </div>
   </div>
 
+  <!-- 内嵌 iframe 查看器（多页面常驻，最小化收纳到 dock）-->
+  <div id="iframeDock" class="iframe-dock" hidden></div>
+
   <!-- 好友聊天抽屉 -->
   <div id="chatPanel" class="chat-panel" hidden>
     <aside class="chat-sidebar">
@@ -178,6 +185,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=30"></script>
+  <script src="app.js?v=40"></script>
 </body>
 </html>

@@ -215,6 +215,7 @@ export async function handleApi(req: Request): Promise<Response> {
         emoji: String(b.emoji ?? "").trim(),
         color: String(b.color ?? "#4f6ef7"),
         openNew: b.openNew !== false,
+        openMode: ["new", "self", "iframe"].includes(b.openMode) ? b.openMode : "new",
       });
       return json({ link }, 201);
     }
@@ -275,6 +276,7 @@ export async function handleApi(req: Request): Promise<Response> {
         const link = await updateLink(user.id, id, {
           name: b.name, url: b.url, category: b.category,
           emoji: b.emoji, color: b.color, openNew: b.openNew,
+          openMode: ["new", "self", "iframe"].includes(b.openMode) ? b.openMode : undefined,
         });
         if (!link) return json({ error: "链接不存在" }, 404);
         return json({ link });

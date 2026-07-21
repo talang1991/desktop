@@ -34,6 +34,7 @@ interface LinkRow {
   emoji: string;
   color: string;
   open_new: boolean;
+  open_mode: string;
   created_at: string;
 }
 
@@ -210,6 +211,7 @@ export async function initStore(): Promise<void> {
               icon TEXT NOT NULL DEFAULT '',
               color TEXT NOT NULL DEFAULT '#4f6ef7',
               open_new BOOLEAN NOT NULL DEFAULT true,
+              open_mode TEXT NOT NULL DEFAULT 'new',
               sort_order INTEGER NOT NULL DEFAULT 0,
               created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )`,
@@ -230,6 +232,10 @@ export async function initStore(): Promise<void> {
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               UNIQUE (user_id, friend_id)
             )`,
+          );
+          // 兼容已存在的旧库：补充 open_mode 列（CREATE TABLE IF NOT EXISTS 不会为已有表加列）
+          await c.queryObject(
+            `ALTER TABLE links ADD COLUMN IF NOT EXISTS open_mode TEXT NOT NULL DEFAULT 'new'`,
           );
         });
         schemaOk = true;
@@ -282,13 +288,13 @@ async function migrateFromJson(): Promise<void> {
       }
       for (const l of jl) {
         await c.queryObject(
-          `INSERT INTO links (id, user_id, name, url, category, emoji, color, open_new, created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          `INSERT INTO links (id, user_id, name, url, category, emoji, color, open_new, open_mode, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
            ON CONFLICT (id) DO NOTHING`,
           [
             l.id, l.user_id, l.name, l.url,
             l.category ?? "未分类", l.emoji ?? "", l.color ?? "#4f6ef7",
-            l.openNew !== false, new Date(l.createdAt ?? Date.now()).toISOString(),
+            l.openNew !== false, l.openMode ?? "new", new Date(l.createdAt ?? Date.now()).toISOString(),
           ],
         );
       }
@@ -381,6 +387,7 @@ function toLinkShape(l: LinkRow) {
     emoji: l.emoji,
     color: l.color,
     openNew: l.open_new,
+    openMode: l.open_mode,
     createdAt: new Date(l.created_at).getTime(),
   };
 }
@@ -388,7 +395,7 @@ function toLinkShape(l: LinkRow) {
 export async function listLinks(userId: number): Promise<unknown[]> {
   ensureDb();
   const rows = await query<LinkRow>(
-    `SELECT id, user_id, title AS name, url, category, icon AS emoji, color, open_new, created_at
+    `SELECT id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, created_at
      FROM links WHERE user_id = $1 ORDER BY created_at DESC`,
     [userId],
   );
@@ -399,18 +406,18 @@ const ICON_MAX = 2048; // 图标字段可存 emoji 或 favicon 链接，限制�
 
 export async function createLink(
   userId: number,
-  data: { name: string; url: string; category: string; emoji: string; color: string; openNew: boolean },
+  data: { name: string; url: string; category: string; emoji: string; color: string; openNew: boolean; openMode?: string },
 ): Promise<unknown> {
   ensureDb();
   const icon = String(data.emoji || "").slice(0, ICON_MAX);
   const rows = await query<LinkRow>(
-    `INSERT INTO links (user_id, title, url, category, icon, color, open_new, sort_order)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-     RETURNING id, user_id, title AS name, url, category, icon AS emoji, color, open_new, created_at`,
+    `INSERT INTO links (user_id, title, url, category, icon, color, open_new, open_mode, sort_order)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     RETURNING id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, created_at`,
     [
       userId, data.name, data.url,
       data.category || "未分类", icon, data.color || "#4f6ef7",
-      data.openNew !== false, 0,
+      data.openNew !== false, data.openMode || "new", 0,
     ],
   );
   return toLinkShape(rows[0]);
@@ -430,6 +437,7 @@ export async function updateLink(
     emoji: ["icon", fields.emoji == null ? undefined : String(fields.emoji).slice(0, ICON_MAX)],
     color: ["color", fields.color],
     openNew: ["open_new", fields.openNew],
+    openMode: ["open_mode", fields.openMode],
   };
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -442,7 +450,7 @@ export async function updateLink(
       i++;
     }
   }
-  const SEL = `id, user_id, title AS name, url, category, icon AS emoji, color, open_new, created_at`;
+  const SEL = `id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, created_at`;
   if (!sets.length) {
     const cur = await query<LinkRow>(`SELECT ${SEL} FROM links WHERE id = $1 AND user_id = $2`, [id, userId]);
     return cur[0] ? toLinkShape(cur[0]) : null;
@@ -467,7 +475,7 @@ export async function deleteLink(userId: number, id: number): Promise<boolean> {
 // 按 url 去重（同用户已存在相同 url 则跳过），返回创建/跳过计数。
 export async function bulkImportLinks(
   userId: number,
-  items: Array<{ name?: string; url?: string; category?: string; emoji?: string; color?: string; openNew?: boolean }>,
+  items: Array<{ name?: string; url?: string; category?: string; emoji?: string; color?: string; openNew?: boolean; openMode?: string }>,
 ): Promise<{ created: number; skipped: number; total: number }> {
   ensureDb();
   const valid = (items || [])
@@ -479,6 +487,7 @@ export async function bulkImportLinks(
       emoji: String(a.emoji || "").slice(0, ICON_MAX),
       color: String(a.color || "#4f6ef7"),
       openNew: a.openNew !== false,
+      openMode: a.openMode || "new",
     }));
   if (valid.length === 0) return { created: 0, skipped: 0, total: 0 };
 
@@ -495,9 +504,9 @@ export async function bulkImportLinks(
       for (const it of valid) {
         if (exist.has(it.url)) { skipped++; continue; }
         await c.queryObject(
-          `INSERT INTO links (user_id, title, url, category, icon, color, open_new, sort_order)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [userId, it.name, it.url, it.category, it.emoji, it.color, it.openNew, 0],
+          `INSERT INTO links (user_id, title, url, category, icon, color, open_new, open_mode, sort_order)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [userId, it.name, it.url, it.category, it.emoji, it.color, it.openNew, it.openMode, 0],
         );
         created++;
       }

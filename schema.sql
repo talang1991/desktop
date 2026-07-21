@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS links (
   icon        TEXT NOT NULL DEFAULT '',      -- 前端展示为 emoji
   color       TEXT NOT NULL DEFAULT '#4f6ef7',
   open_new    BOOLEAN NOT NULL DEFAULT true,
+  open_mode   TEXT NOT NULL DEFAULT 'new',   -- new | self | iframe
   sort_order  INTEGER NOT NULL DEFAULT 0,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );

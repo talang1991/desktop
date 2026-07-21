@@ -215,7 +215,7 @@ html, body {
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .field > span { font-size: 13px; color: var(--text-soft); }
 .field em { color: var(--danger); font-style: normal; }
-.field input {
+.field input, .field select {
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -224,7 +224,19 @@ html, body {
   font-size: 14px;
   outline: none;
 }
-.field input:focus { border-color: var(--primary); }
+.field input:focus, .field select:focus { border-color: var(--primary); }
+.field select {
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+[data-theme="dark"] .field select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23aaa' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+}
 .field-row { display: flex; gap: 12px; }
 .field-row .field { flex: 1; }
 .icon-input-row {
@@ -709,3 +721,102 @@ html, body {
 }
 .chat-input-row textarea:focus { border-color: var(--primary); }
 .chat-input-row textarea:disabled { opacity: 0.6; }
+
+/* ---------- 内嵌 iframe 查看器（多页面常驻，最小化收纳到 dock） ---------- */
+/* dock 容器：固定底部居中，作为所有页面实例的固定父节点 */
+.iframe-dock[hidden] { display: none !important; }
+.iframe-dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 18px;
+  z-index: 1001;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 20px;
+  /* 容器本身不拦截点击，避免全宽条挡住底部内容；仅卡片自身可点 */
+  pointer-events: none;
+}
+/* 每个页面实例：默认（最小化）即 dock 小卡片；iframe 仍常驻运行，仅视觉隐藏 */
+.iframe-page {
+  width: 240px;
+  height: 52px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.28);
+  overflow: hidden;
+  cursor: pointer;
+  pointer-events: auto; /* 受 dock 的 pointer-events:none 影响，这里单独恢复可点 */
+}
+.iframe-page .iframe-frame { display: none; }
+/* 最小化态：隐藏「新标签页」与网址，仅留标题 + 最大化/关闭 */
+.iframe-page:not(.active) .iframe-newtab { display: none; }
+.iframe-page:not(.active) .iframe-url { display: none; }
+/* 网址隐藏后没有 flex:1 元素把操作按钮推到右侧，这里用 margin-left:auto 让 □/✕ 靠右 */
+.iframe-page:not(.active) .iframe-actions { margin-left: auto; }
+/* 激活态：全屏浮层（节点不移动、src 不变，故 iframe 保持常驻运行） */
+.iframe-page.active {
+  position: fixed;
+  inset: 0;
+  width: auto;
+  height: auto;
+  z-index: 1000;
+  border-radius: 0;
+  border: none;
+  cursor: default;
+  background: var(--surface);
+}
+.iframe-page.active .iframe-frame { display: block; flex: 1; }
+.iframe-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  flex-shrink: 0;
+}
+.iframe-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+.iframe-url {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-soft);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.iframe-url:hover { text-decoration: underline; }
+.iframe-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.iframe-x {
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 15px;
+  cursor: pointer;
+  line-height: 1;
+}
+.iframe-x:hover { background: var(--surface-2); }
+.iframe-frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}

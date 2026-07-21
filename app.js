@@ -9,7 +9,7 @@
     "#9b5de5", "#f15bb5", "#00bbf9", "#8ac926",
   ];
 
-  /** @type {Array<{id:number,name:string,url:string,category?:string,emoji?:string,color:string,openNew:boolean,createdAt:number}>} */
+  /** @type {Array<{id:number,name:string,url:string,category?:string,emoji?:string,color:string,openNew:boolean,openMode?:'new'|'self'|'iframe',createdAt:number}>} */
   let apps = [];
   let activeCategory = "全部";
   let searchTerm = "";
@@ -124,12 +124,12 @@
           await api("/api/links/" + l.id, { method: "DELETE" });
           await LinkDB.delete(l.id);
         } else if (String(l.id).startsWith("tmp_") || l.op === "create") {
-          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew };
+          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode };
           const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
           await LinkDB.delete(l.id);
           await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
         } else if (l.op === "update") {
-          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew };
+          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode };
           const data = await api("/api/links/" + l.id, { method: "PUT", body: JSON.stringify(obj) });
           await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
         }
@@ -151,12 +151,13 @@
       category: payload.category || "未分类",
       emoji: payload.emoji || "", color: payload.color,
       openNew: payload.openNew !== false,
+      openMode: payload.openMode || "new",
       createdAt: Date.now(),
     };
     await LinkDB.put(rec);
     await refreshApps();
     try {
-      const obj = { name: rec.name, url: rec.url, category: rec.category, emoji: rec.emoji, color: rec.color, openNew: rec.openNew };
+      const obj = { name: rec.name, url: rec.url, category: rec.category, emoji: rec.emoji, color: rec.color, openNew: rec.openNew, openMode: rec.openMode };
       const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
       await LinkDB.delete(rec.id);
       await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
@@ -175,7 +176,7 @@
     await LinkDB.put(merged);
     await refreshApps();
     try {
-      const obj = { name: merged.name, url: merged.url, category: merged.category, emoji: merged.emoji, color: merged.color, openNew: merged.openNew };
+      const obj = { name: merged.name, url: merged.url, category: merged.category, emoji: merged.emoji, color: merged.color, openNew: merged.openNew, openMode: merged.openMode };
       if (isTemp) {
         const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
         await LinkDB.delete(id);
@@ -330,7 +331,9 @@
       const card = document.createElement("a");
       card.className = "card";
       card.href = a.url;
-      card.target = a.openNew === false ? "_self" : "_blank";
+      const aMode = a.openMode || (a.openNew === false ? "self" : "new");
+      // 内嵌模式：链接仍保留 href 以便中键/组合键在新标签打开，普通左键交给 openApp 处理
+      card.target = aMode === "iframe" ? "_self" : (a.openNew === false ? "_self" : "_blank");
       card.rel = "noopener noreferrer";
       card.title = a.url;
 
@@ -360,7 +363,12 @@
       `;
 
       card.addEventListener("click", (e) => {
-        if (e.target.closest(".card-menu")) e.preventDefault();
+        if (e.target.closest(".card-menu")) { e.preventDefault(); return; }
+        // 普通左键（非组合键）走 openApp，支持「内嵌窗口」等打开方式
+        if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+          e.preventDefault();
+          openApp(a);
+        }
       });
       card.querySelector(".card-menu").addEventListener("click", (e) => {
         e.preventDefault();
@@ -377,6 +385,98 @@
     renderGrid();
   }
 
+  // ---------- 打开方式（新标签 / 本窗口 / 内嵌 iframe）----------
+  function openApp(a) {
+    const mode = a.openMode || (a.openNew === false ? "self" : "new");
+    if (mode === "iframe") openIframe(a.url, a.name);
+    else if (mode === "self") window.open(a.url, "_self");
+    else window.open(a.url, "_blank");
+  }
+  // ---------- 内嵌 iframe 查看器（多页面常驻，最小化收纳到 dock）----------
+  function updateDockVisibility() {
+    const dock = $("#iframeDock");
+    if (!dock) return;
+    // 只要存在任意页面（含激活中的全屏页）就保持 dock 容器可见，
+    // 否则 dock 的 display:none 会连带隐藏作为子节点的激活页，导致内嵌窗口“打不开”。
+    dock.hidden = dock.querySelectorAll(".iframe-page").length === 0;
+  }
+  function closeIframePage(page) {
+    if (!page) return;
+    page.remove(); // iframe 随节点移除而卸载
+    updateDockVisibility();
+  }
+  function syncIframePageButtons(page) {
+    if (!page) return;
+    const minBtn = page.querySelector(".iframe-min");
+    const isActive = page.classList.contains("active");
+    if (minBtn) {
+      // 激活态显示「最小化（—）」；最小化态显示「最大化（□）」
+      minBtn.textContent = isActive ? "—" : "□";
+      minBtn.title = isActive ? "最小化" : "最大化";
+    }
+  }
+  function minimizeIframePage(page) {
+    if (!page) return;
+    page.classList.remove("active"); // 收进 dock，iframe 仍常驻运行
+    syncIframePageButtons(page);
+    updateDockVisibility();
+  }
+  function activateIframePage(page) {
+    const dock = $("#iframeDock");
+    if (!dock || !page) return;
+    const cur = dock.querySelector(".iframe-page.active");
+    if (cur && cur !== page) {
+      cur.classList.remove("active");
+      syncIframePageButtons(cur);
+    }
+    page.classList.add("active");
+    syncIframePageButtons(page);
+    updateDockVisibility();
+  }
+  function openIframe(url, title) {
+    const safeUrl = String(url || "").trim();
+    if (!safeUrl) { toast("链接地址为空，无法打开"); return; }
+    const safeTitle = title || hostnameOf(safeUrl) || "未命名链接";
+    const dock = $("#iframeDock");
+    if (!dock) { window.open(safeUrl, "_blank"); return; }
+    // 若该 url 已有激活页，直接复用，不重复创建
+    const existing = [...dock.querySelectorAll(".iframe-page")].find(
+      (p) => p.dataset.url === safeUrl && p.classList.contains("active"),
+    );
+    if (existing) return;
+    const page = document.createElement("div");
+    page.className = "iframe-page";
+    page.dataset.url = safeUrl;
+    page.innerHTML =
+      `<div class="iframe-bar">` +
+        `<span class="iframe-title">${escapeHtml(safeTitle)}</span>` +
+        `<a class="iframe-url" target="_blank" rel="noopener noreferrer" href="${escapeHtml(safeUrl)}">${escapeHtml(safeUrl)}</a>` +
+        `<div class="iframe-actions">` +
+          `<button class="iframe-newtab btn ghost small" title="在新标签页打开">↗ 新标签</button>` +
+          `<button class="iframe-min iframe-x" title="最小化">—</button>` +
+          `<button class="iframe-close iframe-x" title="关闭">✕</button>` +
+        `</div>` +
+      `</div>` +
+      `<iframe class="iframe-frame" referrerpolicy="no-referrer" ` +
+      `sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation allow-modals"></iframe>`;
+    page.querySelector(".iframe-close").addEventListener("click", (e) => { e.stopPropagation(); closeIframePage(page); });
+    page.querySelector(".iframe-min").addEventListener("click", (e) => {
+      e.stopPropagation();
+      // 激活态→最小化；最小化态（□）→最大化还原
+      if (page.classList.contains("active")) minimizeIframePage(page);
+      else activateIframePage(page);
+    });
+    page.querySelector(".iframe-newtab").addEventListener("click", (e) => { e.stopPropagation(); window.open(safeUrl, "_blank"); });
+    // 点击 dock 卡片（非按钮区域）还原为全屏
+    page.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      if (!page.classList.contains("active")) activateIframePage(page);
+    });
+    dock.appendChild(page);
+    activateIframePage(page);
+    page.querySelector(".iframe-frame").src = safeUrl; // 节点一次性插入并设置 src，保持常驻运行
+  }
+
   // ---------- Context menu ----------
   let ctxEl = null;
   function openContextMenu(id, x, y) {
@@ -387,6 +487,7 @@
     ctxEl.className = "ctx-menu";
     ctxEl.innerHTML = `
       <button data-act="open">🔗 打开</button>
+      <button data-act="embed">🖥️ 内嵌打开</button>
       <button data-act="edit">✏️ 编辑</button>
       <button data-act="copy">📋 复制网址</button>
       <button data-act="delete" class="danger">🗑️ 删除</button>
@@ -397,7 +498,8 @@
 
     ctxEl.addEventListener("click", (e) => {
       const act = e.target.getAttribute("data-act");
-      if (act === "open") window.open(app.url, app.openNew === false ? "_self" : "_blank");
+      if (act === "open") openApp(app);
+      else if (act === "embed") openIframe(app.url, app.name);
       else if (act === "edit") openModal(app);
       else if (act === "copy") { navigator.clipboard.writeText(app.url); toast("已复制网址"); }
       else if (act === "delete") deleteApp(id);
@@ -410,7 +512,13 @@
   document.addEventListener("click", (e) => {
     if (ctxEl && !ctxEl.contains(e.target)) closeContextMenu();
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeContextMenu(); closeModal(); closeProfileModal(); } });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeContextMenu(); closeModal(); closeProfileModal();
+      const act = $("#iframeDock") && $("#iframeDock").querySelector(".iframe-page.active");
+      if (act) closeIframePage(act);
+    }
+  });
 
   // ---------- Modal ----------
   function renderColorRow() {
@@ -430,7 +538,7 @@
     $("#fUrl").value = app ? app.url : "";
     $("#fCategory").value = app && app.category ? app.category : "";
     $("#fEmoji").value = app && app.emoji ? app.emoji : "";
-    $("#fOpenNew").checked = app ? app.openNew !== false : true;
+    $("#fOpenMode").value = app ? (app.openMode || (app.openNew === false ? "self" : "new")) : "new";
     selectedColor = app && app.color ? app.color : COLORS[0];
     renderColorRow();
     updateIconPreview();
@@ -502,7 +610,8 @@
       category: $("#fCategory").value.trim() || "未分类",
       emoji: $("#fEmoji").value.trim(),
       color: selectedColor,
-      openNew: $("#fOpenNew").checked,
+      openNew: $("#fOpenMode").value !== "iframe",
+      openMode: $("#fOpenMode").value,
     };
 
     const wasEditing = editingId;
