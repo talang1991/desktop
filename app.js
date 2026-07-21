@@ -1093,6 +1093,7 @@
   }
   function openChat() {
     chatPanel.hidden = false;
+    document.body.classList.add("chat-open");
     chatVisible = true;
     // 注意：打开整个聊天面板不应自动清除未读——只有点开“具体某个好友”会话（openConversation）才视为已读。
     // 之前这里会在打开面板时 clearUnread(currentPeer)，而 currentPeer 关抽屉后并不会清空，
@@ -1101,7 +1102,7 @@
     connectSignaling();
     loadFriends();
   }
-  function closeChat() { chatPanel.hidden = true; chatVisible = false; }
+  function closeChat() { chatPanel.hidden = true; document.body.classList.remove("chat-open"); chatVisible = false; }
 
   // ---------- 信令连接（带 token 鉴权，全程持久 + 自动重连）----------
   async function connectSignaling() {
@@ -1450,6 +1451,7 @@
     currentPeer = f.id;
     chatVisible = true;
     chatPanel.hidden = false;
+    document.body.classList.add("chat-open");
     currentPeerName = f.username;
     currentPeerAvatar = f.avatar || "";
     chatPeerName.textContent = f.username;

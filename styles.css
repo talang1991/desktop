@@ -772,6 +772,8 @@ html, body {
   cursor: default;
   background: var(--surface);
 }
+/* 聊天窗口打开时，放大的内嵌页右侧留出聊天面板的宽度，不被其覆盖 */
+body.chat-open .iframe-page.active { right: min(560px, 100vw); }
 .iframe-page.active .iframe-frame { display: block; flex: 1; }
 .iframe-bar {
   display: flex;
