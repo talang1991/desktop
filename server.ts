@@ -16,9 +16,11 @@ import { initChatStore } from "./chatstore.ts";
 
 // 初始化 PostgreSQL 持久层：连接连接池并自动建表（幂等）。
 // 若数据库暂不可用，服务器仍会启动并提供静态页面与聊天；认证/链接接口会返回 503，连接恢复后自动重试。
-await initStore();
+// 注意：初始化「非阻塞」——即使数据库此刻连不上（池化代理抖动/超时），服务器也照常启动并提供静态资源，
+// 数据库恢复后 withClient 会在请求时自动重试重连。避免在 initStore 的长重试里卡住整个启动。
+initStore().catch((e) => console.error("[store] 初始化失败（后台会随请求自动重试）：", (e as Error).message));
 // 初始化聊天历史服务端存储（Deno KV，保留 3 个月）。不可用时降级，本地缓存仍工作。
-await initChatStore();
+initChatStore().catch((e) => console.error("[chatstore] 初始化失败：", (e as Error).message));
 
 const ROOT = ".";
 

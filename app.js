@@ -55,10 +55,154 @@
     return data;
   }
 
-  async function loadLinks() {
-    const { links } = await api("/api/links");
-    apps = links;
+  // ---------- 链接：本地缓存优先 + 服务端同步 ----------
+  function genTempId() {
+    const u = (crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + "_" + Math.random().toString(16).slice(2));
+    return "tmp_" + u;
+  }
+
+  // 从本地 IndexedDB 重新载入当前用户的链接并刷新界面（同步内存 apps）
+  async function refreshApps() {
+    if (currentUserId == null) return;
+    apps = await LinkDB.allByUser(currentUserId);
     renderAll();
+  }
+
+  // 进入应用 / 需要展示链接时调用：先秒开本地缓存，再后台与服务器对齐
+  async function loadLinks() {
+    if (currentUserId == null) { apps = []; renderAll(); return; }
+    const local = await LinkDB.allByUser(currentUserId);
+    apps = local;
+    renderAll();
+    await syncLinks();
+  }
+
+  // 与服务器对齐：以服务端为准重写缓存，并保留本地离线产生的待同步记录，
+  // 最后把离线操作补推到服务端（断网恢复时也走这里）。
+  async function syncLinks() {
+    if (currentUserId == null) return;
+    let serverLinks = [];
+    try {
+      const data = await api("/api/links");
+      serverLinks = data.links || [];
+    } catch (e) {
+      // 离线：保留本地缓存即可（apps 已是本地数据），稍后 online 事件会重试
+      return;
+    }
+    const serverIds = new Set(serverLinks.map((l) => Number(l.id)));
+    const local = await LinkDB.allByUser(currentUserId);
+    const pending = local.filter((l) => l.synced === false); // 离线新建 / 待更新 / 待删除
+    // 整库重写：先清当前用户缓存，再写入服务端权威数据
+    await LinkDB.clearByUser(currentUserId);
+    const serverRecs = serverLinks.map((l) => ({ ...l, userId: currentUserId, synced: true }));
+    await LinkDB.putMany(serverRecs);
+    // 把离线产生的待同步记录重新并入（不会被服务端数据覆盖）
+    for (const p of pending) {
+      if (p._tombstone) {
+        await LinkDB.put(p);                       // 待删除：保留墓碑，flush 时重试 DELETE
+      } else if (String(p.id).startsWith("tmp_")) {
+        await LinkDB.put(p);                       // 离线新建：尚未拿到服务端 id，保留
+      } else if (p.op === "update" && serverIds.has(Number(p.id))) {
+        await LinkDB.put(p);                       // 待更新且服务端仍在：保留本地编辑
+      }
+      // 其余（服务端已不存在的待更新）直接丢弃，避免脏数据
+    }
+    apps = await LinkDB.allByUser(currentUserId);
+    renderAll();
+    // 联网了：把离线操作补推到服务端
+    await flushPendingLinks();
+  }
+
+  // 把本地未同步（synced=false）的记录补推到服务端
+  async function flushPendingLinks() {
+    if (currentUserId == null) return;
+    const local = await LinkDB.allByUser(currentUserId);
+    const pending = local.filter((l) => l.synced === false);
+    for (const l of pending) {
+      try {
+        if (l._tombstone || l.op === "delete") {
+          await api("/api/links/" + l.id, { method: "DELETE" });
+          await LinkDB.delete(l.id);
+        } else if (String(l.id).startsWith("tmp_") || l.op === "create") {
+          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew };
+          const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
+          await LinkDB.delete(l.id);
+          await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+        } else if (l.op === "update") {
+          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew };
+          const data = await api("/api/links/" + l.id, { method: "PUT", body: JSON.stringify(obj) });
+          await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+        }
+      } catch (e) {
+        // 仍未成功（如再次断网）：保留 synced=false，下次 syncLinks 重试
+        continue;
+      }
+    }
+    // flush 后可能有数据变化（临时 id 转正 / 墓碑清除），刷新内存与界面
+    apps = await LinkDB.allByUser(currentUserId);
+    renderAll();
+  }
+
+  // 新建（离线友好）：先落本地，再尝试推服务端；失败则作为离线待同步保留
+  async function createLinkLocal(payload) {
+    const rec = {
+      id: genTempId(), userId: currentUserId, synced: false, op: "create",
+      name: payload.name, url: payload.url,
+      category: payload.category || "未分类",
+      emoji: payload.emoji || "", color: payload.color,
+      openNew: payload.openNew !== false,
+      createdAt: Date.now(),
+    };
+    await LinkDB.put(rec);
+    await refreshApps();
+    try {
+      const obj = { name: rec.name, url: rec.url, category: rec.category, emoji: rec.emoji, color: rec.color, openNew: rec.openNew };
+      const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
+      await LinkDB.delete(rec.id);
+      await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+      await refreshApps();
+    } catch (e) {
+      toast("已离线保存，联网后自动同步");
+    }
+  }
+
+  // 更新（离线友好）：本地立即更新，再推服务端；离线新建项仍按 create 处理
+  async function updateLinkLocal(id, payload) {
+    const existing = await LinkDB.get(id);
+    if (!existing) return;
+    const isTemp = String(id).startsWith("tmp_");
+    const merged = { ...existing, ...payload, synced: false, op: isTemp ? "create" : "update" };
+    await LinkDB.put(merged);
+    await refreshApps();
+    try {
+      const obj = { name: merged.name, url: merged.url, category: merged.category, emoji: merged.emoji, color: merged.color, openNew: merged.openNew };
+      if (isTemp) {
+        const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
+        await LinkDB.delete(id);
+        await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+      } else {
+        const data = await api("/api/links/" + id, { method: "PUT", body: JSON.stringify(obj) });
+        await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+      }
+      await refreshApps();
+    } catch (e) {
+      toast("已离线保存，联网后自动同步");
+    }
+  }
+
+  // 删除（离线友好）：本地立即移除；服务端删除失败则保留墓碑，联网后重试
+  async function deleteLinkLocal(id) {
+    const existing = await LinkDB.get(id);
+    const isTemp = String(id).startsWith("tmp_");
+    await LinkDB.delete(id);
+    await refreshApps();
+    if (isTemp || !existing) return; // 从未同步到服务端，无需 DELETE
+    try {
+      await api("/api/links/" + id, { method: "DELETE" });
+    } catch (e) {
+      await LinkDB.put({ id, userId: currentUserId, synced: false, op: "delete", _tombstone: true });
+      toast("已离线删除，联网后同步");
+    }
   }
 
   // ---------- 登录态 ----------
@@ -361,16 +505,17 @@
       openNew: $("#fOpenNew").checked,
     };
 
+    const wasEditing = editingId;
+    editingId = null;
+    closeModal();
     try {
-      if (editingId) {
-        await api("/api/links/" + editingId, { method: "PUT", body: JSON.stringify(payload) });
+      if (wasEditing) {
+        await updateLinkLocal(wasEditing, payload);
         toast("已更新");
       } else {
-        await api("/api/links", { method: "POST", body: JSON.stringify(payload) });
+        await createLinkLocal(payload);
         toast("已添加");
       }
-      closeModal();
-      await loadLinks();
     } catch (err) {
       toast(err.message || "保存失败");
     }
@@ -380,13 +525,8 @@
     const app = apps.find((a) => a.id === id);
     if (!app) return;
     if (!confirm(`确定删除「${app.name}」？`)) return;
-    try {
-      await api("/api/links/" + id, { method: "DELETE" });
-      toast("已删除");
-      await loadLinks();
-    } catch (err) {
-      toast(err.message || "删除失败");
-    }
+    await deleteLinkLocal(id);
+    toast("已删除");
   }
 
   // ---------- Import / Export（走服务端 PostgreSQL）----------
@@ -418,7 +558,7 @@
           method: "POST",
           body: JSON.stringify({ links }),
         });
-        await loadLinks();
+        await syncLinks();
         toast(`已导入 ${data.created} 条，跳过重复 ${data.skipped} 条`);
       } catch (e) {
         toast("导入失败：" + (e.message || "文件格式不正确"));
@@ -640,6 +780,102 @@
         });
       },
       // ---- 元信息（key-value），用于持久化未读消息数等 ----
+      async getMeta(k, def) {
+        const os = await store("readonly", META);
+        const row = await done(os.get(k));
+        return row ? row.v : def;
+      },
+      async setMeta(k, v) {
+        const os = await store("readwrite", META);
+        return done(os.put({ k, v }));
+      },
+    };
+  })();
+
+  // ---------- 链接本地缓存（IndexedDB）----------
+  // 每个用户的链接缓存在本地，UI 优先读本地（秒开），后台与 PostgreSQL 同步。
+  // 记录结构：{ id, userId, name, url, category, emoji, color, openNew, createdAt, synced, op?, _tombstone? }
+  //   id: 服务端数字 id；离线新建时为字符串 "tmp_<uuid>"
+  //   synced: 是否已与服务端一致；op: 待同步操作 create/update/delete；_tombstone: 待删除
+  const LinkDB = (function () {
+    const DB_NAME = "web-app-links-cache";
+    const DB_VERSION = 1;
+    const STORE = "links";
+    const META = "meta";
+    let dbp = null;
+    function open() {
+      if (dbp) return dbp;
+      dbp = new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(STORE)) {
+            const os = db.createObjectStore(STORE, { keyPath: "id" });
+            os.createIndex("byUser", "userId", { unique: false });
+          }
+          if (!db.objectStoreNames.contains(META)) {
+            db.createObjectStore(META, { keyPath: "k" });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      return dbp;
+    }
+    function store(mode, name) {
+      const s = name || STORE;
+      return open().then((db) => db.transaction(s, mode).objectStore(s));
+    }
+    function done(r) {
+      return new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    }
+    return {
+      async put(link) {
+        const os = await store("readwrite");
+        return done(os.put(link));
+      },
+      async putMany(links) {
+        const os = await store("readwrite");
+        return Promise.all(links.map((l) => done(os.put(l))));
+      },
+      async all() {
+        const os = await store("readonly");
+        return new Promise((res, rej) => {
+          const out = [];
+          const cur = os.openCursor();
+          cur.onsuccess = () => {
+            const c = cur.result;
+            if (c) { out.push(c.value); c.continue(); } else res(out);
+          };
+          cur.onerror = () => rej(cur.error);
+        });
+      },
+      async allByUser(userId) {
+        const os = await store("readonly");
+        const idx = os.index("byUser");
+        return new Promise((res, rej) => {
+          const out = [];
+          const cur = idx.openCursor(IDBKeyRange.only(Number(userId)));
+          cur.onsuccess = () => {
+            const c = cur.result;
+            if (c) { out.push(c.value); c.continue(); } else res(out);
+          };
+          cur.onerror = () => rej(cur.error);
+        });
+      },
+      async get(id) {
+        const os = await store("readonly");
+        return await done(os.get(id));
+      },
+      async delete(id) {
+        const os = await store("readwrite");
+        return done(os.delete(id));
+      },
+      // 清空某用户全部缓存（用于整库与服务端对齐前）
+      async clearByUser(userId) {
+        const all = await this.allByUser(userId);
+        await Promise.all(all.map((l) => this.delete(l.id)));
+      },
       async getMeta(k, def) {
         const os = await store("readonly", META);
         const row = await done(os.get(k));
@@ -1463,7 +1699,7 @@
   resetChatMessages();
 
   // 网络恢复时：把本地未同步的消息补推到服务端，并补算离线期间漏掉的未读红点
-  window.addEventListener("online", () => { flushPending(); trySyncAll(); });
+  window.addEventListener("online", () => { flushPending(); trySyncAll(); syncLinks(); });
 
   // ---------- Init ----------
   function init() {

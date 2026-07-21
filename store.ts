@@ -65,6 +65,17 @@ function isTransientConnError(e: unknown): boolean {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// 单条查询的执行超时（毫秒）：池化代理偶发把查询挂死（无连接错误、只是不返回），
+// 若不加超时，整个请求会一直挂到外层超时。这里用 Promise.race 让查询在 STMT_TIMEOUT
+// 内未完成即被视为「瞬时错误」进入重试，从而快速失败 / 尽快恢复，而不是卡住整个请求。
+const STMT_TIMEOUT = 8000;
+function withStmtTimeout<T>(p: Promise<T>): Promise<T> {
+  return Promise.race<T>([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error("timed out")), STMT_TIMEOUT)),
+  ]);
+}
+
 // 连接池执行：成功自动释放；遇到瞬时连接错误时丢弃坏连接并重试（最多 MAX 次）。
 // 这样即便池化代理杀掉空闲连接，单次请求也会在内部透明重试到拿到可用连接，对外不再随机 500。
 async function withClient<T>(fn: (c: any) => Promise<T>): Promise<T> {
@@ -74,7 +85,9 @@ async function withClient<T>(fn: (c: any) => Promise<T>): Promise<T> {
   for (let attempt = 1; attempt <= MAX; attempt++) {
     let client: any;
     try {
-      client = await pool.connect();
+      // 连接阶段也加超时：池化代理偶发「TCP 已连但协议层挂死」，
+      // 若不限制，pool.connect() 会一直阻塞，导致整个请求（甚至服务启动）卡死。
+      client = await withStmtTimeout(pool.connect());
     } catch (e) {
       lastErr = e;
       if (attempt < MAX) { await sleep(250 * attempt); continue; }
@@ -82,7 +95,7 @@ async function withClient<T>(fn: (c: any) => Promise<T>): Promise<T> {
     }
     let broken = false;
     try {
-      return await fn(client);
+      return await withStmtTimeout(fn(client));
     } catch (e) {
       lastErr = e;
       if (isTransientConnError(e) && attempt < MAX) {
@@ -169,7 +182,9 @@ export async function initStore(): Promise<void> {
     // 反向代理（Prisma 池化）偶发连接抖动：启动建表重试几次，提高一次启动即连上的概率
     let schemaOk = false;
     let lastErr = "";
-    for (let attempt = 1; attempt <= 6 && !schemaOk; attempt++) {
+    // 外层只做「快速探活」：连接/查询不稳时让 withClient 的语句超时（8s）快速失败，
+    // 不在此长等；失败则降级运行，后续请求由 withClient 自动重试重连。
+    for (let attempt = 1; attempt <= 2 && !schemaOk; attempt++) {
       try {
         await withClient(async (c) => {
           await c.queryObject(
