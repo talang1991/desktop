@@ -950,9 +950,37 @@
     chatStatus.textContent = text;
     chatStatus.className = "chat-status" + (cls ? " " + cls : "");
   }
+  // 跨天日期分割：记录最近一条已渲染消息的“本地日期”，日期变化时插入分割条
+  let lastRenderedDate = null;
+  // 根据时间戳生成日期分割文字（今天 / 昨天 / M月D日 / Y年M月D日）
+  function formatDateLabel(ts) {
+    const d = new Date(ts);
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const startOfMsg = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const diffDays = Math.round((startOfToday - startOfMsg) / 86400000);
+    if (diffDays <= 0) return "今天";
+    if (diffDays === 1) return "昨天";
+    if (d.getFullYear() === now.getFullYear()) return (d.getMonth() + 1) + "月" + d.getDate() + "日";
+    return d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() + "日";
+  }
+  // 若与上次渲染的消息不在同一天，则在消息前插入一条日期分割
+  function maybeDateSeparator(ts) {
+    if (!ts) return;
+    const d = new Date(ts);
+    const key = d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate();
+    if (key !== lastRenderedDate) {
+      lastRenderedDate = key;
+      const sep = document.createElement("div");
+      sep.className = "chat-date-sep";
+      sep.textContent = formatDateLabel(ts);
+      chatMessages.appendChild(sep);
+    }
+  }
   function resetChatMessages(peerName) {
     chatMessages.innerHTML =
       `<div class="chat-empty">${peerName ? "与 " + escapeHtml(peerName) + " 聊天" : "选择一个好友开始聊天"}</div>`;
+    lastRenderedDate = null;
   }
   function openChat() {
     chatPanel.hidden = false;
@@ -1591,6 +1619,8 @@
   function renderMessageRow(role, text, ts) {
     const empty = chatMessages.querySelector(".chat-empty");
     if (empty) empty.remove();
+    // 跨天插入日期分割
+    maybeDateSeparator(ts);
     const isMe = role === "me";
     const row = document.createElement("div");
     row.className = "chat-msg-row " + (isMe ? "me" : "peer");
