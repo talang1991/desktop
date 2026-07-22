@@ -52,6 +52,14 @@ export interface StoredMsg {
   ts: number;
 }
 
+export interface StoredGroupMsg {
+  id: string;
+  groupId: number;
+  from: number;
+  text: string;
+  ts: number;
+}
+
 // 存一条消息（按 id 幂等；保留 3 个月）
 export async function saveMessage(m: StoredMsg): Promise<void> {
   if (!kv) return;
@@ -79,6 +87,36 @@ export async function getMessages(
     return out;
   } catch (e) {
     console.error("[chatstore] get failed:", (e as Error).message);
+    return [];
+  }
+}
+
+// ---------------- 群聊消息 ----------------
+// 存一条群消息（按 id 幂等；保留 3 个月）。键含 groupId，使同一群的消息落在同一前缀下。
+export async function saveGroupMessage(m: StoredGroupMsg): Promise<void> {
+  if (!kv) return;
+  try {
+    const key = ["gmsg", m.groupId, m.ts, m.id];
+    await kv.set(key, m, { expireIn: RETAIN_MS });
+  } catch (e) {
+    console.error("[chatstore] saveGroupMessage failed:", (e as Error).message);
+  }
+}
+
+// 取某群 since 之后的消息（不含 since 本身），按时间升序
+export async function getGroupMessages(
+  groupId: number,
+  since: number,
+): Promise<StoredGroupMsg[]> {
+  if (!kv) return [];
+  try {
+    const out: StoredGroupMsg[] = [];
+    const iter = kv.list({ prefix: ["gmsg", groupId], start: ["gmsg", groupId, since + 1] });
+    for await (const e of iter) out.push(e.value as StoredGroupMsg);
+    out.sort((x, y) => x.ts - y.ts);
+    return out;
+  } catch (e) {
+    console.error("[chatstore] getGroupMessages failed:", (e as Error).message);
     return [];
   }
 }

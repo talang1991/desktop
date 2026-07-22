@@ -1,7 +1,8 @@
 {
   "tasks": {
-    "start": "deno run --allow-net --allow-read --allow-env --allow-write --env-file=.env server.ts",
-    "dev": "deno run --watch --allow-net --allow-read --allow-env --allow-write --env-file=.env server.ts"
+    "start": "deno run --unstable-kv --allow-net --allow-read --allow-env --allow-write --env-file=.env server.ts",
+    "dev": "deno run --watch --unstable-kv --allow-net --allow-read --allow-env --allow-write --env-file=.env server.ts"
   },
+  "nodeModulesDir": "auto",
   "exclude": ["README.md"]
 }

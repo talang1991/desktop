@@ -5,10 +5,11 @@ import {
   bulkImportLinks,
   sendFriendRequest, listFriends, listFriendRequests, acceptFriendRequest, getFriendRequestRequester, removeFriend,
   updateUserAvatar, areFriends,
+  createGroup, addGroupMember, listUserGroups, getGroupBasic, isGroupMember, leaveGroup,
   DbUnavailableError,
 } from "./store.ts";
 import { getWsPublicUrl, getIceServers, isOnline, pushToUser } from "./signaling.ts";
-import { saveMessage, getMessages, chatKvReady } from "./chatstore.ts";
+import { saveMessage, getMessages, saveGroupMessage, getGroupMessages, chatKvReady } from "./chatstore.ts";
 
 interface User { id: number; username: string; avatar: string; }
 
@@ -172,6 +173,97 @@ export async function handleApi(req: Request): Promise<Response> {
       const friends = (await listFriends(user.id)).map((f) => ({ ...f, online: isOnline(f.id) }));
       const requests = await listFriendRequests(user.id);
       return json({ friends, requests });
+    }
+
+    // ---- 群聊：我的群列表（含成员在线状态）----
+    if (path === "/api/groups" && method === "GET") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const groups = (await listUserGroups(user.id)).map((g) => ({
+        ...g,
+        members: (g.members || []).map((m) => ({ ...m, online: isOnline(m.id) })),
+      }));
+      return json({ groups });
+    }
+
+    // ---- 群聊：创建（name + 初始成员 userId 列表）----
+    if (path === "/api/groups" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const b = await req.json().catch(() => ({}));
+      const name = String(b.name ?? "").trim();
+      if (!name) return json({ error: "群名称必填" }, 400);
+      let members = Array.isArray(b.members)
+        ? b.members.map(Number).filter((n: number) => Number.isFinite(n) && n !== user.id)
+        : [];
+      members = [...new Set(members)];
+      const group = await createGroup(user.id, name, String(b.avatar ?? "").slice(0, 2048), members);
+      // 实时通知被邀请成员刷新群列表
+      const inviteIds = (group.members || []).map((m) => m.id).filter((id) => id !== user.id);
+      for (const id of inviteIds) {
+        pushToUser(id, { type: "group-invite", group: { id: group.id, name: group.name, avatar: group.avatar } });
+      }
+      return json({ group }, 201);
+    }
+
+    // ---- 群聊：历史（GET） / 补推（POST）----
+    const gm = path.match(/^\/api\/groups\/(\d+)\/messages$/);
+    if (gm) {
+      const gid = Number(gm[1]);
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      if (!(await isGroupMember(gid, user.id))) return json({ error: "你不在该群聊中" }, 403);
+      if (method === "GET") {
+        const since = Number(url.searchParams.get("since") || "0");
+        const messages = await getGroupMessages(gid, since);
+        return json({ messages, stored: chatKvReady() });
+      }
+      if (method === "POST") {
+        const body = await req.json().catch(() => ({}));
+        const msgs = Array.isArray(body.messages) ? body.messages : [];
+        let count = 0;
+        for (const mm of msgs.slice(0, 200)) {
+          const text = String(mm?.text ?? "").slice(0, 4000);
+          if (!text) continue;
+          const id = String(mm?.id || crypto.randomUUID());
+          const ts = Number(mm?.ts) || Date.now();
+          await saveGroupMessage({ id, groupId: gid, from: user.id, text, ts });
+          count++;
+        }
+        return json({ ok: true, stored: chatKvReady(), count });
+      }
+    }
+
+    // ---- 群聊：添加成员（群内成员可添加）----
+    const am = path.match(/^\/api\/groups\/(\d+)\/members$/);
+    if (am) {
+      const gid = Number(am[1]);
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      if (!(await isGroupMember(gid, user.id))) return json({ error: "你不在该群聊中" }, 403);
+      if (method === "POST") {
+        const body = await req.json().catch(() => ({}));
+        const addId = Number(body.userId);
+        if (!addId) return json({ error: "缺少 userId" }, 400);
+        await addGroupMember(gid, addId);
+        const basic = await getGroupBasic(gid);
+        pushToUser(addId, {
+          type: "group-invite",
+          group: { id: gid, name: basic?.name, avatar: basic?.avatar },
+        });
+        return json({ ok: true });
+      }
+    }
+
+    // ---- 群聊：退出（群主退出则解散群）----
+    const lm = path.match(/^\/api\/groups\/(\d+)\/leave$/);
+    if (lm) {
+      const gid = Number(lm[1]);
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      if (!(await isGroupMember(gid, user.id))) return json({ error: "你不在该群聊中" }, 403);
+      const r = await leaveGroup(gid, user.id);
+      return json({ ok: true, disbanded: r.disbanded });
     }
 
     // ---- 好友：通过请求 ----

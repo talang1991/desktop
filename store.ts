@@ -237,6 +237,24 @@ export async function initStore(): Promise<void> {
           await c.queryObject(
             `ALTER TABLE links ADD COLUMN IF NOT EXISTS open_mode TEXT NOT NULL DEFAULT 'new'`,
           );
+          // 群聊：群表 + 群成员表
+          await c.queryObject(
+            `CREATE TABLE IF NOT EXISTS chat_groups (
+              id SERIAL PRIMARY KEY,
+              name TEXT NOT NULL,
+              owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              avatar TEXT NOT NULL DEFAULT '',
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )`,
+          );
+          await c.queryObject(
+            `CREATE TABLE IF NOT EXISTS group_members (
+              group_id INTEGER NOT NULL REFERENCES chat_groups(id) ON DELETE CASCADE,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              PRIMARY KEY (group_id, user_id)
+            )`,
+          );
         });
         schemaOk = true;
       } catch (e) {
@@ -646,4 +664,132 @@ export async function areFriends(a: number, b: number): Promise<boolean> {
     [a, b],
   );
   return rows.length > 0;
+}
+
+// ---------------- 群聊 ----------------
+export interface GroupMemberOut {
+  id: number;
+  username: string;
+  avatar: string;
+}
+export interface GroupOut {
+  id: number;
+  name: string;
+  avatar: string;
+  ownerId: number;
+  members: GroupMemberOut[];
+}
+
+// 判断某用户是否为群成员（群消息收发 / 历史访问的权限校验）
+export async function isGroupMember(groupId: number, userId: number): Promise<boolean> {
+  ensureDb();
+  const rows = await query<{ group_id: number }>(
+    `SELECT group_id FROM group_members WHERE group_id = $1 AND user_id = $2 LIMIT 1`,
+    [groupId, userId],
+  );
+  return rows.length > 0;
+}
+
+// 群的全部成员 userId（用于实时转发 / 通知）
+export async function getGroupMemberIds(groupId: number): Promise<number[]> {
+  ensureDb();
+  const rows = await query<{ user_id: number }>(
+    `SELECT user_id FROM group_members WHERE group_id = $1`,
+    [groupId],
+  );
+  return rows.map((r) => r.user_id);
+}
+
+// 群基本信息
+export async function getGroupBasic(groupId: number): Promise<{ id: number; name: string; avatar: string; ownerId: number } | null> {
+  ensureDb();
+  const rows = await query<{ id: number; name: string; avatar: string; owner_id: number }>(
+    `SELECT id, name, avatar, owner_id FROM chat_groups WHERE id = $1`,
+    [groupId],
+  );
+  if (!rows.length) return null;
+  const r = rows[0];
+  return { id: r.id, name: r.name, avatar: r.avatar, ownerId: r.owner_id };
+}
+
+// 加入群成员（幂等）
+export async function addGroupMember(groupId: number, userId: number): Promise<void> {
+  ensureDb();
+  await query(
+    `INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)
+     ON CONFLICT (group_id, user_id) DO NOTHING`,
+    [groupId, userId],
+  );
+}
+
+// 创建群聊：创建群 + 自动加入创建者 + 加入指定的初始成员；返回完整群信息
+export async function createGroup(
+  ownerId: number,
+  name: string,
+  avatar: string,
+  memberIds: number[],
+): Promise<GroupOut> {
+  ensureDb();
+  const gname = String(name || "").trim().slice(0, 64) || "群聊";
+  const av = String(avatar || "").slice(0, ICON_MAX);
+  return withClient(async (c: any) => {
+    const g = await c.queryObject(
+      `INSERT INTO chat_groups (name, owner_id, avatar) VALUES ($1, $2, $3)
+       RETURNING id, name, avatar, owner_id AS "ownerId"`,
+      [gname, ownerId, av],
+    );
+    const group = (g.rows as Array<{ id: number; name: string; avatar: string; owner_id: number }>)[0];
+    await c.queryObject(`INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)
+      ON CONFLICT DO NOTHING`, [group.id, ownerId]);
+    for (const mid of memberIds) {
+      if (Number.isFinite(mid) && mid !== ownerId) {
+        await c.queryObject(`INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)
+          ON CONFLICT DO NOTHING`, [group.id, mid]);
+      }
+    }
+    const m = await c.queryObject(
+      `SELECT u.id, u.username, u.avatar AS "avatar" FROM group_members gm
+       JOIN users u ON u.id = gm.user_id WHERE gm.group_id = $1 ORDER BY u.username`,
+      [group.id],
+    );
+    return { id: group.id, name: group.name, avatar: group.avatar, ownerId: group.owner_id, members: m.rows as GroupMemberOut[] };
+  });
+}
+
+// 列出某用户加入的全部群（含成员列表）
+export async function listUserGroups(userId: number): Promise<GroupOut[]> {
+  ensureDb();
+  const rows = await query<{
+    id: number; name: string; avatar: string; ownerId: number;
+    members: GroupMemberOut[];
+  }>(
+    `SELECT g.id, g.name, g.avatar, g.owner_id AS "ownerId",
+       COALESCE(
+         (SELECT json_agg(json_build_object('id', u.id, 'username', u.username, 'avatar', u.avatar)
+                          ORDER BY u.username)
+          FROM group_members gm2 JOIN users u ON u.id = gm2.user_id WHERE gm2.group_id = g.id),
+         '[]'::json
+       ) AS members
+     FROM chat_groups g
+     WHERE g.id IN (SELECT group_id FROM group_members WHERE user_id = $1)
+     ORDER BY g.created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+// 退出群聊：群主退出则解散群（级联删除成员）；普通成员仅移除自己
+export async function leaveGroup(groupId: number, userId: number): Promise<{ disbanded: boolean }> {
+  ensureDb();
+  const basic = await getGroupBasic(groupId);
+  if (!basic) return { disbanded: false };
+  if (basic.ownerId === userId) {
+    await query(`DELETE FROM chat_groups WHERE id = $1`, [groupId]); // 级联删除 group_members
+    return { disbanded: true };
+  }
+  await query(
+    `DELETE FROM group_members WHERE group_id = $1 AND user_id = $2`,
+    [groupId, userId],
+  );
+  return { disbanded: false };
 }

@@ -226,10 +226,12 @@
     sigStopReconnect = false;
     connectSignaling();
     await loadUnread();
+    await loadGroupUnread();
     updateUnreadTitle();
     loadFriends();
+    loadGroups();
     // 兜底：登录后稍作延迟再补算一次离线未读，避免信令 welcome 晚到导致红点漏算
-    setTimeout(() => trySyncAll(), 1500);
+    setTimeout(() => { trySyncAll(); syncAllGroupUnread(); }, 1500);
   }
   async function checkAuth() {
     try {
@@ -678,12 +680,18 @@
 
   // ---------- Toast ----------
   let toastTimer = null;
-  function toast(msg) {
+  function toast(msg, onClick) {
     const t = $("#toast");
     t.textContent = msg;
     t.hidden = false;
+    t.style.cursor = onClick ? "pointer" : "";
+    if (onClick) {
+      t.onclick = () => { t.hidden = true; t.onclick = null; onClick(); };
+    } else {
+      t.onclick = null;
+    }
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { t.hidden = true; }, 1800);
+    toastTimer = setTimeout(() => { t.hidden = true; }, onClick ? 4000 : 1800);
   }
 
   // ---------- Theme ----------
@@ -806,6 +814,20 @@
   const friendSearch = $("#friendSearch");
   const friendAddBtn = $("#friendAdd");
   const chatUnreadBadge = $("#chatUnreadBadge");
+
+  // 群聊相关 DOM
+  const groupListEl = $("#groupList");
+  const groupEmptyEl = $("#groupEmpty");
+  const groupCreateBtn = $("#groupCreateBtn");
+  const groupModal = $("#groupModal");
+  const groupNameInput = $("#groupNameInput");
+  const groupMemberPicker = $("#groupMemberPicker");
+  const groupCreateConfirm = $("#groupCreateConfirm");
+  const groupAddModal = $("#groupAddModal");
+  const groupAddPicker = $("#groupAddPicker");
+  const groupAddMemberBtn = $("#groupAddMember");
+  const groupLeaveBtn = $("#groupLeave");
+  const chatGroupActions = $("#chatGroupActions");
 
   // ---------- 本地聊天缓存（IndexedDB）----------
   // 设计：每条聊天消息先写本地 IndexedDB（离线可用、刷新不丢）；
@@ -1020,6 +1042,14 @@
     chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + "px";
   });
 
+  // 群聊事件
+  groupCreateBtn.onclick = openGroupModal;
+  groupCreateConfirm.onclick = submitCreateGroup;
+  groupAddMemberBtn.onclick = openAddMemberModal;
+  groupLeaveBtn.onclick = leaveCurrentGroup;
+  groupModal.querySelectorAll("[data-close]").forEach((el) => (el.onclick = () => { groupModal.hidden = true; }));
+  groupAddModal.querySelectorAll("[data-close]").forEach((el) => (el.onclick = () => { groupAddModal.hidden = true; }));
+
   // ---------- 状态 ----------
   let sigSocket = null;
   let sigReconnectTimer = null;
@@ -1041,6 +1071,14 @@
   let unread = {};               // { [peerId]: 未读消息数 }，按当前用户隔离后持久化在 IndexedDB
   let currentUserId = null;      // 当前登录用户 id，用于把 unread 按账号隔离（IndexedDB 按 origin 共享，避免双账号串台）
   let syncingAll = false;        // 防止离线/重连的未读补算并发重入
+
+  // ---- 群聊状态 ----
+  let chatMode = "peer";         // "peer" | "group"
+  let currentGroup = null;       // 当前显示的群聊 id（group 模式）
+  let currentGroupAvatar = "";
+  let groups = [];               // [{id, name, avatar, ownerId, members:[{id,username,avatar,online}]}]
+  let groupUnread = {};          // { [groupId]: 未读消息数 }
+  let groupRenderedIds = new Set(); // 当前群会话已渲染的消息 id（避免同步重复渲染）
 
   // 默认 ICE 配置。Google STUN 在国内多数网络不通，已移除；
   // 实际优先使用后端 /api/ws-info 下发的 iceServers（含可选 TURN）。
@@ -1101,6 +1139,7 @@
     console.log("[UNREAD-DEBUG] openChat currentPeer=", currentPeer);
     connectSignaling();
     loadFriends();
+    loadGroups();
   }
   function closeChat() { chatPanel.hidden = true; document.body.classList.remove("chat-open"); chatVisible = false; }
 
@@ -1209,6 +1248,21 @@
           text: m.text,
           ts: m.ts || Date.now(),
         });
+        break;
+      case "group-chat":
+        // 群消息：来自群内某成员，按群会话渲染或累计未读
+        onGroupMessage({
+          id: m.id || crypto.randomUUID(),
+          groupId: m.groupId,
+          from: m.from,
+          text: m.text,
+          ts: m.ts || Date.now(),
+        });
+        break;
+      case "group-invite":
+        // 被加入群聊：刷新群列表（并补算未读）
+        try { toast(`你被拉入群聊「${m.group?.name || "群聊"}」`); } catch {}
+        try { loadGroups(); } catch {}
         break;
       case "peer-left":
         if (currentPeer === m.from) {
@@ -1341,6 +1395,7 @@
   function updateUnreadTitle() {
     let total = 0;
     for (const k in unread) total += unread[k] || 0;
+    for (const k in groupUnread) total += groupUnread[k] || 0;
     document.title = total > 0 ? `(${total}) ${BASE_TITLE}` : BASE_TITLE;
     if (chatUnreadBadge) {
       if (total > 0) {
@@ -1447,6 +1502,9 @@
   async function openConversation(f) {
     // 切换好友时不再“结束”上一个好友的通话——网状连接下应保留其后台 P2P 通道，
     // 仅切换当前显示的会话；显式“结束对话”按钮才会调用 endCurrent。
+    chatMode = "peer";
+    currentGroup = null;
+    chatGroupActions.hidden = true;
     clearUnread(f.id);
     currentPeer = f.id;
     chatVisible = true;
@@ -1677,6 +1735,7 @@
   function sendChat() {
     const text = chatInput.value.trim();
     if (!text) return;
+    if (chatMode === "group") { sendGroupChat(text); return; }
     if (currentPeer == null) { setChatStatus("请先选择一个好友", "warn"); return; }
     if (myId == null) { setChatStatus("连接中，请稍候…", "warn"); return; }
     const id = crypto.randomUUID();
@@ -1727,7 +1786,8 @@
     return renderMessageRow(role, text, ts);
   }
   // 渲染一条 me/peer 消息气泡行
-  function renderMessageRow(role, text, ts) {
+  // senderName / senderAvatar 仅在群聊中（role==="peer"）用于显示发送者名与头像
+  function renderMessageRow(role, text, ts, senderName, senderAvatar) {
     const empty = chatMessages.querySelector(".chat-empty");
     if (empty) empty.remove();
     // 跨天插入日期分割
@@ -1738,13 +1798,24 @@
 
     const avatar = document.createElement("div");
     avatar.className = "chat-msg-avatar sm";
-    avatar.innerHTML = isMe
-      ? renderAvatar(myAvatar, (currentUsername || "?").charAt(0).toUpperCase())
-      : renderAvatar(currentPeerAvatar, (currentPeerName || "?").charAt(0).toUpperCase());
+    const av = isMe ? myAvatar : (senderAvatar != null ? senderAvatar : currentPeerAvatar);
+    const fb = isMe
+      ? (currentUsername || "?").charAt(0).toUpperCase()
+      : ((senderName || currentPeerName) || "?").charAt(0).toUpperCase();
+    avatar.innerHTML = renderAvatar(av, fb);
 
     const bubble = document.createElement("div");
     bubble.className = "chat-msg " + (isMe ? "me" : "peer");
-    bubble.textContent = text;
+    if (!isMe && senderName) {
+      const sn = document.createElement("div");
+      sn.className = "chat-msg-sender";
+      sn.textContent = senderName;
+      bubble.appendChild(sn);
+    }
+    const body = document.createElement("span");
+    body.className = "chat-msg-text";
+    body.textContent = text;
+    bubble.appendChild(body);
     if (ts) {
       const meta = document.createElement("span");
       meta.className = "meta";
@@ -1809,16 +1880,24 @@
       // 服务端不可用/未登录：本地缓存仍可用，稍后重连会自动重试
     }
   }
-  // 把本地未同步的消息批量补推到服务端（按接收方分组）
+  // 把本地未同步的消息批量补推到服务端（按接收方分组；群消息按 groupId 分组）
   async function flushPending() {
     let unsynced;
     try { unsynced = await ChatDB.pending(); } catch { return; }
     if (!unsynced.length) return;
     const byTo = new Map();
+    const byGroup = new Map();
     for (const m of unsynced) {
-      const arr = byTo.get(m.to) || [];
-      arr.push(m);
-      byTo.set(m.to, arr);
+      if (typeof m.to === "string" && m.to.startsWith("g:")) {
+        const gid = m.to.slice(2);
+        const arr = byGroup.get(gid) || [];
+        arr.push(m);
+        byGroup.set(gid, arr);
+      } else {
+        const arr = byTo.get(m.to) || [];
+        arr.push(m);
+        byTo.set(m.to, arr);
+      }
     }
     for (const [to, arr] of byTo) {
       try {
@@ -1830,6 +1909,322 @@
       } catch (e) {
         // 推送失败（断网/未登录）：保留 synced=false，下次重连/online 再补推
       }
+    }
+    for (const [gid, arr] of byGroup) {
+      try {
+        await api(`/api/groups/${gid}/messages`, {
+          method: "POST",
+          body: JSON.stringify({ messages: arr.map((m) => ({ id: m.id, ts: m.ts, text: m.text })) }),
+        });
+        for (const m of arr) { m.synced = true; await ChatDB.put(m).catch(() => {}); }
+      } catch (e) {
+        // 推送失败：保留 synced=false，下次再补推
+      }
+    }
+  }
+
+  // ================= 群聊 =================
+  function groupConvKey(gid) { return "g:" + gid; }
+
+  function groupMemberName(gid, userId) {
+    const g = groups.find((x) => x.id === gid);
+    const m = g && g.members.find((x) => x.id === userId);
+    return { name: m ? m.username : "用户", avatar: m ? m.avatar : "" };
+  }
+
+  // ---- 群未读（红点）----
+  async function loadGroupUnread() {
+    if (currentUserId == null) return;
+    try { groupUnread = (await ChatDB.getMeta("groupUnread:" + currentUserId, {})) || {}; } catch { groupUnread = {}; }
+  }
+  async function saveGroupUnread() {
+    if (currentUserId == null) return;
+    try { await ChatDB.setMeta("groupUnread:" + currentUserId, groupUnread); } catch {}
+  }
+  function bumpGroupUnread(gid, n) {
+    gid = Number(gid);
+    n = Number(n) || 1;
+    groupUnread[gid] = (groupUnread[gid] || 0) + n;
+    saveGroupUnread();
+    updateUnreadTitle();
+    renderGroups();
+  }
+  function clearGroupUnread(gid) {
+    gid = Number(gid);
+    if (groupUnread[gid]) {
+      delete groupUnread[gid];
+      saveGroupUnread();
+      updateUnreadTitle();
+      renderGroups();
+    }
+  }
+
+  // ---- 群列表加载 / 渲染 ----
+  async function loadGroups() {
+    try {
+      const data = await api("/api/groups");
+      groups = data.groups || [];
+      renderGroups();
+      syncAllGroupUnread();
+    } catch (e) { /* 鉴权失效等：忽略 */ }
+  }
+
+  function renderGroups() {
+    groupListEl.innerHTML = "";
+    if (groups.length === 0) {
+      groupEmptyEl.hidden = false;
+    } else {
+      groupEmptyEl.hidden = true;
+      groups.forEach((g) => {
+        const row = document.createElement("div");
+        row.className = "group-row" + (chatMode === "group" && currentGroup === g.id ? " active" : "");
+        const u = groupUnread[g.id] || 0;
+        const anyOnline = (g.members || []).some((m) => m.online);
+        const badge = u > 0
+          ? `<span class="unread-badge" title="${u} 条未读">${u > 99 ? "99+" : u}</span>`
+          : "";
+        row.innerHTML =
+          `<span class="avatar sm">${renderAvatar(g.avatar, (g.name || "?").charAt(0).toUpperCase())}</span>` +
+          `<span class="gname">${escapeHtml(g.name)}</span>` +
+          `<span class="gmeta">${(g.members || []).length}人</span>` +
+          `<span class="dot ${anyOnline ? "on" : "off"}"></span>${badge}`;
+        row.onclick = () => openGroupConversation(g);
+        groupListEl.appendChild(row);
+      });
+    }
+  }
+
+  // ---- 打开群会话 ----
+  async function openGroupConversation(g) {
+    chatMode = "group";
+    currentGroup = g.id;
+    currentGroupAvatar = g.avatar || "";
+    currentPeer = null;
+    chatVisible = true;
+    chatPanel.hidden = false;
+    document.body.classList.add("chat-open");
+    chatPeerName.textContent = g.name;
+    renderAvatarInto($("#chatPeerAvatar"), g.avatar, (g.name || "?").charAt(0).toUpperCase());
+    chatGroupActions.hidden = false;
+    setChatStatus(`群聊 · ${(g.members || []).length}人`, "");
+    enableChatInput();
+    renderGroups();
+    renderFriends();
+    resetChatMessages(g.name);
+    groupRenderedIds = new Set();
+    await loadGroupConversation(g.id);
+    await syncGroupConversation(g.id);
+    clearGroupUnread(g.id);
+  }
+
+  // ---- 创建群聊 ----
+  function openGroupModal() {
+    groupNameInput.value = "";
+    groupMemberPicker.innerHTML = "";
+    if (!friends.length) {
+      groupMemberPicker.innerHTML = `<div class="member-pick-empty">还没有好友，无法创建群聊</div>`;
+    } else {
+      friends.forEach((f) => {
+        const row = document.createElement("label");
+        row.className = "member-pick-row";
+        row.innerHTML =
+          `<input type="checkbox" value="${f.id}" />` +
+          `<span class="avatar sm">${renderAvatar(f.avatar, f.username.charAt(0).toUpperCase())}</span>` +
+          `<span class="mp-name">${escapeHtml(f.username)}</span>`;
+        groupMemberPicker.appendChild(row);
+      });
+    }
+    groupModal.hidden = false;
+  }
+
+  async function submitCreateGroup() {
+    const name = groupNameInput.value.trim();
+    if (!name) { toast("请输入群名称"); return; }
+    const checks = groupMemberPicker.querySelectorAll('input[type="checkbox"]:checked');
+    const members = Array.from(checks).map((c) => Number(c.value));
+    try {
+      const r = await api("/api/groups", {
+        method: "POST",
+        body: JSON.stringify({ name, members }),
+      });
+      groupModal.hidden = true;
+      const g = r.group;
+      groups.push(g);
+      renderGroups();
+      toast(`已创建群聊「${g.name}」`);
+      openGroupConversation(g);
+    } catch (e) {
+      toast(e.message || "创建失败");
+    }
+  }
+
+  // ---- 添加群成员 ----
+  function openAddMemberModal() {
+    if (currentGroup == null) return;
+    const g = groups.find((x) => x.id === currentGroup);
+    if (!g) return;
+    const inGroup = new Set((g.members || []).map((m) => m.id));
+    groupAddPicker.innerHTML = "";
+    const candidates = friends.filter((f) => !inGroup.has(f.id));
+    if (!candidates.length) {
+      groupAddPicker.innerHTML = `<div class="member-pick-empty">没有可添加的好友</div>`;
+    } else {
+      candidates.forEach((f) => {
+        const row = document.createElement("div");
+        row.className = "member-pick-row";
+        row.innerHTML =
+          `<span class="avatar sm">${renderAvatar(f.avatar, f.username.charAt(0).toUpperCase())}</span>` +
+          `<span class="mp-name">${escapeHtml(f.username)}</span>` +
+          `<button class="mp-add" type="button">添加</button>`;
+        row.querySelector(".mp-add").onclick = async () => {
+          try {
+            await api(`/api/groups/${currentGroup}/members`, {
+              method: "POST",
+              body: JSON.stringify({ userId: f.id }),
+            });
+            toast(`已邀请 ${f.username} 加入群聊`);
+            await loadGroups();
+            const gg = groups.find((x) => x.id === currentGroup);
+            if (gg) setChatStatus(`群聊 · ${(gg.members || []).length}人`, "");
+            const btn = row.querySelector(".mp-add");
+            btn.textContent = "已添加";
+            btn.disabled = true;
+          } catch (e) {
+            toast(e.message || "添加失败");
+          }
+        };
+        groupAddPicker.appendChild(row);
+      });
+    }
+    groupAddModal.hidden = false;
+  }
+
+  // ---- 退出群聊 ----
+  async function leaveCurrentGroup() {
+    if (currentGroup == null) return;
+    const g = groups.find((x) => x.id === currentGroup);
+    if (!confirm(`确定退出群聊「${g ? g.name : "该群"}」？`)) return;
+    try {
+      await api(`/api/groups/${currentGroup}/leave`, { method: "DELETE" });
+      groups = groups.filter((x) => x.id !== currentGroup);
+      clearGroupUnread(currentGroup);
+      toast("已退出群聊");
+    } catch (e) {
+      toast(e.message || "退出失败");
+      return;
+    }
+    chatMode = "peer";
+    currentGroup = null;
+    chatGroupActions.hidden = true;
+    currentPeer = null;
+    chatPeerName.textContent = "选择一个好友开始聊天";
+    renderAvatarInto($("#chatPeerAvatar"), "", "?");
+    setChatStatus("未连接");
+    disableChatInput();
+    resetChatMessages();
+    renderGroups();
+  }
+
+  // ---- 群消息：发送 ----
+  function sendGroupChat(text) {
+    if (currentGroup == null) { setChatStatus("请先选择一个群聊", "warn"); return; }
+    if (myId == null) { setChatStatus("连接中，请稍候…", "warn"); return; }
+    const id = crypto.randomUUID();
+    const ts = Date.now();
+    const gid = currentGroup;
+    const conv = groupConvKey(gid);
+    const rec = { id, from: myId, to: conv, groupId: gid, text, ts, conv, synced: false };
+    groupRenderedIds.add(id);
+    renderMessageRow("me", text, ts);
+    ChatDB.put(rec).then(() => flushPending());
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "group-chat", groupId: gid, id, ts, text }));
+      setChatStatus(`群聊 · ${(groups.find((x) => x.id === gid)?.members || []).length}人`, "");
+    } else {
+      setChatStatus("已发送（离线消息，上线后接收）", "ok");
+    }
+    chatInput.value = "";
+    chatInput.style.height = "auto";
+  }
+
+  // ---- 群消息：接收 ----
+  async function onGroupMessage(m) {
+    const gid = Number(m.groupId);
+    const conv = groupConvKey(gid);
+    const rec = { id: m.id, from: m.from, to: conv, groupId: gid, text: m.text, ts: m.ts, conv, synced: false };
+    await ChatDB.put(rec).catch(() => {});
+    flushPending();
+    const viewing = chatMode === "group" && currentGroup === gid && chatVisible;
+    if (viewing) {
+      if (!groupRenderedIds.has(m.id)) {
+        groupRenderedIds.add(m.id);
+        const sm = groupMemberName(gid, m.from);
+        renderMessageRow(m.from === myId ? "me" : "peer", m.text, m.ts, sm.name, sm.avatar);
+      }
+    } else if (m.from !== myId) {
+      bumpGroupUnread(gid);
+    }
+  }
+
+  // ---- 群消息：本地缓存渲染 ----
+  async function loadGroupConversation(gid) {
+    const conv = groupConvKey(gid);
+    const msgs = await ChatDB.allForConv(conv).catch(() => []);
+    for (const m of msgs) {
+      groupRenderedIds.add(m.id);
+      const sm = groupMemberName(gid, m.from);
+      renderMessageRow(m.from === myId ? "me" : "peer", m.text, m.ts, sm.name, sm.avatar);
+    }
+  }
+
+  // ---- 群消息：从服务端增量同步 ----
+  async function syncGroupConversation(gid) {
+    const my = myId;
+    if (my == null) return;
+    try {
+      const since = await ChatDB.maxTs(groupConvKey(gid));
+      const data = await api(`/api/groups/${gid}/messages?since=${since}`);
+      for (const m of data.messages || []) {
+        const exists = await ChatDB.has(m.id);
+        await ChatDB.put({ ...m, to: groupConvKey(gid), groupId: gid, conv: groupConvKey(gid), synced: true }).catch(() => {});
+        if (currentGroup === gid && !groupRenderedIds.has(m.id)) {
+          groupRenderedIds.add(m.id);
+          if (!exists) {
+            const sm = groupMemberName(gid, m.from);
+            renderMessageRow(m.from === myId ? "me" : "peer", m.text, m.ts, sm.name, sm.avatar);
+          }
+        }
+      }
+    } catch (e) { /* 服务端不可用：本地缓存仍可用 */ }
+  }
+
+  // ---- 群未读：离线/重连补算 ----
+  async function syncAllGroupUnread() {
+    if (myId == null || groups.length === 0) return;
+    for (const g of groups) {
+      const gid = g.id;
+      const since = await ChatDB.maxTs(groupConvKey(gid));
+      let msgs = [];
+      try {
+        const data = await api(`/api/groups/${gid}/messages?since=${since}`);
+        msgs = data.messages || [];
+      } catch (e) { continue; }
+      const viewing = chatMode === "group" && currentGroup === gid && chatVisible;
+      for (const m of msgs) {
+        if (m.from === myId) continue;
+        if (await ChatDB.has(m.id)) continue;
+        await ChatDB.put({ ...m, to: groupConvKey(gid), groupId: gid, conv: groupConvKey(gid), synced: true }).catch(() => {});
+        if (viewing) {
+          if (!groupRenderedIds.has(m.id)) {
+            groupRenderedIds.add(m.id);
+            const sm = groupMemberName(gid, m.from);
+            renderMessageRow(m.from === myId ? "me" : "peer", m.text, m.ts, sm.name, sm.avatar);
+          }
+        } else {
+          bumpGroupUnread(gid);
+        }
+      }
+      if (viewing) clearGroupUnread(gid);
     }
   }
 

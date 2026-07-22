@@ -12,8 +12,8 @@
 
 import type { Server } from "node:http";
 import { WebSocketServer, WebSocket } from "npm:ws@8.18.0";
-import { getUserByToken } from "./store.ts";
-import { saveMessage } from "./chatstore.ts";
+import { getUserByToken, isGroupMember, getGroupMemberIds } from "./store.ts";
+import { saveMessage, saveGroupMessage } from "./chatstore.ts";
 
 // 根据请求推导前端应连接的 ws URL（与页面同源同端口，仅协议换 ws/wss）。
 export function getWsPublicUrl(req: Request): string {
@@ -103,6 +103,14 @@ function routeTo(userId: number, obj: unknown): boolean {
   return true;
 }
 
+// 向一组 userId 的每个连接广播（可排除某 userId，如消息发送者自己已本地渲染）
+function routeToEach(ids: number[], obj: unknown, exclude?: number): void {
+  for (const id of ids) {
+    if (exclude != null && id === exclude) continue;
+    routeTo(id, obj);
+  }
+}
+
 // 向指定 userId 的全部连接实时推送一条消息（如好友请求 / 通过通知）。
 // 返回是否在线（有活跃连接）。API 层（好友请求/通过）用它做实时提醒。
 export function pushToUser(userId: number, obj: unknown): boolean {
@@ -144,7 +152,7 @@ export function attachSignaling(server: Server): void {
     const pending: Array<{ type?: string; [k: string]: unknown }> = [];
     let authed = false;
 
-    const handleMessage = (msg: { type?: string; [k: string]: unknown }) => {
+    const handleMessage = async (msg: { type?: string; [k: string]: unknown }) => {
       if (!msg || typeof msg.type !== "string") return;
       switch (msg.type) {
         // 订阅好友在线状态
@@ -192,6 +200,32 @@ export function attachSignaling(server: Server): void {
           return;
         }
 
+        // 群聊消息中继：校验群成员后，存 KV 并转发给全体在线成员（不含发送者）
+        case "group-chat": {
+          const groupId = Number(msg.groupId);
+          if (!groupId) return;
+          if (!(await isGroupMember(groupId, user!.id))) {
+            send(ws, { type: "error", error: "你不在该群聊中" });
+            return;
+          }
+          const id = String(msg.id || crypto.randomUUID());
+          const ts = Number(msg.ts) || Date.now();
+          const text = String(msg.text ?? "").slice(0, 4000);
+          if (!text) return;
+          const members = (await getGroupMemberIds(groupId)).filter((m) => m !== user!.id);
+          routeToEach(members, {
+            type: "group-chat",
+            groupId,
+            from: user!.id,
+            id,
+            ts,
+            text,
+          });
+          // 服务端留存（换设备同步源），保留 3 个月由 KV 自动过期
+          saveGroupMessage({ id, groupId, from: user!.id, text, ts });
+          return;
+        }
+
         // 结束当前对话
         case "bye": {
           const to = Number(msg.to);
@@ -206,7 +240,7 @@ export function attachSignaling(server: Server): void {
       }
     };
 
-    ws.on("message", (data: Buffer | string) => {
+    ws.on("message", async (data: Buffer | string) => {
       let msg: { type?: string; [k: string]: unknown };
       try {
         msg = JSON.parse(data.toString());
@@ -214,7 +248,7 @@ export function attachSignaling(server: Server): void {
         return;
       }
       if (!authed) { pending.push(msg); return; } // 鉴权完成前先缓存
-      try { handleMessage(msg); } catch (err) {
+      try { await handleMessage(msg); } catch (err) {
         console.error("[signaling] message handler error:", (err as Error).message);
       }
     });
@@ -241,7 +275,7 @@ export function attachSignaling(server: Server): void {
     send(ws, { type: "welcome", userId: user.id, username: user.username });
     // 处理鉴权期间缓存的消息（如客户端 onopen 即发的 presence 订阅 / call）
     for (const m of pending.splice(0)) {
-      try { handleMessage(m); } catch (err) {
+      try { await handleMessage(m); } catch (err) {
         console.error("[signaling] pending message error:", (err as Error).message);
       }
     }

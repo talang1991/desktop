@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=28" />
+  <link rel="stylesheet" href="styles.css?v=31" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -144,10 +144,44 @@
           <span>用户名</span>
           <div id="profileUsername" class="profile-username"></div>
         </label>
-        <div class="modal-actions">
-          <button type="button" class="btn ghost" data-close>取消</button>
-          <button type="button" class="btn primary" id="saveAvatar">保存</button>
-        </div>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" data-close>取消</button>
+        <button type="button" class="btn primary" id="saveAvatar">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 创建群聊 -->
+  <div id="groupModal" class="modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="groupModalTitle">
+      <h2 id="groupModalTitle">创建群聊</h2>
+      <label class="field">
+        <span>群名称 <em>*</em></span>
+        <input id="groupNameInput" type="text" maxlength="32" placeholder="例如：项目组 / 家人们" />
+      </label>
+      <div class="field">
+        <span>选择成员（从好友中）</span>
+        <div id="groupMemberPicker" class="member-picker"></div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" data-close>取消</button>
+        <button type="button" class="btn primary" id="groupCreateConfirm">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 添加群成员 -->
+  <div id="groupAddModal" class="modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="groupAddTitle">
+      <h2 id="groupAddTitle">添加成员</h2>
+      <div class="field">
+        <span>选择好友加入群聊</span>
+        <div id="groupAddPicker" class="member-picker"></div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" data-close>取消</button>
       </div>
     </div>
   </div>
@@ -167,6 +201,17 @@
         <button id="friendAdd" class="btn primary">添加</button>
       </div>
       <div id="friendRequests" class="friend-requests" hidden></div>
+
+      <!-- 群聊分区 -->
+      <div class="group-section">
+        <div class="group-head">
+          <span class="group-title">👥 群聊</span>
+          <button id="groupCreateBtn" class="btn ghost small" title="创建群聊">＋ 创建</button>
+        </div>
+        <div id="groupList" class="group-list"></div>
+        <div id="groupEmpty" class="friend-empty" hidden>还没有群聊，点「＋ 创建」开始</div>
+      </div>
+
       <div id="friendList" class="friend-list"></div>
       <div id="friendEmpty" class="friend-empty">还没有好友，添加好友后即可开始聊天</div>
     </aside>
@@ -175,6 +220,10 @@
         <span id="chatPeerAvatar" class="avatar sm"></span>
         <div class="chat-title" id="chatPeerName">选择一个好友开始聊天</div>
         <div class="chat-status" id="chatStatus">未连接</div>
+        <div id="chatGroupActions" class="chat-group-actions" hidden>
+          <button id="groupAddMember" class="btn ghost small" title="添加成员">＋成员</button>
+          <button id="groupLeave" class="btn ghost small" title="退出群聊">退出</button>
+        </div>
       </div>
       <div id="chatMessages" class="chat-messages"></div>
       <div class="chat-input-row">
@@ -185,6 +234,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=41"></script>
+  <script src="app.js?v=44"></script>
 </body>
 </html>
