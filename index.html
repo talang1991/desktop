@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=38" />
+  <link rel="stylesheet" href="styles.css?v=41" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -191,6 +191,7 @@
 
   <!-- 好友聊天抽屉 -->
   <div id="chatPanel" class="chat-panel" hidden>
+    <div class="chat-resizer" id="chatResizer" title="拖动调整宽度"></div>
     <aside class="chat-sidebar">
       <div class="chat-sidebar-head">
         <div class="chat-title">聊天</div>
@@ -230,6 +231,7 @@
         <div id="groupList" class="group-list"></div>
         <div id="groupEmpty" class="friend-empty" hidden>还没有群聊，点「＋ 创建」开始</div>
       </div>
+      <div class="sidebar-resizer" id="sidebarResizer" title="拖动调整列表宽度"></div>
     </aside>
     <section class="chat-main">
       <!-- 聊天视图 -->
@@ -287,6 +289,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=54"></script>
+  <script src="app.js?v=58"></script>
 </body>
 </html>

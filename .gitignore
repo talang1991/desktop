@@ -9,3 +9,5 @@ node_modules/
 
 # 本地存储（含账号哈希与链接数据，不提交）
 data.json
+
+keep_server.sh

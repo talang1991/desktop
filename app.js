@@ -451,6 +451,8 @@
     page.className = "iframe-page";
     page.dataset.url = safeUrl;
     page.innerHTML =
+      `<div class="iframe-resizer left" title="拖动调整宽度"></div>` +
+      `<div class="iframe-resizer right" title="拖动调整宽度"></div>` +
       `<div class="iframe-bar">` +
         `<span class="iframe-title">${escapeHtml(safeTitle)}</span>` +
         `<a class="iframe-url" target="_blank" rel="noopener noreferrer" href="${escapeHtml(safeUrl)}">${escapeHtml(safeUrl)}</a>` +
@@ -470,14 +472,70 @@
       else activateIframePage(page);
     });
     page.querySelector(".iframe-newtab").addEventListener("click", (e) => { e.stopPropagation(); window.open(safeUrl, "_blank"); });
-    // 点击 dock 卡片（非按钮区域）还原为全屏
+    // 点击 dock 卡片（非按钮/非拖拽条区域）还原为全屏
     page.addEventListener("click", (e) => {
-      if (e.target.closest("button")) return;
+      if (e.target.closest("button") || e.target.closest(".iframe-resizer")) return;
       if (!page.classList.contains("active")) activateIframePage(page);
     });
+    // 恢复上次拖拽后的左/右边界（聊天打开时右侧留给 CSS 处理，避免被聊天面板覆盖）
+    const savedL = parseInt(localStorage.getItem("iframeLeft"), 10);
+    const savedR = parseInt(localStorage.getItem("iframeRight"), 10);
+    if (savedL >= 0) page.style.left = savedL + "px";
+    if (savedR >= 0 && !chatVisible) page.style.right = savedR + "px";
     dock.appendChild(page);
     activateIframePage(page);
+    initIframeResizers(page);
     page.querySelector(".iframe-frame").src = safeUrl; // 节点一次性插入并设置 src，保持常驻运行
+  }
+
+  // ---------- 内嵌页左右边缘拖拽调整宽度 ----------
+  function initIframeResizers(page) {
+    const leftR = page.querySelector(".iframe-resizer.left");
+    const rightR = page.querySelector(".iframe-resizer.right");
+    if (!leftR || !rightR) return;
+    const MIN_W = 360; // 内嵌网页最小宽度
+    function persist() {
+      const r = page.getBoundingClientRect();
+      localStorage.setItem("iframeLeft", String(Math.round(r.left)));
+      localStorage.setItem("iframeRight", String(Math.round(window.innerWidth - r.right)));
+    }
+    function startDrag(resizer, which) {
+      return (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        resizer.classList.add("active");
+        document.body.classList.add("resizing");
+        const rect = page.getBoundingClientRect();
+        const startLeft = rect.left;
+        const startRight = window.innerWidth - rect.right;
+        const startX = e.clientX;
+        const winW = window.innerWidth;
+        function onMove(ev) {
+          if (which === "left") {
+            let nl = startLeft + (ev.clientX - startX);
+            nl = Math.max(0, Math.min(nl, winW - MIN_W - startRight));
+            page.style.left = nl + "px";
+            page.style.right = startRight + "px";
+          } else {
+            let nr = startRight - (ev.clientX - startX);
+            nr = Math.max(0, Math.min(nr, winW - MIN_W - startLeft));
+            page.style.right = nr + "px";
+            page.style.left = startLeft + "px";
+          }
+        }
+        function onUp() {
+          resizer.classList.remove("active");
+          document.body.classList.remove("resizing");
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", onUp);
+          persist();
+        }
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+      };
+    }
+    leftR.addEventListener("mousedown", startDrag(leftR, "left"));
+    rightR.addEventListener("mousedown", startDrag(rightR, "right"));
   }
 
   // ---------- Context menu ----------
@@ -803,6 +861,7 @@
   // 注意：DOM 常量必须先于事件绑定声明，否则事件回调访问到 TDZ 中的 const 会抛 ReferenceError。
   // =====================================================================
   const chatPanel = $("#chatPanel");
+  const chatResizer = $("#chatResizer");
   const chatStatus = $("#chatStatus");
   const chatMessages = $("#chatMessages");
   const chatInput = $("#chatInput");
@@ -1188,6 +1247,72 @@
   }
   function closeChat() { chatPanel.hidden = true; document.body.classList.remove("chat-open"); chatVisible = false; }
 
+  // ---------- 聊天面板拖拽调整宽度 ----------
+  function initChatResizer() {
+    const saved = parseInt(localStorage.getItem("chatPanelWidth"), 10);
+    if (saved && saved >= 320) chatPanel.style.width = saved + "px";
+
+    chatResizer.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      chatResizer.classList.add("active");
+      document.body.classList.add("resizing");
+      const startX = e.clientX;
+      const startW = chatPanel.getBoundingClientRect().width;
+      function onMove(ev) {
+        let newW = startW + (startX - ev.clientX);
+        const maxW = window.innerWidth - 80;
+        newW = Math.max(320, Math.min(newW, maxW));
+        chatPanel.style.width = newW + "px";
+      }
+      function onUp() {
+        chatResizer.classList.remove("active");
+        document.body.classList.remove("resizing");
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        const cur = parseInt(chatPanel.style.width, 10);
+        if (cur) localStorage.setItem("chatPanelWidth", String(cur));
+      }
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  }
+  initChatResizer();
+
+  // ---------- 侧边栏（会话/好友/群组列表）拖拽调整宽度 ----------
+  function initSidebarResizer() {
+    const sidebar = document.querySelector(".chat-sidebar");
+    const sResizer = $("#sidebarResizer");
+    if (!sidebar || !sResizer) return;
+    const saved = parseInt(localStorage.getItem("chatSidebarWidth"), 10);
+    if (saved && saved >= 180) sidebar.style.width = saved + "px";
+
+    sResizer.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      sResizer.classList.add("active");
+      document.body.classList.add("resizing");
+      const startX = e.clientX;
+      const startW = sidebar.getBoundingClientRect().width;
+      function onMove(ev) {
+        let newW = startW + (ev.clientX - startX);
+        const panelWidth = chatPanel.getBoundingClientRect().width;
+        const maxW = Math.max(260, panelWidth - 360);
+        newW = Math.max(180, Math.min(newW, maxW));
+        sidebar.style.width = newW + "px";
+      }
+      function onUp() {
+        sResizer.classList.remove("active");
+        document.body.classList.remove("resizing");
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        const cur = parseInt(sidebar.style.width, 10);
+        if (cur) localStorage.setItem("chatSidebarWidth", String(cur));
+      }
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  }
+  initSidebarResizer();
+
   // ---------- 信令连接（带 token 鉴权，全程持久 + 自动重连）----------
   async function connectSignaling() {
     if (sigStopReconnect) return;
@@ -1354,7 +1479,37 @@
   }
   function updateFriendOnline(userId, online) {
     const f = friends.find((x) => x.id === userId);
-    if (f) { f.online = online; renderFriends(); }
+    if (!f) return;
+    f.online = online;
+    // 在线状态变化只原地切换小圆点，避免整列重建导致点击竞态（mousedown→mouseup 之间行被替换丢 click）
+    const row = friendListEl && friendListEl.querySelector('.friend-row[data-uid="' + userId + '"]');
+    if (row) {
+      const dot = row.querySelector(".dot");
+      if (dot) dot.className = "dot " + (online ? "on" : "off");
+    } else {
+      renderFriends();
+    }
+    // 会话行内的在线小圆点同步原地更新（peer 类型）
+    const convRow = convListEl && convListEl.querySelector('.conv-row[data-cid="' + userId + '"][data-ctype="peer"] .dot');
+    if (convRow) convRow.className = "dot " + (online ? "on" : "off");
+  }
+  // 原地更新某会话行的未读角标，避免收到消息时整列重建引发点击竞态
+  function patchConvUnread(peerId, count) {
+    if (!convListEl) return;
+    const row = convListEl.querySelector('.conv-row[data-cid="' + peerId + '"]');
+    if (!row) return;
+    let badge = row.querySelector(".unread-badge");
+    if (count > 0) {
+      if (!badge) {
+        badge = document.createElement("span");
+        badge.className = "unread-badge";
+        row.appendChild(badge);
+      }
+      badge.textContent = count > 99 ? "99+" : String(count);
+      badge.title = count + " 条未读";
+    } else if (badge) {
+      badge.remove();
+    }
   }
   // 未读消息计数（红点提醒）：内存 + IndexedDB 双写，刷新后仍在
   async function loadUnread() {
@@ -1371,7 +1526,7 @@
     unread[peerId] = (unread[peerId] || 0) + n;
     saveUnread();
     updateUnreadTitle();
-    renderFriends();
+    patchConvUnread(peerId, unread[peerId]);
   }
   function addUnread(peerId) {
     peerId = Number(peerId);
@@ -1499,6 +1654,7 @@
         friends.forEach((f) => {
           const row = document.createElement("div");
           row.className = "friend-row" + (f.id === currentPeer ? " active" : "");
+          row.dataset.uid = f.id;
           row.innerHTML =
             `<span class="avatar-wrap">` +
             `<span class="avatar sm">${renderAvatar(f.avatar, f.username.charAt(0).toUpperCase())}</span>` +
@@ -1507,8 +1663,7 @@
             `<span class="fname">${escapeHtml(f.username)}</span>` +
             `<button class="friend-remove" title="移除好友">✕</button>`;
         const open = () => showFriendDetail(f);
-        row.querySelector(".fname").onclick = open;
-        row.querySelector(".avatar-wrap").onclick = open;
+        row.onclick = open;
         row.querySelector(".friend-remove").onclick = (e) => {
           e.stopPropagation();
           removeFriend(f);
@@ -2219,6 +2374,8 @@
         : (chatMode === "peer" && Number(currentPeer) === c.id);
       const row = document.createElement("div");
       row.className = "conv-row" + (active ? " active" : "");
+      row.dataset.cid = c.id;
+      row.dataset.ctype = c.type;
       const badge = u > 0
         ? `<span class="unread-badge" title="${u} 条未读">${u > 99 ? "99+" : u}</span>`
         : "";
@@ -2248,8 +2405,7 @@
           if (f) openConversation(f);
         }
       };
-      row.querySelector(".avatar-wrap").onclick = open;
-      row.querySelector(".conv-main").onclick = open;
+      row.onclick = open;
       row.querySelector(".conv-close").onclick = (e) => {
         e.stopPropagation();
         removeConversation(c.type, c.id);

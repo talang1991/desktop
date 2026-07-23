@@ -438,6 +438,56 @@ body.chat-open .modal { right: min(560px, 100vw); }
   animation: chatSlideIn 0.18s ease-out;
 }
 .chat-panel[hidden] { display: none; }
+
+/* 聊天面板左侧拖拽手柄（调整宽度） */
+.chat-resizer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 20;
+  background: transparent;
+}
+.chat-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 2px;
+  width: 2px;
+  height: 100%;
+  background: var(--primary);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.chat-resizer:hover::after,
+.chat-resizer.active::after { opacity: 0.7; }
+body.resizing { user-select: none; cursor: col-resize; }
+
+/* 侧边栏右侧拖拽手柄（调整列表页宽度） */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 6;
+  background: transparent;
+}
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 2px;
+  width: 2px;
+  height: 100%;
+  background: var(--primary);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.sidebar-resizer:hover::after { opacity: 0.7; }
 @keyframes chatSlideIn {
   from { transform: translateX(100%); }
   to { transform: translateX(0); }
@@ -445,6 +495,7 @@ body.chat-open .modal { right: min(560px, 100vw); }
 
 /* 左侧好友栏 */
 .chat-sidebar {
+  position: relative;
   width: 220px;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
@@ -940,6 +991,37 @@ body.chat-open .iframe-page.active { right: min(560px, 100vw); }
   border: 0;
   background: #fff;
 }
+/* 内嵌页左右边缘拖拽条：仅激活态（全屏浮层）显示，拖动改变左/右边界以调整宽度 */
+.iframe-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 3;
+  display: none;
+}
+.iframe-resizer.left { left: 0; }
+.iframe-resizer.right { right: 0; }
+.iframe-page.active .iframe-resizer { display: block; }
+.iframe-resizer::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  left: 2px;
+  width: 2px;
+  height: 44px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.iframe-resizer.right::after { left: auto; right: 2px; }
+.iframe-resizer:hover::after,
+.iframe-resizer.active::after { opacity: 0.85; }
+/* 拖拽中禁用 iframe 指针事件，避免鼠标移到 iframe 上方丢 mousemove */
+body.resizing .iframe-frame { pointer-events: none !important; }
 
 /* ===== 群聊分区 ===== */
 .group-section {
