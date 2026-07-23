@@ -395,46 +395,82 @@
     else if (mode === "self") window.open(a.url, "_self");
     else window.open(a.url, "_blank");
   }
-  // ---------- 内嵌 iframe 查看器（多页面常驻，最小化收纳到 dock）----------
+  // ---------- 内嵌 iframe 查看器（多页面常驻；最多两个并排分屏）----------
+  const IFRAME_MIN_W = 360; // 单个内嵌页最小宽度
+  let iframeActive = [];    // 当前“打开中”的页面（最多 2 个，用于左右分屏）
+  let splitRatio = 0.5;     // 分屏时分隔条位置（0~1，左边占比）
+  let dividerEl = null;     // 分屏分隔条
   function updateDockVisibility() {
     const dock = $("#iframeDock");
     if (!dock) return;
-    // 只要存在任意页面（含激活中的全屏页）就保持 dock 容器可见，
-    // 否则 dock 的 display:none 会连带隐藏作为子节点的激活页，导致内嵌窗口“打不开”。
     dock.hidden = dock.querySelectorAll(".iframe-page").length === 0;
   }
   function closeIframePage(page) {
     if (!page) return;
+    const i = iframeActive.indexOf(page);
+    if (i >= 0) iframeActive.splice(i, 1);
     page.remove(); // iframe 随节点移除而卸载
-    updateDockVisibility();
+    layoutIframePages();
   }
   function syncIframePageButtons(page) {
     if (!page) return;
     const minBtn = page.querySelector(".iframe-min");
-    const isActive = page.classList.contains("active");
-    if (minBtn) {
-      // 激活态显示「最小化（—）」；最小化态显示「最大化（□）」
-      minBtn.textContent = isActive ? "—" : "□";
-      minBtn.title = isActive ? "最小化" : "最大化";
+    if (!minBtn) return;
+    // 唯一打开中 → 显示“最小化（—）”；分屏中或卡片态 → 显示“最大化/还原（□）”
+    const sole = iframeActive.length === 1 && iframeActive[0] === page;
+    minBtn.textContent = sole ? "—" : "□";
+    minBtn.title = sole ? "最小化" : "最大化";
+  }
+  // 根据当前活动页集合重新布局：0=仅卡片；1=单页全屏；2=左右分屏
+  function layoutIframePages() {
+    const dock = $("#iframeDock");
+    if (!dock) return;
+    const pages = [...dock.querySelectorAll(".iframe-page")];
+    pages.forEach((p) => { p.classList.remove("active", "split"); });
+    const n = iframeActive.length;
+    const chatOpen = document.body.classList.contains("chat-open");
+    const chatW = chatOpen ? Math.min(560, window.innerWidth) : 0;
+    const avail = window.innerWidth - chatW;
+    if (n === 1) {
+      const p = iframeActive[0];
+      p.classList.add("active");
+      // 从分屏退回单页时清掉分屏遗留的内联定位，恢复全屏（由 CSS 控制）
+      if (p._wasSplit) { p.style.left = ""; p.style.right = ""; p._wasSplit = false; }
+      syncIframePageButtons(p);
+    } else if (n === 2) {
+      const L = iframeActive[0], R = iframeActive[1];
+      L.classList.add("split"); R.classList.add("split");
+      L._wasSplit = true; R._wasSplit = true;
+      const D = Math.max(IFRAME_MIN_W, Math.min(splitRatio * avail, avail - IFRAME_MIN_W));
+      L.style.left = "0px";
+      L.style.right = (window.innerWidth - D) + "px";
+      R.style.left = D + "px";
+      R.style.right = chatW + "px";
+      syncIframePageButtons(L);
+      syncIframePageButtons(R);
+      if (dividerEl) { dividerEl.style.display = "block"; dividerEl.style.left = D + "px"; }
     }
+    if (n !== 2 && dividerEl) dividerEl.style.display = "none";
+    updateDockVisibility();
   }
   function minimizeIframePage(page) {
     if (!page) return;
-    page.classList.remove("active"); // 收进 dock，iframe 仍常驻运行
-    syncIframePageButtons(page);
-    updateDockVisibility();
+    const i = iframeActive.indexOf(page);
+    if (i < 0) { activateIframePage(page); return; } // 卡片态 → 打开
+    if (iframeActive.length === 1) {
+      iframeActive.splice(i, 1); // 唯一打开中 → 最小化收进 dock
+    } else {
+      iframeActive = [page]; // 分屏中 → 最大化当前页（移除另一页）
+    }
+    layoutIframePages();
   }
   function activateIframePage(page) {
-    const dock = $("#iframeDock");
-    if (!dock || !page) return;
-    const cur = dock.querySelector(".iframe-page.active");
-    if (cur && cur !== page) {
-      cur.classList.remove("active");
-      syncIframePageButtons(cur);
+    if (!page) return;
+    if (!iframeActive.includes(page)) {
+      if (iframeActive.length >= 2) iframeActive.shift(); // 超过两个：移除最早的，保持最多两个
+      iframeActive.push(page);
     }
-    page.classList.add("active");
-    syncIframePageButtons(page);
-    updateDockVisibility();
+    layoutIframePages();
   }
   function openIframe(url, title) {
     const safeUrl = String(url || "").trim();
@@ -442,11 +478,8 @@
     const safeTitle = title || hostnameOf(safeUrl) || "未命名链接";
     const dock = $("#iframeDock");
     if (!dock) { window.open(safeUrl, "_blank"); return; }
-    // 若该 url 已有激活页，直接复用，不重复创建
-    const existing = [...dock.querySelectorAll(".iframe-page")].find(
-      (p) => p.dataset.url === safeUrl && p.classList.contains("active"),
-    );
-    if (existing) return;
+    // 若该 url 已在打开中（单页或分屏），直接复用，不重复创建
+    if (iframeActive.some((p) => p.dataset.url === safeUrl)) { layoutIframePages(); return; }
     const page = document.createElement("div");
     page.className = "iframe-page";
     page.dataset.url = safeUrl;
@@ -467,15 +500,14 @@
     page.querySelector(".iframe-close").addEventListener("click", (e) => { e.stopPropagation(); closeIframePage(page); });
     page.querySelector(".iframe-min").addEventListener("click", (e) => {
       e.stopPropagation();
-      // 激活态→最小化；最小化态（□）→最大化还原
-      if (page.classList.contains("active")) minimizeIframePage(page);
-      else activateIframePage(page);
+      // 卡片态→打开；单页→最小化；分屏中→最大化当前页（移除另一页）
+      minimizeIframePage(page);
     });
     page.querySelector(".iframe-newtab").addEventListener("click", (e) => { e.stopPropagation(); window.open(safeUrl, "_blank"); });
-    // 点击 dock 卡片（非按钮/非拖拽条区域）还原为全屏
+    // 点击 dock 卡片（非按钮/非拖拽条区域）打开（加入活动页，最多两个并排）
     page.addEventListener("click", (e) => {
       if (e.target.closest("button") || e.target.closest(".iframe-resizer")) return;
-      if (!page.classList.contains("active")) activateIframePage(page);
+      if (!iframeActive.includes(page)) activateIframePage(page);
     });
     // 恢复上次拖拽后的左/右边界（聊天打开时右侧留给 CSS 处理，避免被聊天面板覆盖）
     const savedL = parseInt(localStorage.getItem("iframeLeft"), 10);
@@ -488,12 +520,11 @@
     page.querySelector(".iframe-frame").src = safeUrl; // 节点一次性插入并设置 src，保持常驻运行
   }
 
-  // ---------- 内嵌页左右边缘拖拽调整宽度 ----------
+  // ---------- 内嵌页左右边缘拖拽调整宽度（仅单页全屏态生效；分屏态用分隔条）----------
   function initIframeResizers(page) {
     const leftR = page.querySelector(".iframe-resizer.left");
     const rightR = page.querySelector(".iframe-resizer.right");
     if (!leftR || !rightR) return;
-    const MIN_W = 360; // 内嵌网页最小宽度
     function persist() {
       const r = page.getBoundingClientRect();
       localStorage.setItem("iframeLeft", String(Math.round(r.left)));
@@ -513,12 +544,12 @@
         function onMove(ev) {
           if (which === "left") {
             let nl = startLeft + (ev.clientX - startX);
-            nl = Math.max(0, Math.min(nl, winW - MIN_W - startRight));
+            nl = Math.max(0, Math.min(nl, winW - IFRAME_MIN_W - startRight));
             page.style.left = nl + "px";
             page.style.right = startRight + "px";
           } else {
             let nr = startRight - (ev.clientX - startX);
-            nr = Math.max(0, Math.min(nr, winW - MIN_W - startLeft));
+            nr = Math.max(0, Math.min(nr, winW - IFRAME_MIN_W - startLeft));
             page.style.right = nr + "px";
             page.style.left = startLeft + "px";
           }
@@ -537,6 +568,54 @@
     leftR.addEventListener("mousedown", startDrag(leftR, "left"));
     rightR.addEventListener("mousedown", startDrag(rightR, "right"));
   }
+
+  // ---------- 分屏分隔条（左右分屏时拖动调整左右占比）----------
+  function initIframeDivider() {
+    if (!dividerEl) return;
+    const saved = parseFloat(localStorage.getItem("iframeSplitRatio"));
+    if (saved > 0 && saved < 1) splitRatio = saved;
+    dividerEl.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      dividerEl.classList.add("active");
+      document.body.classList.add("resizing");
+      const startX = e.clientX;
+      const startRatio = splitRatio;
+      const chatOpen = document.body.classList.contains("chat-open");
+      const chatW = chatOpen ? Math.min(560, window.innerWidth) : 0;
+      const avail = window.innerWidth - chatW;
+      function onMove(ev) {
+        let nr = startRatio + (ev.clientX - startX) / avail;
+        nr = Math.max(IFRAME_MIN_W / avail, Math.min(nr, 1 - IFRAME_MIN_W / avail));
+        splitRatio = nr;
+        layoutIframePages();
+      }
+      function onUp() {
+        dividerEl.classList.remove("active");
+        document.body.classList.remove("resizing");
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        localStorage.setItem("iframeSplitRatio", String(splitRatio));
+      }
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  }
+  let _chatOpenPrev = false;
+  function initIframeInfra() {
+    dividerEl = document.createElement("div");
+    dividerEl.className = "iframe-divider";
+    dividerEl.style.display = "none";
+    document.body.appendChild(dividerEl);
+    initIframeDivider();
+    // 聊天面板开/关时重新布局内嵌页，让出右侧空间避免被覆盖
+    _chatOpenPrev = document.body.classList.contains("chat-open");
+    const mo = new MutationObserver(() => {
+      const now = document.body.classList.contains("chat-open");
+      if (now !== _chatOpenPrev) { _chatOpenPrev = now; layoutIframePages(); }
+    });
+    mo.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  }
+  initIframeInfra();
 
   // ---------- Context menu ----------
   let ctxEl = null;
@@ -576,8 +655,10 @@
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       closeContextMenu(); closeModal(); closeProfileModal();
-      const act = $("#iframeDock") && $("#iframeDock").querySelector(".iframe-page.active");
-      if (act) closeIframePage(act);
+      // 关闭所有打开中的内嵌页（单页 .active 或分屏 .split 都在 iframeActive 中）
+      if (iframeActive.length) {
+        [...iframeActive].forEach((p) => closeIframePage(p));
+      }
     }
   });
 

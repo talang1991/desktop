@@ -924,11 +924,11 @@ body.resizing { user-select: none; cursor: col-resize; }
   pointer-events: auto; /* 受 dock 的 pointer-events:none 影响，这里单独恢复可点 */
 }
 .iframe-page .iframe-frame { display: none; }
-/* 最小化态：隐藏「新标签页」与网址，仅留标题 + 最大化/关闭 */
-.iframe-page:not(.active) .iframe-newtab { display: none; }
-.iframe-page:not(.active) .iframe-url { display: none; }
+/* 最小化态（卡片）：隐藏「新标签页」与网址，仅留标题 + 最大化/关闭 */
+.iframe-page:not(.active):not(.split) .iframe-newtab { display: none; }
+.iframe-page:not(.active):not(.split) .iframe-url { display: none; }
 /* 网址隐藏后没有 flex:1 元素把操作按钮推到右侧，这里用 margin-left:auto 让 □/✕ 靠右 */
-.iframe-page:not(.active) .iframe-actions { margin-left: auto; }
+.iframe-page:not(.active):not(.split) .iframe-actions { margin-left: auto; }
 /* 激活态：全屏浮层（节点不移动、src 不变，故 iframe 保持常驻运行） */
 .iframe-page.active {
   position: fixed;
@@ -941,9 +941,24 @@ body.resizing { user-select: none; cursor: col-resize; }
   cursor: default;
   background: var(--surface);
 }
+/* 分屏态：左右并排的两个窗口（定位/宽度由 JS 按 splitRatio 设置，故不写死 inset） */
+.iframe-page.split {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: auto;
+  height: auto;
+  z-index: 1000;
+  border-radius: 0;
+  border: none;
+  cursor: default;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--border);
+}
 /* 聊天窗口打开时，放大的内嵌页右侧留出聊天面板的宽度，不被其覆盖 */
 body.chat-open .iframe-page.active { right: min(560px, 100vw); }
-.iframe-page.active .iframe-frame { display: block; flex: 1; }
+.iframe-page.active .iframe-frame,
+.iframe-page.split .iframe-frame { display: block; flex: 1; }
 .iframe-bar {
   display: flex;
   align-items: center;
@@ -1004,6 +1019,8 @@ body.chat-open .iframe-page.active { right: min(560px, 100vw); }
 .iframe-resizer.left { left: 0; }
 .iframe-resizer.right { right: 0; }
 .iframe-page.active .iframe-resizer { display: block; }
+/* 分屏态用中间分隔条调整占比，页面自身的边缘拖拽条隐藏 */
+.iframe-page.split .iframe-resizer { display: none; }
 .iframe-resizer::after {
   content: "";
   position: absolute;
@@ -1020,6 +1037,32 @@ body.chat-open .iframe-page.active { right: min(560px, 100vw); }
 .iframe-resizer.right::after { left: auto; right: 2px; }
 .iframe-resizer:hover::after,
 .iframe-resizer.active::after { opacity: 0.85; }
+/* 分屏分隔条：位于两页中间，可拖动调整左右占比 */
+.iframe-divider {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  margin-left: -3px;
+  cursor: col-resize;
+  z-index: 1002;
+  background: transparent;
+}
+.iframe-divider::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 48px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.iframe-divider:hover::after,
+.iframe-divider.active::after { opacity: 0.85; }
 /* 拖拽中禁用 iframe 指针事件，避免鼠标移到 iframe 上方丢 mousemove */
 body.resizing .iframe-frame { pointer-events: none !important; }
 
