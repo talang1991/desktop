@@ -712,6 +712,22 @@ export async function getGroupBasic(groupId: number): Promise<{ id: number; name
   return { id: r.id, name: r.name, avatar: r.avatar, ownerId: r.owner_id };
 }
 
+// 修改群名称：仅群主可改，返回更新后的群基本信息
+export async function renameGroup(
+  groupId: number,
+  ownerId: number,
+  name: string,
+): Promise<{ id: number; name: string; avatar: string; ownerId: number } | null> {
+  ensureDb();
+  const basic = await getGroupBasic(groupId);
+  if (!basic) return null;
+  if (basic.ownerId !== ownerId) throw new Error("只有群主可以修改群名称");
+  const gname = String(name || "").trim().slice(0, 64);
+  if (!gname) throw new Error("群名称不能为空");
+  await query(`UPDATE chat_groups SET name = $1 WHERE id = $2`, [gname, groupId]);
+  return { id: basic.id, name: gname, avatar: basic.avatar, ownerId: basic.ownerId };
+}
+
 // 加入群成员（幂等）
 export async function addGroupMember(groupId: number, userId: number): Promise<void> {
   ensureDb();

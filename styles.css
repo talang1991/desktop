@@ -667,11 +667,20 @@ body.chat-open .modal { right: min(560px, 100vw); }
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
 }
-.chat-title { font-size: 15px; font-weight: 600; }
+.chat-title {
+  font-size: 15px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .chat-status {
   font-size: 12px;
   color: var(--text-soft);
   margin-left: auto;
+  flex-shrink: 0;
   max-width: 170px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -705,7 +714,18 @@ body.chat-open .modal { right: min(560px, 100vw); }
 }
 .detail-view[hidden] { display: none; }
 .detail-head { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0 4px; }
+.detail-name-row { display: flex; align-items: center; gap: 6px; }
 .detail-name { font-size: 18px; font-weight: 600; }
+.detail-name-edit {
+  font-size: 16px; font-weight: 600; text-align: center; width: 70%;
+  padding: 4px 8px; border: 1px solid var(--primary); border-radius: 8px;
+  background: var(--surface); color: var(--text); outline: none;
+}
+.icon-edit {
+  flex: 0 0 auto; border: none; background: transparent; color: var(--text-soft);
+  cursor: pointer; font-size: 14px; line-height: 1; padding: 3px 5px; border-radius: 6px;
+}
+.icon-edit:hover { background: var(--surface); color: var(--primary); }
 .detail-sub { font-size: 13px; color: var(--text-soft); }
 .detail-section-title { font-size: 13px; font-weight: 600; color: var(--text-soft); margin-top: 4px; }
 .detail-actions { display: flex; flex-direction: column; gap: 10px; margin-top: auto; padding-top: 8px; }
@@ -1016,6 +1036,9 @@ body.chat-open .iframe-page.active { right: min(560px, 100vw); }
   font-size: 12px; color: var(--text-soft); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
 }
+.conv-top { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; min-width: 0; }
+.conv-top .conv-name { flex: 1; min-width: 0; }
+.conv-time { flex-shrink: 0; font-size: 11px; color: var(--text-soft); margin-left: 4px; }
 .conv-row .unread-badge {
   flex-shrink: 0;
   min-width: 18px; height: 18px; padding: 0 5px; margin-left: 4px;
@@ -1032,8 +1055,9 @@ body.chat-open .iframe-page.active { right: min(560px, 100vw); }
 .conv-close:hover { background: var(--surface-2); color: var(--danger); }
 
 /* 群聊头部操作按钮 */
-.chat-group-actions { display: flex; gap: 6px; margin-left: auto; }
+.chat-group-actions { display: flex; gap: 6px; margin-left: auto; flex-shrink: 0; }
 .chat-group-actions[hidden] { display: none; }
+.chat-group-actions .btn { white-space: nowrap; }
 
 /* 成员选择器 */
 .member-picker {

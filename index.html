@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=35" />
+  <link rel="stylesheet" href="styles.css?v=38" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -268,7 +268,12 @@
       <div id="groupView" class="detail-view" hidden>
         <div class="detail-head">
           <span id="groupDetailAvatar" class="avatar lg"></span>
-          <div class="detail-name" id="groupDetailName"></div>
+          <div class="detail-name-row">
+            <div class="detail-name" id="groupDetailName"></div>
+            <button id="groupRenameBtn" class="icon-edit" hidden title="修改群名称">✎</button>
+          </div>
+          <input id="groupNameEdit" class="detail-name-edit" maxlength="64" hidden
+                 placeholder="输入新群名称，回车保存" />
           <div class="detail-sub" id="groupDetailMeta"></div>
         </div>
         <div class="detail-section-title">群成员</div>
@@ -282,6 +287,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=52"></script>
+  <script src="app.js?v=54"></script>
 </body>
 </html>

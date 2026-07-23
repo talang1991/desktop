@@ -856,6 +856,13 @@
   const groupMessageBtn = $("#groupMessageBtn");
   const groupAddMemberBtn2 = $("#groupAddMemberBtn2");
   const groupLeaveBtn2 = $("#groupLeaveBtn2");
+  const groupRenameBtn = $("#groupRenameBtn");
+  const groupNameEdit = $("#groupNameEdit");
+  groupNameEdit.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); const g = groups.find((x) => x.id === currentGroup); if (g) saveGroupRename(g); }
+    else if (e.key === "Escape") { e.preventDefault(); cancelGroupRename(); }
+  });
+  groupNameEdit.addEventListener("blur", () => { if (!groupNameEdit.hidden) cancelGroupRename(); });
 
   // ---------- 本地聊天缓存（IndexedDB）----------
   // 设计：每条聊天消息先写本地 IndexedDB（离线可用、刷新不丢）；
@@ -1304,6 +1311,16 @@
           await loadGroups();
           if (m.group && m.group.id != null) {
             upsertConversation("group", m.group.id, Date.now(), null, false);
+          }
+        } catch {}
+        break;
+      case "group-updated":
+        // 群名称被群主修改：刷新群列表；若正在查看该群则同步详情页
+        try {
+          await loadGroups();
+          if (chatMode === "group" && Number(currentGroup) === m.group?.id && !groupView.hidden) {
+            const g = groups.find((x) => x.id === m.group.id);
+            if (g) showGroupDetail(g);
           }
         } catch {}
         break;
@@ -2145,14 +2162,32 @@
     }
     renderConversations();
   }
+  // 把时间戳格式化为会话列表右上角的时间：
+  // 当天 → HH:mm；同年跨天 → MM/DD；跨年 → YYYY/MM/DD
+  function formatConvTime(ts) {
+    if (!ts) return "";
+    const d = new Date(ts);
+    const now = new Date();
+    const p2 = (n) => String(n).padStart(2, "0");
+    const sameDay =
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate();
+    if (sameDay) return p2(d.getHours()) + ":" + p2(d.getMinutes());
+    if (d.getFullYear() === now.getFullYear()) return p2(d.getMonth() + 1) + "/" + p2(d.getDate());
+    return d.getFullYear() + "/" + p2(d.getMonth() + 1) + "/" + p2(d.getDate());
+  }
   // 确保某会话存在于列表中：不存在则创建（插入顶部）；已存在则不动顺序（仅刷新高亮）。
   // 用于「从好友/群组列表发起聊天」——让空会话列表也能立即出现该行，同时不影响已有排序。
   function ensureConversation(type, id) {
     id = Number(id);
     const idx = conversations.findIndex((c) => c.type === type && c.id === id);
     if (idx < 0) {
-      conversations.unshift({ type, id, lastTs: Date.now(), lastText: "" });
+      conversations.unshift({ type, id, lastTs: Date.now(), lastText: "", openTs: Date.now() });
       saveConversations();
+    } else {
+      // 记录「打开时间」用于会话列表右上角展示（不影响排序）
+      conversations[idx].openTs = Date.now();
     }
     renderConversations();
   }
@@ -2188,13 +2223,18 @@
         ? `<span class="unread-badge" title="${u} 条未读">${u > 99 ? "99+" : u}</span>`
         : "";
       const preview = escapeHtml((c.lastText || "").slice(0, 20));
+      const showTs = c.openTs != null ? c.openTs : c.lastTs;
+      const timeLabel = formatConvTime(showTs);
       row.innerHTML =
         `<span class="avatar-wrap">` +
         `<span class="avatar sm">${renderAvatar(avatar, (name || "?").charAt(0).toUpperCase())}</span>` +
         `<span class="dot ${online ? "on" : "off"}"></span>` +
         `</span>` +
         `<span class="conv-main">` +
+        `<span class="conv-top">` +
         `<span class="conv-name">${isGroup ? "👥 " : ""}${escapeHtml(name)}</span>` +
+        (timeLabel ? `<span class="conv-time">${timeLabel}</span>` : "") +
+        `</span>` +
         `<span class="conv-preview">${preview}</span>` +
         `</span>` +
         badge +
@@ -2296,6 +2336,53 @@
       groupView.hidden = true;
       chatView.hidden = false;
     };
+    // 仅群主可见「修改群名称」按钮
+    const isOwner = g.ownerId === currentUserId;
+    groupRenameBtn.hidden = !isOwner;
+    if (isOwner) groupRenameBtn.onclick = () => startRenameGroup(g);
+  }
+
+  // 群名称编辑：仅群主，就地编辑
+  function startRenameGroup(g) {
+    groupDetailName.hidden = true;
+    groupNameEdit.value = g.name || "";
+    groupNameEdit.hidden = false;
+    groupRenameBtn.hidden = true;
+    groupNameEdit.focus();
+    groupNameEdit.select();
+  }
+  function cancelGroupRename() {
+    groupNameEdit.hidden = true;
+    groupDetailName.hidden = false;
+    const g = groups.find((x) => x.id === currentGroup);
+    groupRenameBtn.hidden = !(g && g.ownerId === currentUserId);
+  }
+  async function saveGroupRename(g) {
+    const name = groupNameEdit.value.trim();
+    if (!name) { cancelGroupRename(); return; }
+    try {
+      const res = await api(`/api/groups/${g.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name }),
+      });
+      const newName = (res && res.group && res.group.name) || name;
+      const gg = groups.find((x) => x.id === g.id);
+      if (gg) gg.name = newName;
+      groupNameEdit.hidden = true;
+      groupDetailName.hidden = false;
+      groupDetailName.textContent = newName;
+      groupRenameBtn.hidden = !(g.ownerId === currentUserId);
+      renderGroups();
+      renderConversations();
+      if (chatMode === "group" && Number(currentGroup) === g.id) {
+        chatPeerName.textContent = newName;
+        renderAvatarInto($("#chatPeerAvatar"), gg ? gg.avatar : "", (newName || "?").charAt(0).toUpperCase());
+      }
+      toast("群名称已更新");
+    } catch (e) {
+      cancelGroupRename();
+      toast("修改失败：" + (e?.message || e));
+    }
   }
 
   // ---- 创建群聊 ----

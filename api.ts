@@ -6,6 +6,7 @@ import {
   sendFriendRequest, listFriends, listFriendRequests, acceptFriendRequest, getFriendRequestRequester, removeFriend,
   updateUserAvatar, areFriends,
   createGroup, addGroupMember, listUserGroups, getGroupBasic, isGroupMember, leaveGroup,
+  renameGroup, getGroupMemberIds,
   DbUnavailableError,
 } from "./store.ts";
 import { getWsPublicUrl, getIceServers, isOnline, pushToUser } from "./signaling.ts";
@@ -264,6 +265,31 @@ export async function handleApi(req: Request): Promise<Response> {
       if (!(await isGroupMember(gid, user.id))) return json({ error: "你不在该群聊中" }, 403);
       const r = await leaveGroup(gid, user.id);
       return json({ ok: true, disbanded: r.disbanded });
+    }
+
+    // ---- 群聊：修改名称（仅群主）----
+    const rm = path.match(/^\/api\/groups\/(\d+)$/);
+    if (rm && method === "PATCH") {
+      const gid = Number(rm[1]);
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const basic = await getGroupBasic(gid);
+      if (!basic) return json({ error: "群聊不存在" }, 404);
+      if (!(await isGroupMember(gid, user.id))) return json({ error: "你不在该群聊中" }, 403);
+      const b = await req.json().catch(() => ({}));
+      let updated;
+      try {
+        updated = await renameGroup(gid, user.id, String(b.name ?? ""));
+      } catch (err) {
+        return json({ error: (err as Error)?.message || "修改失败" }, 400);
+      }
+      if (!updated) return json({ error: "群聊不存在" }, 404);
+      // 实时通知群内其他成员刷新群名称
+      const memberIds = (await getGroupMemberIds(gid)).filter((id) => id !== user.id);
+      for (const id of memberIds) {
+        pushToUser(id, { type: "group-updated", group: { id: gid, name: updated.name } });
+      }
+      return json({ ok: true, group: updated });
     }
 
     // ---- 好友：通过请求 ----
