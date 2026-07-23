@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=31" />
+  <link rel="stylesheet" href="styles.css?v=35" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -193,17 +193,36 @@
   <div id="chatPanel" class="chat-panel" hidden>
     <aside class="chat-sidebar">
       <div class="chat-sidebar-head">
-        <div class="chat-title">💬 好友</div>
+        <div class="chat-title">聊天</div>
         <button id="chatClose" class="chat-x" title="关闭">✕</button>
       </div>
-      <div class="friend-add">
-        <input id="friendSearch" type="text" placeholder="输入用户名添加好友" maxlength="32" autocomplete="off" />
-        <button id="friendAdd" class="btn primary">添加</button>
-      </div>
-      <div id="friendRequests" class="friend-requests" hidden></div>
 
-      <!-- 群聊分区 -->
-      <div class="group-section">
+      <!-- Tab 栏：会话 / 好友 / 群组 -->
+      <div class="chat-tabs">
+        <button class="chat-tab active" data-tab="conversations">💬 会话<span id="tabConvBadge" class="tab-badge" hidden></span></button>
+        <button class="chat-tab" data-tab="friends">👤 好友<span id="tabFriendBadge" class="tab-badge" hidden></span></button>
+        <button class="chat-tab" data-tab="groups">👥 群组</button>
+      </div>
+
+      <!-- 会话面板：统一展示 私聊 + 群聊，按最近活动排序，可关闭 -->
+      <div class="tab-panel" data-panel="conversations">
+        <div id="convList" class="conv-list"></div>
+        <div id="convEmpty" class="friend-empty" hidden>还没有会话，去「好友」或「群组」开始聊天吧</div>
+      </div>
+
+      <!-- 好友面板：添加好友 / 好友请求 / 好友列表 -->
+      <div class="tab-panel" data-panel="friends" hidden>
+        <div class="friend-add">
+          <input id="friendSearch" type="text" placeholder="输入用户名添加好友" maxlength="32" autocomplete="off" />
+          <button id="friendAdd" class="btn primary">添加</button>
+        </div>
+        <div id="friendRequests" class="friend-requests" hidden></div>
+        <div id="friendList" class="friend-list"></div>
+        <div id="friendEmpty" class="friend-empty">还没有好友，添加好友后即可开始聊天</div>
+      </div>
+
+      <!-- 群组面板：创建群聊 / 群聊列表 -->
+      <div class="tab-panel" data-panel="groups" hidden>
         <div class="group-head">
           <span class="group-title">👥 群聊</span>
           <button id="groupCreateBtn" class="btn ghost small" title="创建群聊">＋ 创建</button>
@@ -211,29 +230,58 @@
         <div id="groupList" class="group-list"></div>
         <div id="groupEmpty" class="friend-empty" hidden>还没有群聊，点「＋ 创建」开始</div>
       </div>
-
-      <div id="friendList" class="friend-list"></div>
-      <div id="friendEmpty" class="friend-empty">还没有好友，添加好友后即可开始聊天</div>
     </aside>
     <section class="chat-main">
-      <div class="chat-header">
-        <span id="chatPeerAvatar" class="avatar sm"></span>
-        <div class="chat-title" id="chatPeerName">选择一个好友开始聊天</div>
-        <div class="chat-status" id="chatStatus">未连接</div>
-        <div id="chatGroupActions" class="chat-group-actions" hidden>
-          <button id="groupAddMember" class="btn ghost small" title="添加成员">＋成员</button>
-          <button id="groupLeave" class="btn ghost small" title="退出群聊">退出</button>
+      <!-- 聊天视图 -->
+      <div id="chatView">
+        <div class="chat-header">
+          <span id="chatPeerAvatar" class="avatar sm"></span>
+          <div class="chat-title" id="chatPeerName">选择一个好友开始聊天</div>
+          <div class="chat-status" id="chatStatus">未连接</div>
+          <div id="chatGroupActions" class="chat-group-actions" hidden>
+            <button id="groupAddMember" class="btn ghost small" title="添加成员">＋成员</button>
+            <button id="groupLeave" class="btn ghost small" title="退出群聊">退出</button>
+          </div>
+        </div>
+        <div id="chatMessages" class="chat-messages"></div>
+        <div class="chat-input-row">
+          <textarea id="chatInput" rows="1" placeholder="输入消息…（Enter 发送，Shift+Enter 换行）"
+                    disabled></textarea>
+          <button id="chatSend" class="btn primary" disabled>发送</button>
         </div>
       </div>
-      <div id="chatMessages" class="chat-messages"></div>
-      <div class="chat-input-row">
-        <textarea id="chatInput" rows="1" placeholder="输入消息…（Enter 发送，Shift+Enter 换行）"
-                  disabled></textarea>
-        <button id="chatSend" class="btn primary" disabled>发送</button>
+
+      <!-- 好友设置（资料）视图：点击好友列表项时显示 -->
+      <div id="friendView" class="detail-view" hidden>
+        <div class="detail-head">
+          <span id="friendDetailAvatar" class="avatar lg"></span>
+          <div class="detail-name" id="friendDetailName"></div>
+          <div class="detail-sub" id="friendDetailStatus"></div>
+        </div>
+        <div class="detail-actions">
+          <button id="friendMessageBtn" class="btn primary">发消息</button>
+          <button id="friendRemoveBtn" class="btn ghost danger">移除好友</button>
+        </div>
+      </div>
+
+      <!-- 群组设置（资料）视图：点击群组列表项时显示 -->
+      <div id="groupView" class="detail-view" hidden>
+        <div class="detail-head">
+          <span id="groupDetailAvatar" class="avatar lg"></span>
+          <div class="detail-name" id="groupDetailName"></div>
+          <div class="detail-sub" id="groupDetailMeta"></div>
+        </div>
+        <div class="detail-section-title">群成员</div>
+        <div id="groupDetailMembers" class="member-list"></div>
+        <div class="detail-actions">
+          <button id="groupMessageBtn" class="btn primary">发消息</button>
+          <button id="groupAddMemberBtn2" class="btn ghost">＋添加成员</button>
+          <button id="groupLeaveBtn2" class="btn ghost danger">退出群聊</button>
+        </div>
       </div>
     </section>
   </div>
 
-  <script src="app.js?v=44"></script>
+  <script src="app.js?v=51"></script>
 </body>
 </html>

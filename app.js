@@ -228,6 +228,7 @@
     await loadUnread();
     await loadGroupUnread();
     updateUnreadTitle();
+    loadConversations();      // 读取本地保存的会话顺序
     loadFriends();
     loadGroups();
     // 兜底：登录后稍作延迟再补算一次离线未读，避免信令 welcome 晚到导致红点漏算
@@ -829,6 +830,33 @@
   const groupLeaveBtn = $("#groupLeave");
   const chatGroupActions = $("#chatGroupActions");
 
+  // 统一会话（私聊 + 群聊）列表 DOM
+  const convListEl = $("#convList");
+  const convEmptyEl = $("#convEmpty");
+
+  // Tab 栏（会话 / 好友 / 群组）DOM
+  const chatTabs = document.querySelectorAll(".chat-tab");
+  const tabPanels = document.querySelectorAll(".tab-panel");
+  const tabConvBadge = $("#tabConvBadge");
+  const tabFriendBadge = $("#tabFriendBadge");
+
+  // 聊天主区域三视图（chatView / 好友详情 / 群组详情）
+  const chatView = $("#chatView");
+  const friendView = $("#friendView");
+  const groupView = $("#groupView");
+  const friendDetailAvatar = $("#friendDetailAvatar");
+  const friendDetailName = $("#friendDetailName");
+  const friendDetailStatus = $("#friendDetailStatus");
+  const friendMessageBtn = $("#friendMessageBtn");
+  const friendRemoveBtn = $("#friendRemoveBtn");
+  const groupDetailAvatar = $("#groupDetailAvatar");
+  const groupDetailName = $("#groupDetailName");
+  const groupDetailMeta = $("#groupDetailMeta");
+  const groupDetailMembers = $("#groupDetailMembers");
+  const groupMessageBtn = $("#groupMessageBtn");
+  const groupAddMemberBtn2 = $("#groupAddMemberBtn2");
+  const groupLeaveBtn2 = $("#groupLeaveBtn2");
+
   // ---------- 本地聊天缓存（IndexedDB）----------
   // 设计：每条聊天消息先写本地 IndexedDB（离线可用、刷新不丢）；
   // 本地缺失/换设备时，再从服务端 Deno KV（保留 3 个月）拉取并同步回本地。
@@ -1050,6 +1078,9 @@
   groupModal.querySelectorAll("[data-close]").forEach((el) => (el.onclick = () => { groupModal.hidden = true; }));
   groupAddModal.querySelectorAll("[data-close]").forEach((el) => (el.onclick = () => { groupAddModal.hidden = true; }));
 
+  // Tab 栏切换
+  chatTabs.forEach((b) => { b.onclick = () => switchChatTab(b.dataset.tab); });
+
   // ---------- 状态 ----------
   let sigSocket = null;
   let sigReconnectTimer = null;
@@ -1079,6 +1110,11 @@
   let groups = [];               // [{id, name, avatar, ownerId, members:[{id,username,avatar,online}]}]
   let groupUnread = {};          // { [groupId]: 未读消息数 }
   let groupRenderedIds = new Set(); // 当前群会话已渲染的消息 id（避免同步重复渲染）
+
+  // ---- 统一会话（私聊 + 群聊）----
+  // conversations 数组：[{ type:"peer"|"group", id, lastTs, lastText }]，按 lastTs 降序
+  // 这就是“会话”概念——把 p2p 聊天和群聊都视为会话，可关闭、新消息/新好友会前置。
+  let conversations = [];
 
   // 默认 ICE 配置。Google STUN 在国内多数网络不通，已移除；
   // 实际优先使用后端 /api/ws-info 下发的 iceServers（含可选 TURN）。
@@ -1133,6 +1169,8 @@
     chatPanel.hidden = false;
     document.body.classList.add("chat-open");
     chatVisible = true;
+    // 打开面板时回到聊天视图（而不是残留的好友/群组详情页）
+    showChatView();
     // 注意：打开整个聊天面板不应自动清除未读——只有点开“具体某个好友”会话（openConversation）才视为已读。
     // 之前这里会在打开面板时 clearUnread(currentPeer)，而 currentPeer 关抽屉后并不会清空，
     // 导致刚给你发消息的好友红点一打开面板就被抹掉（顶栏若还有其他好友未读则仍显示，造成“顶栏有、列表没有”）。
@@ -1206,7 +1244,7 @@
     sigSocket.send(JSON.stringify({ type: "presence", friends: [...presenceFriends] }));
   }
 
-  function onSignalMessage(m) {
+  async function onSignalMessage(m) {
     console.log("[SIG-CLIENT] recv:", m.type, m.fromUsername ? "from=" + m.fromUsername : "", m.from ? "fromId=" + m.from : "");
     switch (m.type) {
       case "welcome":
@@ -1260,9 +1298,14 @@
         });
         break;
       case "group-invite":
-        // 被加入群聊：刷新群列表（并补算未读）
+        // 被加入群聊：刷新群列表（并补算未读），把该群会话前置
         try { toast(`你被拉入群聊「${m.group?.name || "群聊"}」`); } catch {}
-        try { loadGroups(); } catch {}
+        try {
+          await loadGroups();
+          if (m.group && m.group.id != null) {
+            upsertConversation("group", m.group.id, Date.now(), null, false);
+          }
+        } catch {}
         break;
       case "peer-left":
         if (currentPeer === m.from) {
@@ -1405,6 +1448,7 @@
         chatUnreadBadge.hidden = true;
       }
     }
+    updateTabBadges();
   }
   function renderFriends() {
     // 待通过请求
@@ -1431,7 +1475,6 @@
 
     // 好友列表
     friendListEl.innerHTML = "";
-    console.log("[UNREAD-DEBUG] renderFriends friends=", friends.map((f) => ({ id: f.id, t: typeof f.id, name: f.username })), "unread=", JSON.parse(JSON.stringify(unread)));
     if (friends.length === 0) {
       friendEmptyEl.hidden = false;
     } else {
@@ -1439,19 +1482,14 @@
         friends.forEach((f) => {
           const row = document.createElement("div");
           row.className = "friend-row" + (f.id === currentPeer ? " active" : "");
-          const u = unread[f.id] || 0;
-          console.log("[UNREAD-DEBUG] renderFriends row", { friendId: f.id, friendIdType: typeof f.id, unreadVal: u });
-          const badge = u > 0
-            ? `<span class="unread-badge" title="${u} 条未读">${u > 99 ? "99+" : u}</span>`
-            : "";
           row.innerHTML =
             `<span class="avatar-wrap">` +
             `<span class="avatar sm">${renderAvatar(f.avatar, f.username.charAt(0).toUpperCase())}</span>` +
             `<span class="dot ${f.online ? "on" : "off"}"></span>` +
             `</span>` +
-            `<span class="fname">${escapeHtml(f.username)}</span>${badge}` +
+            `<span class="fname">${escapeHtml(f.username)}</span>` +
             `<button class="friend-remove" title="移除好友">✕</button>`;
-        const open = () => openConversation(f);
+        const open = () => showFriendDetail(f);
         row.querySelector(".fname").onclick = open;
         row.querySelector(".avatar-wrap").onclick = open;
         row.querySelector(".friend-remove").onclick = (e) => {
@@ -1461,6 +1499,8 @@
         friendListEl.appendChild(row);
       });
     }
+    renderConversations();
+    updateTabBadges();
   }
 
   async function addFriend() {
@@ -1473,15 +1513,26 @@
         ? `已与 ${r.friend.username} 成为好友`
         : `已向 ${r.friend.username} 发送好友请求`);
       await loadFriends();
+      // 新加好友（已成为好友）→ 把会话前置
+      if (r.friend.status === "accepted") {
+        const f = friends.find((x) => x.username === username);
+        if (f) upsertConversation("peer", f.id, Date.now(), null, false);
+      }
     } catch (e) {
       toast(e.message || "添加失败");
     }
   }
   async function acceptRequest(id) {
     try {
+      const req = friendRequests.find((x) => x.id === id);
       await api("/api/friends/accept", { method: "POST", body: JSON.stringify({ requestId: id }) });
       toast("已添加为好友");
       await loadFriends();
+      // 新加好友（对方通过请求）→ 把会话前置
+      if (req) {
+        const f = friends.find((x) => x.username === req.username);
+        if (f) upsertConversation("peer", f.id, Date.now(), null, false);
+      }
     } catch (e) {
       toast(e.message || "操作失败");
     }
@@ -1510,10 +1561,21 @@
     chatVisible = true;
     chatPanel.hidden = false;
     document.body.classList.add("chat-open");
+    switchChatTab("conversations");
+    showChatView();
     currentPeerName = f.username;
     currentPeerAvatar = f.avatar || "";
     chatPeerName.textContent = f.username;
     renderAvatarInto($("#chatPeerAvatar"), f.avatar, f.username.charAt(0).toUpperCase());
+    // 重置顶栏状态，避免从群聊切换过来时仍残留“群聊·X人”
+    const p = peers.get(Number(f.id));
+    if (p && (p.p2pReady || (p.pc && p.pc.connectionState === "connected"))) {
+      setChatStatus("P2P 已直连 🔗", "ok");
+    } else if (p && p.pc && p.pc.connectionState === "connecting") {
+      setChatStatus("正在连接…", "warn");
+    } else {
+      setChatStatus(f.online ? "在线" : "离线", f.online ? "ok" : "");
+    }
     enableChatInput();
     renderFriends();
     resetChatMessages(f.username);
@@ -1528,6 +1590,8 @@
     // 拉取并渲染完成后，当前会话已是「已读」状态：清掉该好友红点，
     // 避免后台离线补算（syncAllUnread）在打开会话期间 bump 后残留红点。
     clearUnread(f.id);
+    // 打开会话：仅刷新会话列表高亮，不改变会话排序（点击会话不再前置）
+    renderConversations();
   }
   function reCall() {
     const f = friends.find((x) => x.id === currentPeer);
@@ -1766,6 +1830,8 @@
     }
     chatInput.value = "";
     chatInput.style.height = "auto";
+    // 自己发送 → 会话前置并更新预览
+    upsertConversation("peer", currentPeer, ts, text, false);
   }
 
   function addChatMessage(role, text, ts) {
@@ -1844,9 +1910,12 @@
         renderedIds.add(m.id);
         renderMessageRow(m.from === myId ? "me" : "peer", m.text, m.ts);
       }
+      // 新消息把会话前置（更新预览与排序）
+      upsertConversation("peer", m.from, m.ts, m.text, false);
     } else if (m.from !== myId) {
-      // 未选中该好友：累加未读红点提醒（持久化）
+      // 未选中该好友：累加未读红点提醒（持久化），并把会话前置
       addUnread(m.from);
+      upsertConversation("peer", m.from, m.ts, m.text, false);
     }
   }
   // 打开会话时：先渲染本地缓存（即时、离线可用），再增量同步服务端
@@ -1978,20 +2047,17 @@
       groups.forEach((g) => {
         const row = document.createElement("div");
         row.className = "group-row" + (chatMode === "group" && currentGroup === g.id ? " active" : "");
-        const u = groupUnread[g.id] || 0;
         const anyOnline = (g.members || []).some((m) => m.online);
-        const badge = u > 0
-          ? `<span class="unread-badge" title="${u} 条未读">${u > 99 ? "99+" : u}</span>`
-          : "";
         row.innerHTML =
           `<span class="avatar sm">${renderAvatar(g.avatar, (g.name || "?").charAt(0).toUpperCase())}</span>` +
           `<span class="gname">${escapeHtml(g.name)}</span>` +
           `<span class="gmeta">${(g.members || []).length}人</span>` +
-          `<span class="dot ${anyOnline ? "on" : "off"}"></span>${badge}`;
-        row.onclick = () => openGroupConversation(g);
+          `<span class="dot ${anyOnline ? "on" : "off"}</span>`;
+        row.onclick = () => showGroupDetail(g);
         groupListEl.appendChild(row);
       });
     }
+    renderConversations();
   }
 
   // ---- 打开群会话 ----
@@ -2003,6 +2069,8 @@
     chatVisible = true;
     chatPanel.hidden = false;
     document.body.classList.add("chat-open");
+    switchChatTab("conversations");
+    showChatView();
     chatPeerName.textContent = g.name;
     renderAvatarInto($("#chatPeerAvatar"), g.avatar, (g.name || "?").charAt(0).toUpperCase());
     chatGroupActions.hidden = false;
@@ -2015,6 +2083,208 @@
     await loadGroupConversation(g.id);
     await syncGroupConversation(g.id);
     clearGroupUnread(g.id);
+    // 打开群会话：仅刷新会话列表高亮，不改变会话排序（点击会话不再前置）
+    renderConversations();
+  }
+
+  // ---------- 统一会话（私聊 + 群聊）----------
+  // 把 p2p 聊天与群聊都视为“会话”，统一成一张按最近活动排序的列表；
+  // 会话可关闭（从列表移除，但好友/群本身保留），新消息或新好友会把会话前置。
+  function convStorageKey() { return "convOrder:" + (currentUserId || "anon"); }
+  function loadConversations() {
+    try {
+      const raw = localStorage.getItem(convStorageKey());
+      const arr = raw ? JSON.parse(raw) : [];
+      conversations = Array.isArray(arr) ? arr : [];
+    } catch { conversations = []; }
+  }
+  function saveConversations() {
+    try { localStorage.setItem(convStorageKey(), JSON.stringify(conversations)); } catch {}
+  }
+  // 把某会话提到列表最前（用于新消息/发消息/新好友等活跃场景）；open 参数保留但已不再由会话列表点击调用
+  function upsertConversation(type, id, ts, text, open) {
+    id = Number(id);
+    ts = Number(ts) || Date.now();
+    const idx = conversations.findIndex((c) => c.type === type && c.id === id);
+    if (idx >= 0) {
+      conversations[idx].lastTs = ts;
+      if (text != null) conversations[idx].lastText = String(text);
+      const [item] = conversations.splice(idx, 1);
+      conversations.unshift(item);
+    } else {
+      conversations.unshift({ type, id, lastTs: ts, lastText: text != null ? String(text) : "" });
+    }
+    saveConversations();
+    renderConversations();
+    if (open) {
+      if (type === "group") {
+        const g = groups.find((x) => x.id === id);
+        if (g) openGroupConversation(g);
+      } else {
+        const f = friends.find((x) => x.id === id);
+        if (f) openConversation(f);
+      }
+    }
+  }
+  // 关闭（移除）一个会话：从列表移除；若正打开它则同时关闭聊天面板
+  function removeConversation(type, id) {
+    id = Number(id);
+    const idx = conversations.findIndex((c) => c.type === type && c.id === id);
+    if (idx < 0) return;
+    const wasActive = (type === "group")
+      ? (chatMode === "group" && Number(currentGroup) === id)
+      : (chatMode === "peer" && Number(currentPeer) === id);
+    conversations.splice(idx, 1);
+    saveConversations();
+    if (wasActive) {
+      closeChat();
+      chatMode = "peer";
+      currentPeer = null;
+      currentGroup = null;
+      resetChatMessages();
+    }
+    renderConversations();
+  }
+  function renderConversations() {
+    if (!convListEl) return;
+    convListEl.innerHTML = "";
+    if (!conversations.length) {
+      if (convEmptyEl) convEmptyEl.hidden = false;
+      return;
+    }
+    if (convEmptyEl) convEmptyEl.hidden = true;
+    for (const c of conversations) {
+      const isGroup = c.type === "group";
+      let name = "会话", avatar = "", online = false;
+      if (isGroup) {
+        const g = groups.find((x) => x.id === c.id);
+        name = g ? g.name : "群聊";
+        avatar = g ? (g.avatar || "") : "";
+        online = g ? (g.members || []).some((m) => m.online) : false;
+      } else {
+        const f = friends.find((x) => x.id === c.id);
+        name = f ? f.username : "好友";
+        avatar = f ? (f.avatar || "") : "";
+        online = f ? !!f.online : false;
+      }
+      const u = isGroup ? (groupUnread[c.id] || 0) : (unread[c.id] || 0);
+      const active = isGroup
+        ? (chatMode === "group" && Number(currentGroup) === c.id)
+        : (chatMode === "peer" && Number(currentPeer) === c.id);
+      const row = document.createElement("div");
+      row.className = "conv-row" + (active ? " active" : "");
+      const badge = u > 0
+        ? `<span class="unread-badge" title="${u} 条未读">${u > 99 ? "99+" : u}</span>`
+        : "";
+      const preview = escapeHtml((c.lastText || "").slice(0, 20));
+      row.innerHTML =
+        `<span class="avatar-wrap">` +
+        `<span class="avatar sm">${renderAvatar(avatar, (name || "?").charAt(0).toUpperCase())}</span>` +
+        `<span class="dot ${online ? "on" : "off"}"></span>` +
+        `</span>` +
+        `<span class="conv-main">` +
+        `<span class="conv-name">${isGroup ? "👥 " : ""}${escapeHtml(name)}</span>` +
+        `<span class="conv-preview">${preview}</span>` +
+        `</span>` +
+        badge +
+        `<button class="conv-close" title="关闭会话">✕</button>`;
+      const open = () => {
+        if (c.type === "group") {
+          const g = groups.find((x) => x.id === c.id);
+          if (g) openGroupConversation(g);
+        } else {
+          const f = friends.find((x) => x.id === c.id);
+          if (f) openConversation(f);
+        }
+      };
+      row.querySelector(".avatar-wrap").onclick = open;
+      row.querySelector(".conv-main").onclick = open;
+      row.querySelector(".conv-close").onclick = (e) => {
+        e.stopPropagation();
+        removeConversation(c.type, c.id);
+      };
+      convListEl.appendChild(row);
+    }
+  }
+
+  // ---------- Tab 栏切换（会话 / 好友 / 群组）----------
+  function switchChatTab(name) {
+    chatTabs.forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+    tabPanels.forEach((p) => { p.hidden = p.dataset.panel !== name; });
+  }
+  function setTabBadge(el, count) {
+    if (!el) return;
+    if (count > 0) {
+      el.textContent = count > 99 ? "99+" : String(count);
+      el.hidden = false;
+    } else {
+      el.hidden = true;
+    }
+  }
+  // 更新各 Tab 上的徽标：会话=总未读、群组=群未读、好友=待处理请求数
+  function updateTabBadges() {
+    let convTotal = 0;
+    for (const k in unread) convTotal += unread[k] || 0;
+    for (const k in groupUnread) convTotal += groupUnread[k] || 0;
+    setTabBadge(tabConvBadge, convTotal);
+    setTabBadge(tabFriendBadge, friendRequests.length);
+  }
+
+  // ---------- 聊天主区域三视图切换 ----------
+  // 默认聊天视图（会话 Tab 进入聊天时使用）
+  function showChatView() {
+    chatView.hidden = false;
+    friendView.hidden = true;
+    groupView.hidden = true;
+  }
+  // 点击好友列表项 → 右侧显示好友资料/设置页（不直接进入聊天）
+  function showFriendDetail(f) {
+    chatVisible = true;
+    chatPanel.hidden = false;
+    document.body.classList.add("chat-open");
+    renderAvatarInto(friendDetailAvatar, f.avatar, (f.username || "?").charAt(0).toUpperCase());
+    friendDetailName.textContent = f.username;
+    friendDetailStatus.textContent = f.online ? "在线" : "离线";
+    chatView.hidden = true;
+    friendView.hidden = false;
+    groupView.hidden = true;
+    friendMessageBtn.onclick = () => openConversation(f);
+    friendRemoveBtn.onclick = async () => {
+      await removeFriend(f);
+      friendView.hidden = true;
+      chatView.hidden = false;
+    };
+  }
+  // 点击群组列表项 → 右侧显示群组资料/设置页（不直接进入聊天）
+  function showGroupDetail(g) {
+    chatVisible = true;
+    chatPanel.hidden = false;
+    document.body.classList.add("chat-open");
+    currentGroup = g.id; // 供设置页内的「退出/添加成员」操作使用
+    renderAvatarInto(groupDetailAvatar, g.avatar, (g.name || "?").charAt(0).toUpperCase());
+    groupDetailName.textContent = g.name;
+    const members = g.members || [];
+    groupDetailMeta.textContent = `${members.length} 名成员`;
+    groupDetailMembers.innerHTML = "";
+    members.forEach((m) => {
+      const row = document.createElement("div");
+      row.className = "member-row";
+      row.innerHTML =
+        `<span class="avatar sm">${renderAvatar(m.avatar, (m.username || "?").charAt(0).toUpperCase())}</span>` +
+        `<span class="mname">${escapeHtml(m.username)}</span>` +
+        (m.id === g.ownerId ? `<span class="owner-tag">群主</span>` : "");
+      groupDetailMembers.appendChild(row);
+    });
+    chatView.hidden = true;
+    friendView.hidden = true;
+    groupView.hidden = false;
+    groupMessageBtn.onclick = () => openGroupConversation(g);
+    groupAddMemberBtn2.onclick = () => openAddMemberModal();
+    groupLeaveBtn2.onclick = async () => {
+      await leaveCurrentGroup();
+      groupView.hidden = true;
+      chatView.hidden = false;
+    };
   }
 
   // ---- 创建群聊 ----
@@ -2145,6 +2415,8 @@
     }
     chatInput.value = "";
     chatInput.style.height = "auto";
+    // 自己发送 → 会话前置并更新预览
+    upsertConversation("group", gid, ts, text, false);
   }
 
   // ---- 群消息：接收 ----
@@ -2161,8 +2433,11 @@
         const sm = groupMemberName(gid, m.from);
         renderMessageRow(m.from === myId ? "me" : "peer", m.text, m.ts, sm.name, sm.avatar);
       }
+      // 新消息把会话前置（更新预览与排序）
+      upsertConversation("group", gid, m.ts, m.text, false);
     } else if (m.from !== myId) {
       bumpGroupUnread(gid);
+      upsertConversation("group", gid, m.ts, m.text, false);
     }
   }
 
