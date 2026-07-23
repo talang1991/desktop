@@ -1590,8 +1590,8 @@
     // 拉取并渲染完成后，当前会话已是「已读」状态：清掉该好友红点，
     // 避免后台离线补算（syncAllUnread）在打开会话期间 bump 后残留红点。
     clearUnread(f.id);
-    // 打开会话：仅刷新会话列表高亮，不改变会话排序（点击会话不再前置）
-    renderConversations();
+    // 打开会话：确保该会话出现在列表（首次发起聊天时创建），不改已有排序
+    ensureConversation("peer", f.id);
   }
   function reCall() {
     const f = friends.find((x) => x.id === currentPeer);
@@ -2083,8 +2083,8 @@
     await loadGroupConversation(g.id);
     await syncGroupConversation(g.id);
     clearGroupUnread(g.id);
-    // 打开群会话：仅刷新会话列表高亮，不改变会话排序（点击会话不再前置）
-    renderConversations();
+    // 打开群会话：确保该会话出现在列表（首次发起聊天时创建），不改已有排序
+    ensureConversation("group", g.id);
   }
 
   // ---------- 统一会话（私聊 + 群聊）----------
@@ -2142,6 +2142,17 @@
       currentPeer = null;
       currentGroup = null;
       resetChatMessages();
+    }
+    renderConversations();
+  }
+  // 确保某会话存在于列表中：不存在则创建（插入顶部）；已存在则不动顺序（仅刷新高亮）。
+  // 用于「从好友/群组列表发起聊天」——让空会话列表也能立即出现该行，同时不影响已有排序。
+  function ensureConversation(type, id) {
+    id = Number(id);
+    const idx = conversations.findIndex((c) => c.type === type && c.id === id);
+    if (idx < 0) {
+      conversations.unshift({ type, id, lastTs: Date.now(), lastText: "" });
+      saveConversations();
     }
     renderConversations();
   }
