@@ -2338,12 +2338,11 @@
     id = Number(id);
     const idx = conversations.findIndex((c) => c.type === type && c.id === id);
     if (idx < 0) {
+      // 首次创建会话行时记录一次「打开时间」，用于会话列表右上角展示
       conversations.unshift({ type, id, lastTs: Date.now(), lastText: "", openTs: Date.now() });
       saveConversations();
-    } else {
-      // 记录「打开时间」用于会话列表右上角展示（不影响排序）
-      conversations[idx].openTs = Date.now();
     }
+    // 已存在的会话：重新点击/打开不再更新打开时间（保持首次打开时记录的值）
     renderConversations();
   }
   function renderConversations() {
