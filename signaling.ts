@@ -228,6 +228,40 @@ export function attachSignaling(server: Server): void {
           return;
         }
 
+        // ---- 群会议（多人 WebRTC 全网状）信令广播 ----
+        // SDP/ICE 仍走上面已有的 signal（按 userId 定向），这里只负责“谁在会议里”的广播，
+        // 让各成员互相建立 RTCPeerConnection。三类消息均校验群成员资格，并排除发送者本人。
+        case "group-call": {
+          const groupId = Number(msg.groupId);
+          if (!groupId) return;
+          if (!(await isGroupMember(groupId, user!.id))) {
+            send(ws, { type: "error", error: "你不在该群聊中" });
+            return;
+          }
+          const media = typeof msg.media === "string" ? msg.media : "video";
+          const members = (await getGroupMemberIds(groupId)).filter((m) => m !== user!.id);
+          routeToEach(members, { type: "group-call", groupId, from: user!.id, media });
+          return;
+        }
+        case "group-join": {
+          const groupId = Number(msg.groupId);
+          if (!groupId) return;
+          if (!(await isGroupMember(groupId, user!.id))) {
+            send(ws, { type: "error", error: "你不在该群聊中" });
+            return;
+          }
+          const members = (await getGroupMemberIds(groupId)).filter((m) => m !== user!.id);
+          routeToEach(members, { type: "group-join", groupId, from: user!.id });
+          return;
+        }
+        case "group-leave": {
+          const groupId = Number(msg.groupId);
+          if (!groupId) return;
+          const members = (await getGroupMemberIds(groupId)).filter((m) => m !== user!.id);
+          routeToEach(members, { type: "group-leave", groupId, from: user!.id });
+          return;
+        }
+
         // 结束当前对话
         case "bye": {
           const to = Number(msg.to);

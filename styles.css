@@ -1426,3 +1426,103 @@ body.resizing .iframe-frame { pointer-events: none !important; }
 .call-incoming-actions .call-ctrl { position: static; transform: none; }
 .call-incoming-actions .call-ctrl:hover { transform: translateY(-1px); }
 
+/* ============ 群会议面板（多人视频网格） ============ */
+.meeting-panel {
+  position: absolute;
+  inset: 0;
+  z-index: 62;
+  background: #0b0d12;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.meeting-panel[hidden] { display: none; }
+
+.meeting-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.04);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.meeting-title { font-size: 15px; font-weight: 600; color: #fff; }
+.meeting-count {
+  font-size: 12px; color: #b9c0cc;
+  background: rgba(255,255,255,0.1);
+  padding: 2px 8px; border-radius: 999px;
+}
+.meeting-leave {
+  margin-left: auto;
+  font-size: 13px;
+  color: #fff;
+  background: #e23b3b;
+  border: 1px solid #e23b3b;
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.meeting-leave:hover { background: #c92f2f; }
+
+.meeting-grid {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-auto-rows: 1fr;
+  gap: 10px;
+  padding: 12px;
+  overflow: auto;
+  align-content: center;
+  justify-content: center;
+}
+
+.meeting-tile {
+  position: relative;
+  background: #1b1f2a;
+  border-radius: 12px;
+  overflow: hidden;
+  min-height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.meeting-tile.self { border-color: var(--primary); }
+
+.meeting-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+  display: block;
+}
+.meeting-panel[data-type="audio"] .meeting-video { display: none; }
+
+.meeting-name {
+  position: absolute;
+  left: 8px; bottom: 8px;
+  max-width: calc(100% - 16px);
+  font-size: 12px;
+  color: #fff;
+  background: rgba(0,0,0,0.55);
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+/* 语音会议时，瓦片居中显示一个头像占位（复用头像样式） */
+.meeting-panel[data-type="audio"] .meeting-tile::after {
+  content: attr(data-initial);
+  position: absolute;
+  width: 64px; height: 64px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 26px; font-weight: 700;
+}
+.meeting-panel[data-type="audio"] .meeting-tile.self::after { content: "我"; }
+
+

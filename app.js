@@ -1077,6 +1077,24 @@
   const incomingType = $("#incomingType");
   const btnIncomingAccept = $("#btnIncomingAccept");
   const btnIncomingDecline = $("#btnIncomingDecline");
+  // 群会议相关 DOM
+  const meetingPanel = $("#meetingPanel");
+  const meetingGrid = $("#meetingGrid");
+  const meetingLocalVideo = $("#meetingLocalVideo");
+  const meetingGroupName = $("#meetingGroupName");
+  const meetingCount = $("#meetingCount");
+  const btnMeetingMute = $("#btnMeetingMute");
+  const btnMeetingCam = $("#btnMeetingCam");
+  const btnMeetingHangup = $("#btnMeetingHangup");
+  const btnMeetingLeave = $("#btnMeetingLeave");
+  const groupMeetingBtn = $("#groupMeetingBtn");       // 群聊头部：发起会议
+  const groupMeetingBtn2 = $("#groupMeetingBtn2");     // 群详情：发起会议
+  const groupCallInvite = $("#groupCallInvite");
+  const groupCallAvatar = $("#groupCallAvatar");
+  const groupCallName = $("#groupCallName");
+  const groupCallType = $("#groupCallType");
+  const btnGroupCallJoin = $("#btnGroupCallJoin");
+  const btnGroupCallIgnore = $("#btnGroupCallIgnore");
   const friendListEl = $("#friendList");
   const friendRequestsEl = $("#friendRequests");
   const friendEmptyEl = $("#friendEmpty");
@@ -1354,6 +1372,19 @@
   if (btnIncomingAccept) btnIncomingAccept.onclick = acceptCall;
   if (btnIncomingDecline) btnIncomingDecline.onclick = declineCall;
 
+  // 群会议事件
+  if (groupMeetingBtn) groupMeetingBtn.onclick = () => { const g = groups.find((x) => x.id === currentGroup); if (g) startGroupMeeting(g.id, "video"); };
+  if (groupMeetingBtn2) groupMeetingBtn2.onclick = () => { const g = groups.find((x) => x.id === currentGroup); if (g) startGroupMeeting(g.id, "video"); };
+  if (btnMeetingMute) btnMeetingMute.onclick = toggleMeetingMute;
+  if (btnMeetingCam) btnMeetingCam.onclick = toggleMeetingCam;
+  if (btnMeetingHangup) btnMeetingHangup.onclick = leaveGroupMeeting;
+  if (btnMeetingLeave) btnMeetingLeave.onclick = leaveGroupMeeting;
+  if (btnGroupCallJoin) btnGroupCallJoin.onclick = () => {
+    const pg = pendingGroupCall;
+    if (pg) joinGroupMeeting(pg.groupId, pg.media, pg.from);
+  };
+  if (btnGroupCallIgnore) btnGroupCallIgnore.onclick = hideGroupCallInvite;
+
   // 群聊事件
   groupCreateBtn.onclick = openGroupModal;
   groupCreateConfirm.onclick = submitCreateGroup;
@@ -1377,6 +1408,8 @@
   let currentPeerAvatar = "";
   // 每个好友一条独立连接：peers = Map<peerId, { pc, dc, p2pReady, status }>
   const peers = new Map();
+  // 缓存各 peer 最近一次收到的远端流，供“先收到流、后加入会议”时补渲染到会议网格
+  const peerStreams = new Map();
   let relayActive = false;       // 中继兜底开关（全局：只要任一好友可走中继即为 true）
   let enteringMsg = null;
   let renderedIds = new Set();   // 当前会话已渲染的消息 id，避免同步时重复渲染
@@ -1465,6 +1498,7 @@
   }
   function closeChat() {
     if (callState !== "idle") endCall(); // 关闭聊天面板时若正在通话，先结束并通知对方
+    if (meetingActive) leaveGroupMeeting(); // 群会议随聊天面板关闭而结束
     chatPanel.hidden = true; document.body.classList.remove("chat-open"); chatVisible = false;
     updateCallButtons();
   }
@@ -1671,11 +1705,26 @@
           }
         } catch {}
         break;
+      case "group-call":
+        // 群会议发起邀请：弹出“加入会议”提示（若已在同群会议中则忽略）
+        onGroupCall(m.groupId, m.from, m.media);
+        break;
+      case "group-join":
+        // 有成员加入会议：与其建立连接（全网状）
+        onGroupJoin(m.groupId, m.from);
+        break;
+      case "group-leave":
+        // 有成员离开会议：清理其瓦片与连接
+        onGroupLeave(m.groupId, m.from);
+        break;
       case "peer-left":
         if (currentPeer === m.from) {
           setChatStatus("对方已结束对话（仍可发送离线消息）", "warn");
         }
         if (callPeerId === m.from) endCallLocal(); // 对方整体断开：清理进行中的通话
+        // 群会议中的成员：其连接由会议生命周期管理（离开用 group-leave），
+        // 不应因对方结束 1:1 会话的 bye 而被拆除；连接失败会由 ICE 状态清理瓦片。
+        if (meetingActive && meetingMembers.has(Number(m.from))) break;
         dropPeerConn(m.from); // 关闭该好友连接，不影响其它好友
         break;
       case "error":
@@ -2011,6 +2060,7 @@
     try { if (p.dc) p.dc.close(); } catch {}
     try { if (p.pc) p.pc.close(); } catch {}
     peers.delete(id);
+    peerStreams.delete(id); // 一并清理缓存的远端流，避免会议网格残留旧流
   }
   // 仅清理某好友旧 pc/dc（用于重协商），保留 map 条目
   function teardownPeer(id) {
@@ -2040,6 +2090,16 @@
   let camOff = false;
   let incomingCallFrom = null;     // 正在响铃的来电对象
   let incomingCallType = null;
+
+  // ===================== 群会议（多人 WebRTC 全网状）=====================
+  // 每个成员与群内其他在线成员各建一条 RTCPeerConnection（复用 peers map 与完美协商），
+  // 无需媒体服务器；signal 仍按 userId 定向转发 SDP/ICE，“谁在会议里”由 group-call/join/leave 广播。
+  let meetingActive = false;       // 是否正在群会议中
+  let meetingGroupId = null;       // 会议所属群 id
+  let meetingType = null;          // "audio" | "video"
+  let meetingMembers = new Set();  // 会议成员 userId 集合（含自己 myId）
+  // 待接听的群会议邀请（点击“加入”时用到）
+  let pendingGroupCall = null;     // { groupId, from, media }
 
   function startCall(to, name, mediaType) {
     to = Number(to);
@@ -2098,6 +2158,7 @@
 
   function endCurrent() {
     if (callState !== "idle") endCall(); // 退出会话时若正在通话，先通知对方并清理
+    if (meetingActive) leaveGroupMeeting();
     if (sigSocket && currentPeer != null) {
       try { sigSocket.send(JSON.stringify({ type: "bye", to: currentPeer })); } catch {}
     }
@@ -2152,6 +2213,15 @@
     p.pc.onconnectionstatechange = () => {
       p.status = p.pc.connectionState;
       if (p.pc.connectionState === "failed") {
+        // 群会议中：某成员连接失败 → 清理其瓦片（对方可能已异常退出）
+        if (meetingActive && meetingMembers.has(id)) {
+          meetingMembers.delete(id);
+          removeMeetingTile(id);
+          try { if (p.pc) p.pc.close(); } catch {}
+          peers.delete(id);
+          updateMeetingCount();
+          return;
+        }
         p.p2pReady = false;
         setPeerStatus(id, "直连失败，改用中继", "warn");
         enableRelay(id);
@@ -2163,6 +2233,13 @@
     p.pc.ontrack = (e) => {
       const stream = e.streams && e.streams[0];
       if (!stream) return;
+      // 始终缓存，供会议加入后补渲染（避免“先收到流、后加入会议”导致画面缺失）
+      peerStreams.set(id, stream);
+      // 群会议成员：直接渲染到会议网格（每个成员一条独立 pc）
+      if (meetingActive && meetingMembers.has(id)) {
+        attachMeetingStream(id, stream);
+        return;
+      }
       // 来电未接听前不要渲染/播放（尤其音频自动播放），先缓存，接听后再呈现
       if (callIsCaller || callState === "active") {
         attachRemoteStream(stream);
@@ -2284,11 +2361,13 @@
     const idle = callState === "idle";
     if (btnVoiceCall) btnVoiceCall.hidden = !(show && idle);
     if (btnVideoCall) btnVideoCall.hidden = !(show && idle);
+    updateMeetingButtons();
   }
 
   async function startMediaCall(peerId, type) {
     peerId = Number(peerId);
     if (callState !== "idle") { toast("已有进行中的通话"); return; }
+    if (meetingActive) { toast("请先离开当前群会议"); return; }
     const f = friends.find((x) => x.id === peerId);
     if (!f) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -2509,6 +2588,255 @@
       btnCallCam.textContent = camOff ? "🚫" : "📹";
       btnCallCam.classList.toggle("off", camOff);
     }
+  }
+
+  // ===================== 群会议（多人 WebRTC 全网状）=====================
+  // 每个成员与群内其他在线成员各建一条 RTCPeerConnection（复用 peers map 与完美协商），
+  // 无需媒体服务器；SDP/ICE 仍走 signal（按 userId 定向），“谁在会议里”由 group-call/join/leave 广播。
+  async function startGroupMeeting(groupId, type) {
+    groupId = Number(groupId);
+    type = type === "audio" ? "audio" : "video";
+    if (callState !== "idle") { toast("请先结束当前通话"); return; }
+    if (meetingActive) { toast("已在会议中"); return; }
+    const g = groups.find((x) => x.id === groupId);
+    if (!g) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast("当前浏览器不支持音视频会议"); return;
+    }
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: type === "video" ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+      });
+    } catch (err) {
+      toast("无法访问摄像头/麦克风：" + ((err && err.message) || err.name || err));
+      return;
+    }
+    meetingActive = true;
+    meetingGroupId = groupId;
+    meetingType = type;
+    meetingMembers = new Set([myId]);
+    micMuted = false; camOff = false;
+    bindMeetingLocal();
+    showMeetingPanel(g);
+    // 与所有在线成员建立连接（各建一条 pc，立即携带本端媒体）
+    const others = (g.members || []).filter((m) => m.id !== myId && m.online);
+    others.forEach((m) => connectMeetingPeer(m.id));
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "group-call", groupId, media: type }));
+    }
+    toast("已发起群会议，正在呼叫在线成员…");
+    updateMeetingButtons();
+  }
+
+  async function joinGroupMeeting(groupId, type, from) {
+    groupId = Number(groupId);
+    type = type === "audio" ? "audio" : "video";
+    if (callState !== "idle") { toast("请先结束当前通话"); return; }
+    if (meetingActive && meetingGroupId !== groupId) { toast("已在其它群会议中"); return; }
+    const g = groups.find((x) => x.id === groupId);
+    if (!g) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast("当前浏览器不支持音视频会议"); return;
+    }
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: type === "video" ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+      });
+    } catch (err) {
+      toast("无法访问摄像头/麦克风：" + ((err && err.message) || err.name || err));
+      return;
+    }
+    meetingActive = true;
+    meetingGroupId = groupId;
+    meetingType = type;
+    meetingMembers = meetingMembers || new Set();
+    meetingMembers.add(myId);
+    micMuted = false; camOff = false;
+    bindMeetingLocal();
+    showMeetingPanel(g);
+    // 与所有在线成员建立连接（含发起者与各成员），保证全网状
+    const others = (g.members || []).filter((m) => m.id !== myId && m.online);
+    others.forEach((m) => connectMeetingPeer(m.id));
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "group-join", groupId }));
+    }
+    hideGroupCallInvite();
+    updateMeetingButtons();
+  }
+
+  // 与某一群成员建立（或复用）一条带媒体的 pc；全网状核心：每人各持一条到其它成员的 pc
+  function connectMeetingPeer(memberId) {
+    memberId = Number(memberId);
+    if (memberId === myId || !meetingActive) return;
+    const p = ensurePeerConn(memberId);
+    const st = p.pc ? p.pc.connectionState : null;
+    // 已连接 / 连接中：无需重建，仅兼容“迟到补加媒体”，并补渲染已缓存的远端流
+    if (p.pc && (st === "connected" || st === "connecting" || st === "new")) {
+      if (localStream && !p.mediaAdded) addLocalMediaTracks(p);
+      if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
+      return;
+    }
+    teardownPeer(memberId);
+    try {
+      p.pc = new RTCPeerConnection(rtcConfig());
+      p.pc._peerId = memberId;
+      setupPc(p);
+      p.mediaAdded = false;
+      // 群会议：立即携带本端媒体（mesh 每人各自带媒体，无需等对方先发 offer），触发协商
+      if (localStream) addLocalMediaTracks(p);
+      meetingMembers.add(memberId);
+      // 若该成员此前已发来流（先于本端加入会议到达），补渲染到网格
+      if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
+    } catch (e) {
+      console.error("[MEETING] connectMeetingPeer 失败", memberId, e);
+    }
+  }
+
+  function bindMeetingLocal() {
+    if (meetingLocalVideo && localStream) meetingLocalVideo.srcObject = localStream;
+    if (meetingPanel) {
+      meetingPanel.dataset.type = meetingType || "video";
+      if (btnMeetingCam) btnMeetingCam.hidden = meetingType !== "video";
+    }
+  }
+
+  function showMeetingPanel(g) {
+    if (!meetingPanel) return;
+    meetingPanel.hidden = false;
+    if (meetingGroupName) meetingGroupName.textContent = (g && g.name) || "群会议";
+    updateMeetingCount();
+  }
+
+  function updateMeetingCount() {
+    if (!meetingCount) return;
+    meetingCount.textContent = meetingMembers.size + " 人";
+  }
+
+  // 将某成员的远端流挂到会议网格的一个瓦片里（按 userId 区分）
+  function attachMeetingStream(id, stream) {
+    if (!meetingGrid) return;
+    let tile = meetingGrid.querySelector('.meeting-tile[data-uid="' + id + '"]');
+    if (!tile) {
+      tile = document.createElement("div");
+      tile.className = "meeting-tile";
+      tile.dataset.uid = id;
+      const v = document.createElement("video");
+      v.className = "meeting-video";
+      v.autoplay = true; v.playsInline = true;
+      const nm = document.createElement("span");
+      nm.className = "meeting-name";
+      const info = groupMemberName(meetingGroupId, id);
+      nm.textContent = info.name || String(id);
+      tile.appendChild(v);
+      tile.appendChild(nm);
+      const init = (info.name || String(id)).trim().charAt(0).toUpperCase();
+      tile.dataset.initial = init || "?";
+      meetingGrid.appendChild(tile);
+      updateMeetingCount();
+    }
+    const v = tile.querySelector("video");
+    if (v.srcObject !== stream) v.srcObject = stream;
+  }
+
+  function removeMeetingTile(id) {
+    if (!meetingGrid) return;
+    const tile = meetingGrid.querySelector('.meeting-tile[data-uid="' + id + '"]');
+    if (tile) tile.remove();
+    updateMeetingCount();
+  }
+
+  function clearMeetingTiles() {
+    if (!meetingGrid) return;
+    meetingGrid.querySelectorAll(".meeting-tile:not(.self)").forEach((t) => t.remove());
+  }
+
+  function leaveGroupMeeting() {
+    if (!meetingActive) return;
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "group-leave", groupId: meetingGroupId }));
+    }
+    // 关闭所有会议成员 pc（同时清理 peers map 条目，避免与 1:1 连接互相污染）
+    for (const id of meetingMembers) {
+      if (id !== myId) dropPeerConn(id);
+    }
+    clearMeetingTiles();
+    if (localStream) {
+      localStream.getTracks().forEach((t) => t.stop());
+      localStream = null;
+    }
+    meetingActive = false;
+    meetingGroupId = null;
+    meetingType = null;
+    meetingMembers = new Set();
+    if (meetingPanel) meetingPanel.hidden = true;
+    if (meetingLocalVideo) meetingLocalVideo.srcObject = null;
+    updateMeetingButtons();
+  }
+
+  // ---- 收到群会议广播 ----
+  function onGroupCall(groupId, from, media) {
+    groupId = Number(groupId);
+    if (meetingActive && meetingGroupId === groupId) return; // 已在同群会议中，忽略
+    const g = groups.find((x) => x.id === groupId);
+    const info = groupMemberName(groupId, from);
+    showGroupCallInvite(g, from, media, info.name);
+  }
+  function onGroupJoin(groupId, from) {
+    from = Number(from);
+    if (!meetingActive || meetingGroupId !== Number(groupId)) return;
+    connectMeetingPeer(from);
+  }
+  function onGroupLeave(groupId, from) {
+    from = Number(from);
+    if (!meetingActive || meetingGroupId !== Number(groupId)) return;
+    meetingMembers.delete(from);
+    removeMeetingTile(from);
+    dropPeerConn(from);
+    updateMeetingCount();
+  }
+
+  function showGroupCallInvite(g, from, media, name) {
+    if (!groupCallInvite) return;
+    pendingGroupCall = { groupId: g ? g.id : null, from, media: media || "video" };
+    if (groupCallName) groupCallName.textContent = (name || "群成员") + " 邀请你加入群会议";
+    if (groupCallType) groupCallType.textContent = (media === "audio" ? "语音" : "视频") + "会议 · " + (g ? g.name : "群聊");
+    if (groupCallAvatar) {
+      const info = groupMemberName(pendingGroupCall.groupId, from);
+      renderAvatarInto(groupCallAvatar, info.avatar, (name || "?").charAt(0).toUpperCase());
+    }
+    groupCallInvite.hidden = false;
+  }
+  function hideGroupCallInvite() {
+    if (groupCallInvite) groupCallInvite.hidden = true;
+    pendingGroupCall = null;
+  }
+
+  function toggleMeetingMute() {
+    if (!localStream) return;
+    micMuted = !micMuted;
+    localStream.getAudioTracks().forEach((t) => { t.enabled = !micMuted; });
+    if (btnMeetingMute) {
+      btnMeetingMute.textContent = micMuted ? "🔇" : "🎤";
+      btnMeetingMute.classList.toggle("off", micMuted);
+    }
+  }
+  function toggleMeetingCam() {
+    if (!localStream || meetingType !== "video") return;
+    camOff = !camOff;
+    localStream.getVideoTracks().forEach((t) => { t.enabled = !camOff; });
+    if (btnMeetingCam) {
+      btnMeetingCam.textContent = camOff ? "🚫" : "📹";
+      btnMeetingCam.classList.toggle("off", camOff);
+    }
+  }
+
+  function updateMeetingButtons() {
+    const inGroupChat = chatMode === "group" && currentGroup != null && chatVisible && !chatView.hidden && !meetingActive;
+    const inGroupDetail = chatMode === "group" && currentGroup != null && chatVisible && !groupView.hidden && !meetingActive;
+    if (groupMeetingBtn) groupMeetingBtn.hidden = !inGroupChat;
+    if (groupMeetingBtn2) groupMeetingBtn2.hidden = !inGroupDetail;
   }
 
   // 用 WebAudio 生成短促提示音，避免依赖外部音频文件
@@ -2809,6 +3137,7 @@
     enableChatInput();
     renderGroups();
     renderFriends();
+    updateMeetingButtons();
     resetChatMessages(g.name);
     groupRenderedIds = new Set();
     await loadGroupConversation(g.id);
@@ -3002,6 +3331,7 @@
     friendView.hidden = true;
     groupView.hidden = true;
     updateCallButtons();
+    updateMeetingButtons();
   }
   // 点击好友列表项 → 右侧显示好友资料/设置页（不直接进入聊天）
   function showFriendDetail(f) {
@@ -3046,6 +3376,7 @@
     friendView.hidden = true;
     groupView.hidden = false;
     updateCallButtons();
+    updateMeetingButtons();
     groupMessageBtn.onclick = () => openGroupConversation(g);
     groupAddMemberBtn2.onclick = () => openAddMemberModal();
     groupLeaveBtn2.onclick = async () => {

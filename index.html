@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=48" />
+  <link rel="stylesheet" href="styles.css?v=49" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -242,6 +242,7 @@
           <div class="chat-status" id="chatStatus">未连接</div>
           <button id="btnVoiceCall" class="chat-call-btn" title="语音通话" hidden>📞</button>
           <button id="btnVideoCall" class="chat-call-btn" title="视频通话" hidden>📹</button>
+          <button id="groupMeetingBtn" class="chat-call-btn" title="发起群会议" hidden>📹会议</button>
           <div id="chatGroupActions" class="chat-group-actions" hidden>
             <button id="groupAddMember" class="btn ghost small" title="添加成员">＋成员</button>
             <button id="groupLeave" class="btn ghost small" title="退出群聊">退出</button>
@@ -284,6 +285,7 @@
         <div id="groupDetailMembers" class="member-list"></div>
         <div class="detail-actions">
           <button id="groupMessageBtn" class="btn primary">发消息</button>
+          <button id="groupMeetingBtn2" class="btn primary" title="发起群会议" hidden>📹 发起会议</button>
           <button id="groupAddMemberBtn2" class="btn ghost">＋添加成员</button>
           <button id="groupLeaveBtn2" class="btn ghost danger">退出群聊</button>
         </div>
@@ -317,9 +319,42 @@
           </div>
         </div>
       </div>
+
+      <!-- 群会议邀请弹窗 -->
+      <div id="groupCallInvite" class="call-incoming" hidden>
+        <div class="call-incoming-card">
+          <div class="call-incoming-avatar" id="groupCallAvatar"></div>
+          <div class="call-incoming-name" id="groupCallName"></div>
+          <div class="call-incoming-type" id="groupCallType"></div>
+          <div class="call-incoming-actions">
+            <button id="btnGroupCallJoin" class="call-ctrl accept" title="加入会议">加入</button>
+            <button id="btnGroupCallIgnore" class="call-ctrl hangup" title="忽略">忽略</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 群会议面板（多人视频网格） -->
+      <div id="meetingPanel" class="meeting-panel" hidden>
+        <div class="meeting-header">
+          <span class="meeting-title" id="meetingGroupName">群会议</span>
+          <span class="meeting-count" id="meetingCount">1 人</span>
+          <button id="btnMeetingLeave" class="meeting-leave" title="离开会议">离开会议</button>
+        </div>
+        <div id="meetingGrid" class="meeting-grid">
+          <div class="meeting-tile self" data-uid="self">
+            <video id="meetingLocalVideo" class="meeting-video" autoplay playsinline muted></video>
+            <span class="meeting-name">我</span>
+          </div>
+        </div>
+        <div class="call-controls">
+          <button id="btnMeetingMute" class="call-ctrl" title="静音 / 取消静音">🎤</button>
+          <button id="btnMeetingCam" class="call-ctrl" title="开关摄像头">📹</button>
+          <button id="btnMeetingHangup" class="call-ctrl hangup" title="挂断 / 离开">📞</button>
+        </div>
+      </div>
     </section>
   </div>
 
-  <script src="app.js?v=72"></script>
+  <script src="app.js?v=73"></script>
 </body>
 </html>
