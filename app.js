@@ -1382,7 +1382,9 @@
   const LANG_KEY = "lang";
   function getLang() {
     const l = localStorage.getItem(LANG_KEY);
-    return (l === "en" || l === "zh") ? l : "zh";
+    if (l === "en" || l === "zh") return l;
+    const nav = (navigator.language || "zh-CN").toLowerCase();
+    return nav.startsWith("zh") ? "zh" : "en";
   }
   function t(key, lang) {
     lang = lang || getLang();
@@ -2044,9 +2046,20 @@
     { urls: "stun:stun.chat.bilibili.com:3478" },
     { urls: "stun:stun.qq.com:3478" },
   ];
+  // 非中文环境使用的 STUN（国内网络通常不通的 Google/Twilio 公共节点）
+  const DEFAULT_ICE_FOREIGN = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:global.stun.twilio.com:3478" },
+  ];
+  function isZhLocale() {
+    const nav = (navigator.language || "zh-CN").toLowerCase();
+    return nav.startsWith("zh");
+  }
   let cachedIceServers = null;
   function rtcConfig() {
-    const servers = (cachedIceServers && cachedIceServers.length) ? cachedIceServers : DEFAULT_ICE;
+    const fallback = isZhLocale() ? DEFAULT_ICE : DEFAULT_ICE_FOREIGN;
+    const servers = (cachedIceServers && cachedIceServers.length) ? cachedIceServers : fallback;
     return { iceServers: servers };
   }
 

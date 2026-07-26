@@ -106,7 +106,7 @@ export async function handleApi(req: Request): Promise<Response> {
 
     // ---- 信令服务地址 + ICE 配置（P2P 聊天用）----
     if (path === "/api/ws-info" && method === "GET") {
-      return json({ wsUrl: getWsPublicUrl(req), iceServers: getIceServers() });
+      return json({ wsUrl: getWsPublicUrl(req), iceServers: getIceServers(req) });
     }
 
     // ---- 聊天历史：客户端补推（落服务端 Deno KV，保留 3 个月）----

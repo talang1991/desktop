@@ -32,8 +32,24 @@ const DEFAULT_STUN: Array<{ urls: string }> = [
   { urls: "stun:stun.qq.com:3478" },
 ];
 
-export function getIceServers(): Array<{ urls: string; username?: string; credential?: string }> {
-  const list: Array<{ urls: string; username?: string; credential?: string }> = DEFAULT_STUN.map((s) => ({ ...s }));
+// 国外/非中文环境使用的 STUN（国内网络通常不通的 Google/Twilio 公共节点）
+const DEFAULT_STUN_FOREIGN: Array<{ urls: string }> = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:global.stun.twilio.com:3478" },
+];
+
+// 根据请求头 Accept-Language 判定是否走国外节点（浏览器 navigator.language 会带进该头）
+function preferForeignIce(req?: Request): boolean {
+  if (!req) return false;
+  const al = (req.headers.get("accept-language") || "").toLowerCase();
+  const first = al.split(",")[0].trim();
+  return !first.startsWith("zh");
+}
+
+export function getIceServers(req?: Request): Array<{ urls: string; username?: string; credential?: string }> {
+  const base = preferForeignIce(req) ? DEFAULT_STUN_FOREIGN : DEFAULT_STUN;
+  const list: Array<{ urls: string; username?: string; credential?: string }> = base.map((s) => ({ ...s }));
   const turnUrl = Deno.env.get("TURN_URL");
   if (turnUrl) {
     const entry: { urls: string; username?: string; credential?: string } = { urls: turnUrl };
