@@ -164,11 +164,13 @@ export function attachSignaling(server: Server): void {
           return;
         }
 
-        // A 呼叫好友 B（按 userId 定向）
+        // A 呼叫好友 B（按 userId 定向）。media 字段（"audio"|"video"）用于区分
+        // 普通文字握手呼叫与音视频通话呼叫，让被叫方弹出接听界面。
         case "call": {
           const to = Number(msg.to);
           if (!to) return;
-          const ok = routeTo(to, { type: "incoming-call", from: user!.id });
+          const media = typeof msg.media === "string" ? msg.media : undefined;
+          const ok = routeTo(to, { type: "incoming-call", from: user!.id, media });
           if (!ok) send(ws, { type: "call-offline", to });
           return;
         }

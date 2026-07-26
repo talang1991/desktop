@@ -1058,6 +1058,25 @@
   const chatSendBtn = $("#chatSend");
   const chatPeerName = $("#chatPeerName");
   const chatClose = $("#chatClose");
+
+  // 语音/视频通话 UI 元素
+  const btnVoiceCall = $("#btnVoiceCall");
+  const btnVideoCall = $("#btnVideoCall");
+  const callPanel = $("#callPanel");
+  const callIncoming = $("#callIncoming");
+  const remoteVideo = $("#remoteVideo");
+  const localVideo = $("#localVideo");
+  const callRemoteName = $("#callRemoteName");
+  const callStateLabel = $("#callStateLabel");
+  const callRemoteAvatar = $("#callRemoteAvatar");
+  const btnCallMute = $("#btnCallMute");
+  const btnCallCam = $("#btnCallCam");
+  const btnCallHangup = $("#btnCallHangup");
+  const incomingAvatar = $("#incomingAvatar");
+  const incomingName = $("#incomingName");
+  const incomingType = $("#incomingType");
+  const btnIncomingAccept = $("#btnIncomingAccept");
+  const btnIncomingDecline = $("#btnIncomingDecline");
   const friendListEl = $("#friendList");
   const friendRequestsEl = $("#friendRequests");
   const friendEmptyEl = $("#friendEmpty");
@@ -1326,6 +1345,15 @@
     chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + "px";
   });
 
+  // 语音/视频通话事件
+  if (btnVoiceCall) btnVoiceCall.onclick = () => { if (currentPeer != null) startMediaCall(currentPeer, "audio"); };
+  if (btnVideoCall) btnVideoCall.onclick = () => { if (currentPeer != null) startMediaCall(currentPeer, "video"); };
+  if (btnCallMute) btnCallMute.onclick = toggleMute;
+  if (btnCallCam) btnCallCam.onclick = toggleCamera;
+  if (btnCallHangup) btnCallHangup.onclick = endCall;
+  if (btnIncomingAccept) btnIncomingAccept.onclick = acceptCall;
+  if (btnIncomingDecline) btnIncomingDecline.onclick = declineCall;
+
   // 群聊事件
   groupCreateBtn.onclick = openGroupModal;
   groupCreateConfirm.onclick = submitCreateGroup;
@@ -1435,7 +1463,11 @@
     loadFriends();
     loadGroups();
   }
-  function closeChat() { chatPanel.hidden = true; document.body.classList.remove("chat-open"); chatVisible = false; }
+  function closeChat() {
+    if (callState !== "idle") endCall(); // 关闭聊天面板时若正在通话，先结束并通知对方
+    chatPanel.hidden = true; document.body.classList.remove("chat-open"); chatVisible = false;
+    updateCallButtons();
+  }
 
   // ---------- 聊天面板拖拽调整宽度 ----------
   function initChatResizer() {
@@ -1587,7 +1619,7 @@
         try { loadFriends(); } catch (e) { console.error("[SIG-CLIENT] loadFriends 失败:", e); }
         break;
       case "incoming-call":
-        handleIncomingCall(m.from);
+        handleIncomingCall(m.from, m.media);
         break;
       case "call-offline":
         if (currentPeer === m.to) {
@@ -1643,6 +1675,7 @@
         if (currentPeer === m.from) {
           setChatStatus("对方已结束对话（仍可发送离线消息）", "warn");
         }
+        if (callPeerId === m.from) endCallLocal(); // 对方整体断开：清理进行中的通话
         dropPeerConn(m.from); // 关闭该好友连接，不影响其它好友
         break;
       case "error":
@@ -1954,6 +1987,7 @@
     clearUnread(f.id);
     // 打开会话：确保该会话出现在列表（首次发起聊天时创建），不改已有排序
     ensureConversation("peer", f.id);
+    updateCallButtons();
   }
   function reCall() {
     const f = friends.find((x) => x.id === currentPeer);
@@ -1993,12 +2027,30 @@
     if (currentPeer != null && Number(currentPeer) === Number(id)) setChatStatus(text, cls);
   }
 
-  function startCall(to, name) {
+  // ===================== 语音 / 视频通话状态 =====================
+  // 复用每个好友已有的 RTCPeerConnection（完美协商）：通话时动态 addTrack 触发重协商，
+  // 无需为媒体另建连接；媒体控制（接听/拒绝/挂断）通过 signal(data.kind:"media") 兜底。
+  let localStream = null;          // 本端媒体流（麦克风/摄像头）
+  let callPeerId = null;           // 当前通话对象 userId
+  let callType = null;             // "audio" | "video"
+  let callState = "idle";          // idle | outgoing | incoming | active
+  let callIsCaller = false;        // 本端是否为发起方
+  let pendingRemoteStream = null;  // 来电未接听前缓存的远端流（避免提前播放音频）
+  let micMuted = false;
+  let camOff = false;
+  let incomingCallFrom = null;     // 正在响铃的来电对象
+  let incomingCallType = null;
+
+  function startCall(to, name, mediaType) {
     to = Number(to);
     enableChatInput();
     const p = ensurePeerConn(to);
     const st = p.pc ? p.pc.connectionState : null;
     const hasLive = p.pc && (st === "connected" || st === "connecting" || st === "new");
+    // 媒体呼叫：始终通知对方（即便已有连接），用于弹出接听界面
+    if (mediaType && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "call", to, media: mediaType }));
+    }
     if (hasLive) return; // 已有可用连接：不重复建连、不降级状态
     // 只有该好友是当前显示会话时，才显示“正在连接”
     if (currentPeer != null && Number(currentPeer) === to) {
@@ -2006,18 +2058,27 @@
       enteringMsg = addChatMessage("system", `正在连接 ${name} …`);
     }
     enableRelay(to);
-    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+    if (!mediaType && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "call", to }));
     }
     startOffer(to, name);
   }
 
-  function handleIncomingCall(from) {
+  function handleIncomingCall(from, media) {
     from = Number(from);
     const f = friends.find((x) => x.id === from) || { id: from, username: String(from), online: true, avatar: "" };
     const viewingThis = currentPeer != null && Number(currentPeer) === from && chatVisible;
     // 仅当正在查看该好友时才清未读；否则保留红点，由后续消息 onChatReceived 累加
     if (viewingThis) clearUnread(from);
+    // 音视频来电：弹出接听界面（绝不改动 currentPeer，绝不抢当前显示的会话）
+    if (media) {
+      showIncomingCall(from, media, f);
+      // 仍确保该好友 pc 就绪（应答方），便于后续协商媒体轨道
+      const p = ensurePeerConn(from);
+      if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); p.mediaAdded = false; }
+      enableRelay(from);
+      return;
+    }
     const p = ensurePeerConn(from);
     // 若本端已有 offer（我方也曾主动呼叫该好友），回退为应答方，避免双向 offer 死锁
     if (p.pc && p.pc.signalingState === "have-local-offer") teardownPeer(from);
@@ -2026,6 +2087,7 @@
       p.pc = new RTCPeerConnection(rtcConfig());
       p.pc._peerId = from;
       setupPc(p);
+      p.mediaAdded = false;
       if (viewingThis) {
         setChatStatus(`收到 ${f.username} 的聊天请求，连接中…`, "warn");
         clearEntering();
@@ -2035,6 +2097,7 @@
   }
 
   function endCurrent() {
+    if (callState !== "idle") endCall(); // 退出会话时若正在通话，先通知对方并清理
     if (sigSocket && currentPeer != null) {
       try { sigSocket.send(JSON.stringify({ type: "bye", to: currentPeer })); } catch {}
     }
@@ -2058,18 +2121,34 @@
       p.pc = new RTCPeerConnection(rtcConfig());
       p.pc._peerId = to;
       setupPc(p);
+      p.mediaAdded = false;
       p.dc = p.pc.createDataChannel("chat");
       p.dc._peerId = to;
       setupDataChannel(p.dc);
-      p.pc.createOffer().then((offer) => p.pc.setLocalDescription(offer))
-        .then(() => sendSignal(to, { sdp: p.pc.localDescription }))
-        .catch(() => enableRelay(to));
+      // 创建 DataChannel 会触发 onnegotiationneeded → 自动生成 offer（完美协商）
     } catch { enableRelay(to); }
   }
 
   function setupPc(p) {
     const id = p.pc._peerId;
+    // 完美协商（Perfect Negotiation）状态位：避免双向同时发 offer 造成 glare
+    p.makingOffer = false;
+    p.ignoreOffer = false;
+    // 由双方 userId 大小决定“礼貌方”，结果两端一致，可预判冲突归属
+    p.polite = (myId != null) ? (myId < id) : true;
     p.pc.onicecandidate = (e) => { if (e.candidate) sendSignal(id, { candidate: e.candidate }); };
+    // 新增/移除媒体轨道（addTrack）会自动触发本事件 → 生成新 offer（含媒体），无需另建连接
+    p.pc.onnegotiationneeded = async () => {
+      try {
+        p.makingOffer = true;
+        await p.pc.setLocalDescription();
+        sendSignal(id, { sdp: p.pc.localDescription });
+      } catch (err) {
+        console.error("[WEBRTC] negotiationneeded error:", (err && err.message) || err);
+      } finally {
+        p.makingOffer = false;
+      }
+    };
     p.pc.onconnectionstatechange = () => {
       p.status = p.pc.connectionState;
       if (p.pc.connectionState === "failed") {
@@ -2078,6 +2157,17 @@
         enableRelay(id);
       } else if (p.pc.connectionState === "connected") {
         setPeerStatus(id, "P2P 已直连 🔗", "ok");
+      }
+    };
+    // 接收远端音视频轨道
+    p.pc.ontrack = (e) => {
+      const stream = e.streams && e.streams[0];
+      if (!stream) return;
+      // 来电未接听前不要渲染/播放（尤其音频自动播放），先缓存，接听后再呈现
+      if (callIsCaller || callState === "active") {
+        attachRemoteStream(stream);
+      } else if (callPeerId === id) {
+        pendingRemoteStream = stream;
       }
     };
     p.pc.ondatachannel = (e) => {
@@ -2091,21 +2181,36 @@
   function handleSignal(data, from) {
     from = Number(from);
     if (!data) return;
+    // 媒体控制信令（接听 / 拒绝 / 挂断）走独立通道，不参与 SDP/ICE 协商
+    if (data.kind === "media") { handleMediaControl(data, from); return; }
     const p = ensurePeerConn(from);
-    if (data.sdp) {
-      const desc = new RTCSessionDescription(data.sdp);
-      if (desc.type === "offer") {
-        // 接收方：准备 pc 应答；绝不在此切换当前显示会话（不再抢界面）
-        if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); }
-        p.pc.setRemoteDescription(desc).then(() => p.pc.createAnswer())
-          .then((answer) => p.pc.setLocalDescription(answer))
-          .then(() => sendSignal(from, { sdp: p.pc.localDescription }))
-          .catch(() => enableRelay(from));
-      } else if (desc.type === "answer") {
-        if (p.pc) p.pc.setRemoteDescription(desc).catch(() => enableRelay(from));
+    if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); }
+    try {
+      if (data.sdp) {
+        const desc = new RTCSessionDescription(data.sdp);
+        // 完美协商：检测 offer 冲突（本端正在发 offer 或连接非稳定态）
+        const offerCollision = (desc.type === "offer") && (p.makingOffer || p.pc.signalingState !== "stable");
+        p.ignoreOffer = !p.polite && offerCollision;
+        if (p.ignoreOffer) {
+          console.log("[WEBRTC] 忽略冲突 offer（impolite 方）", from);
+          return;
+        }
+        p.pc.setRemoteDescription(desc).then(async () => {
+          if (desc.type === "offer") {
+            await p.pc.setLocalDescription();
+            sendSignal(from, { sdp: p.pc.localDescription });
+          }
+        }).catch((err) => {
+          console.error("[WEBRTC] setRemoteDescription error:", (err && err.message) || err);
+          if (!p.ignoreOffer) enableRelay(from);
+        });
+      } else if (data.candidate) {
+        p.pc.addIceCandidate(data.candidate).catch((err) => {
+          if (!p.ignoreOffer) console.warn("[WEBRTC] addIceCandidate failed:", (err && err.message) || err);
+        });
       }
-    } else if (data.candidate) {
-      if (p.pc) p.pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(() => {});
+    } catch (err) {
+      console.error("[WEBRTC] handleSignal error:", (err && err.message) || err);
     }
   }
 
@@ -2156,6 +2261,258 @@
   }
   function disableChatInput() {
     chatInput.disabled = true; chatSendBtn.disabled = true; relayActive = false;
+  }
+
+  // ===================== 语音 / 视频通话 =====================
+  // 发起/接听/挂断逻辑；媒体轨道动态加入已有的 per-friend pc（完美协商自动重协商）。
+
+  // 仅在「私聊 + 已打开会话 + 无进行中通话」时显示通话按钮
+  function updateCallButtons() {
+    const show = chatMode === "peer" && currentPeer != null && chatVisible && !chatView.hidden;
+    const idle = callState === "idle";
+    if (btnVoiceCall) btnVoiceCall.hidden = !(show && idle);
+    if (btnVideoCall) btnVideoCall.hidden = !(show && idle);
+  }
+
+  async function startMediaCall(peerId, type) {
+    peerId = Number(peerId);
+    if (callState !== "idle") { toast("已有进行中的通话"); return; }
+    const f = friends.find((x) => x.id === peerId);
+    if (!f) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast("当前浏览器不支持音视频通话"); return;
+    }
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: type === "video" ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+      });
+    } catch (err) {
+      toast("无法访问摄像头/麦克风：" + ((err && err.message) || err.name || err));
+      return;
+    }
+    callPeerId = peerId;
+    callType = type;
+    callState = "outgoing";
+    callIsCaller = true;
+    micMuted = false; camOff = false;
+    bindLocalVideo();
+    showCallPanel(type, f);
+    setCallStateLabel("等待对方接听…");
+    updateCallButtons();
+    // 确保 P2P 连接存在并通知对方（startCall 发送带 media 的 call）；随后加入本端轨道触发协商
+    startCall(peerId, f.username, type);
+    const p = getPeerConn(peerId);
+    if (p && p.pc) addLocalMediaTracks(p);
+  }
+
+  function addLocalMediaTracks(p) {
+    if (!localStream || p.mediaAdded) return;
+    for (const track of localStream.getTracks()) {
+      try { p.pc.addTrack(track, localStream); } catch (e) { console.error("[WEBRTC] addTrack failed", e); }
+    }
+    p.mediaAdded = true;
+  }
+
+  function bindLocalVideo() {
+    if (localVideo && localStream) localVideo.srcObject = localStream;
+  }
+
+  function showCallPanel(type, f) {
+    if (!callPanel) return;
+    callPanel.hidden = false;
+    callPanel.dataset.type = type;
+    if (callRemoteName) callRemoteName.textContent = (f && f.username) || String(callPeerId);
+    if (callRemoteAvatar) {
+      callRemoteAvatar.hidden = type !== "audio";
+      if (type === "audio" && f) renderAvatarInto(callRemoteAvatar, f.avatar, (f.username || "?").charAt(0).toUpperCase());
+    }
+    if (remoteVideo) remoteVideo.hidden = type === "audio";
+    if (btnCallMute) { btnCallMute.textContent = "🎤"; btnCallMute.classList.remove("off"); }
+    if (btnCallCam) { btnCallCam.hidden = type !== "video"; btnCallCam.textContent = "📹"; btnCallCam.classList.remove("off"); }
+  }
+
+  function setCallStateLabel(text) {
+    if (callStateLabel) callStateLabel.textContent = text || "";
+  }
+
+  function attachRemoteStream(stream) {
+    if (!remoteVideo) return;
+    if (callType === "audio") {
+      remoteVideo.srcObject = stream;     // 语音通话：仍持有音频流，但隐藏视频画面
+      remoteVideo.hidden = true;
+      if (callRemoteAvatar) callRemoteAvatar.hidden = false;
+    } else {
+      remoteVideo.srcObject = stream;
+      remoteVideo.hidden = false;
+      if (callRemoteAvatar) callRemoteAvatar.hidden = true;
+    }
+    if (callState !== "active") {
+      callState = "active";
+      setCallStateLabel("通话中");
+      updateCallButtons();
+    }
+  }
+
+  function showIncomingCall(from, type, f) {
+    if (!callIncoming) return;
+    // 聊天面板未打开时，来电弹窗不可见——自动展开面板以便接听
+    if (chatPanel.hidden) {
+      chatPanel.hidden = false;
+      document.body.classList.add("chat-open");
+      chatVisible = true;
+    }
+    // 已有其它通话进行中：直接拒绝对方，避免多路并发
+    if (callState !== "idle" && callState !== "incoming") {
+      if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+        sigSocket.send(JSON.stringify({ type: "signal", to: from, data: { kind: "media", action: "decline" } }));
+      }
+      return;
+    }
+    incomingCallFrom = from;
+    incomingCallType = type;
+    callState = "incoming";
+    if (incomingName) incomingName.textContent = (f && f.username) || String(from);
+    if (incomingType) incomingType.textContent = type === "video" ? "邀请你进行视频通话" : "邀请你进行语音通话";
+    if (incomingAvatar) renderAvatarInto(incomingAvatar, f && f.avatar, ((f && f.username) || "?").charAt(0).toUpperCase());
+    callIncoming.hidden = false;
+    try { playRingtone(); } catch {}
+  }
+
+  function hideIncomingCall() {
+    if (callIncoming) callIncoming.hidden = true;
+  }
+
+  async function acceptCall() {
+    const from = incomingCallFrom;
+    const type = incomingCallType;
+    if (from == null) return;
+    hideIncomingCall();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast("当前浏览器不支持音视频通话"); declineCall(); return;
+    }
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: type === "video" ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+      });
+    } catch (err) {
+      toast("无法访问摄像头/麦克风：" + ((err && err.message) || err.name || err));
+      declineCall(); return;
+    }
+    callPeerId = from;
+    callType = type;
+    callState = "active";
+    callIsCaller = false;
+    micMuted = false; camOff = false;
+    bindLocalVideo();
+    const f = friends.find((x) => x.id === from) || { username: String(from), avatar: "" };
+    showCallPanel(type, f);
+    setCallStateLabel("通话中");
+    // 来电前已协商下来的远端流，接听后立刻呈现
+    if (pendingRemoteStream) { attachRemoteStream(pendingRemoteStream); pendingRemoteStream = null; }
+    // 向已有 pc 加入本端轨道 → 触发重协商（完美协商处理 glare）
+    const p = getPeerConn(from);
+    if (p && p.pc) addLocalMediaTracks(p);
+  }
+
+  function declineCall() {
+    const from = incomingCallFrom;
+    hideIncomingCall();
+    if (from != null && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "signal", to: from, data: { kind: "media", action: "decline" } }));
+    }
+    resetCallState();
+  }
+
+  // 本端主动挂断：通知对方并本地清理
+  function endCall() {
+    if (callPeerId != null && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "signal", to: callPeerId, data: { kind: "media", action: "end" } }));
+    }
+    endCallLocal();
+  }
+
+  // 本地清理（用于收到对方结束/拒接，或本地挂断后）：停止轨道、移除发送器、复位 UI
+  function endCallLocal() {
+    if (localStream) {
+      localStream.getTracks().forEach((t) => t.stop());
+      localStream = null;
+    }
+    if (callPeerId != null) {
+      const p = getPeerConn(callPeerId);
+      if (p && p.pc) {
+        p.pc.getSenders().forEach((s) => { try { if (s.track) p.pc.removeTrack(s); } catch {} });
+        p.mediaAdded = false;
+      }
+    }
+    if (remoteVideo) remoteVideo.srcObject = null;
+    if (localVideo) localVideo.srcObject = null;
+    if (callPanel) callPanel.hidden = true;
+    resetCallState();
+  }
+
+  function resetCallState() {
+    callPeerId = null;
+    callType = null;
+    callState = "idle";
+    callIsCaller = false;
+    pendingRemoteStream = null;
+    micMuted = false; camOff = false;
+    incomingCallFrom = null;
+    incomingCallType = null;
+    updateCallButtons();
+  }
+
+  function handleMediaControl(data, from) {
+    from = Number(from);
+    if (data.action === "decline") {
+      if (callIsCaller && callPeerId === from) {
+        toast("对方拒绝了通话");
+        endCallLocal();
+      }
+    } else if (data.action === "end") {
+      if (callPeerId === from) {
+        toast("对方已结束通话");
+        endCallLocal();
+      }
+    }
+  }
+
+  function toggleMute() {
+    if (!localStream) return;
+    micMuted = !micMuted;
+    localStream.getAudioTracks().forEach((t) => { t.enabled = !micMuted; });
+    if (btnCallMute) {
+      btnCallMute.textContent = micMuted ? "🔇" : "🎤";
+      btnCallMute.classList.toggle("off", micMuted);
+    }
+  }
+
+  function toggleCamera() {
+    if (!localStream || callType !== "video") return;
+    camOff = !camOff;
+    localStream.getVideoTracks().forEach((t) => { t.enabled = !camOff; });
+    if (btnCallCam) {
+      btnCallCam.textContent = camOff ? "🚫" : "📹";
+      btnCallCam.classList.toggle("off", camOff);
+    }
+  }
+
+  // 用 WebAudio 生成短促提示音，避免依赖外部音频文件
+  function playRingtone() {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = new Ctx();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = 660;
+      g.gain.value = 0.05;
+      o.start();
+      setTimeout(() => { try { o.stop(); ctx.close(); } catch {} }, 600);
+    } catch {}
   }
 
   function sendChat() {
@@ -2632,6 +2989,7 @@
     chatView.hidden = false;
     friendView.hidden = true;
     groupView.hidden = true;
+    updateCallButtons();
   }
   // 点击好友列表项 → 右侧显示好友资料/设置页（不直接进入聊天）
   function showFriendDetail(f) {
@@ -2644,6 +3002,7 @@
     chatView.hidden = true;
     friendView.hidden = false;
     groupView.hidden = true;
+    updateCallButtons();
     friendMessageBtn.onclick = () => openConversation(f);
     friendRemoveBtn.onclick = async () => {
       await removeFriend(f);
@@ -2674,6 +3033,7 @@
     chatView.hidden = true;
     friendView.hidden = true;
     groupView.hidden = false;
+    updateCallButtons();
     groupMessageBtn.onclick = () => openGroupConversation(g);
     groupAddMemberBtn2.onclick = () => openAddMemberModal();
     groupLeaveBtn2.onclick = async () => {
