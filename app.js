@@ -1502,12 +1502,13 @@
     $("#authSub").textContent = "登录以同步你的应用";
     clearAuthError();
   };
-  $("#logoutBtn").onclick = async () => {
+  async function logout() {
     disconnectSignaling();
     try { await api("/api/logout", { method: "POST" }); } catch {}
     localStorage.removeItem(TOKEN_KEY);
+    if (typeof closeSettings === "function") closeSettings();
     showAuth();
-  };
+  }
 
   // ---------- Events ----------
   $("#settingsBtn").onclick = openSettings;
@@ -2154,6 +2155,8 @@
   function closeSettings() { settingsPanel.hidden = true; }
   const settingsClose = $("#settingsClose");
   if (settingsClose) settingsClose.onclick = closeSettings;
+  const logoutBtn2 = $("#logoutBtn2");
+  if (logoutBtn2) logoutBtn2.onclick = logout;
 
   // 移动端单栏：窄屏进入会话/详情时切到“全屏聊天”态（隐藏列表）；返回/关闭时退回列表
   function maybeMobileConversation() {

@@ -52,10 +52,9 @@
           <span id="userAvatar" class="avatar"></span>
         </button>
         <span id="userName" class="user-name"></span>
-        <button id="settingsBtn" class="btn ghost" title="设置" data-i18n="topbar.settings">⚙ 设置</button>
         <button id="addBtn" class="btn primary" data-i18n="topbar.add">＋ 添加应用</button>
         <button id="chatBtn" class="btn ghost" title="P2P 聊天"><span data-i18n="topbar.chat">💬 聊天</span><span id="chatUnreadBadge" class="nav-badge" hidden></span></button>
-        <button id="logoutBtn" class="btn ghost" data-i18n="topbar.logout">登出</button>
+        <button id="settingsBtn" class="btn ghost" title="设置" data-i18n="topbar.settings">⚙ 设置</button>
       </div>
     </header>
 
@@ -434,11 +433,14 @@
           <div class="settings-section-title" data-i18n="settings.appearance">外观</div>
           <button id="themeToggleBtn" class="btn ghost block" title="切换深色 / 浅色">🌓 主题：深色</button>
         </div>
+        <div class="settings-section">
+          <button id="logoutBtn2" class="btn ghost block danger" data-i18n="topbar.logout">登出</button>
+        </div>
       </div>
     </div>
     <input id="importFile" type="file" accept="application/json" hidden />
   </div>
 
-  <script src="app.js?v=101"></script>
+  <script src="app.js?v=102"></script>
 </body>
 </html>
