@@ -2082,7 +2082,12 @@
   }
 
   // ---------- 会话（1:1）----------
+  // 异步取消令牌：openConversation / openGroupConversation 都是 async 且内部有多处 await，
+  // 快速连点时两个流程会并发交错写 currentPeer / DOM / 信令 / 通话，导致后一次打开被前一次残留
+  // 流程覆盖或打断（表现为“点了没反应”）。用 token 保证“只有最后一次点击的流程”能跑完副作用。
+  let activeOpenToken = 0;
   async function openConversation(f) {
+    const myToken = ++activeOpenToken;
     // 切换好友时不再“结束”上一个好友的通话——网状连接下应保留其后台 P2P 通道，
     // 仅切换当前显示的会话；显式“结束对话”按钮才会调用 endCurrent。
     chatMode = "peer";
@@ -2114,11 +2119,14 @@
     renderedIds = new Set();
     // 先渲染本地缓存（即时、离线可用）
     await loadConversation();
+    if (myToken !== activeOpenToken) return;
     await connectSignaling();
+    if (myToken !== activeOpenToken) return;
     if (!sigSocket) return;
     startCall(f.id, f.username);
     // 再从服务端拉取本地缺失的历史（保留 3 个月），合并到本地
     await syncConversation(f.id);
+    if (myToken !== activeOpenToken) return;
     // 拉取并渲染完成后，当前会话已是「已读」状态：清掉该好友红点，
     // 避免后台离线补算（syncAllUnread）在打开会话期间 bump 后残留红点。
     clearUnread(f.id);
@@ -3626,6 +3634,7 @@
 
   // ---- 打开群会话 ----
   async function openGroupConversation(g) {
+    const myToken = ++activeOpenToken;
     chatMode = "group";
     currentGroup = g.id;
     currentGroupAvatar = g.avatar || "";
@@ -3652,7 +3661,9 @@
     resetChatMessages(g.name);
     groupRenderedIds = new Set();
     await loadGroupConversation(g.id);
+    if (myToken !== activeOpenToken) return;
     await syncGroupConversation(g.id);
+    if (myToken !== activeOpenToken) return;
     clearGroupUnread(g.id);
     // 打开群会话：确保该会话出现在列表（首次发起聊天时创建），不改已有排序
     ensureConversation("group", g.id);
