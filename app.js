@@ -981,6 +981,11 @@
       "settings.appearance": "外观",
       "settings.theme.dark": "🌓 主题：深色",
       "settings.theme.light": "🌓 主题：浅色",
+      "settings.cache": "缓存",
+      "settings.clearCache": "🧹 清空缓存",
+      "settings.clearCacheConfirm": "确定清空本地缓存？这会清除本机聊天记录与界面布局，但不会退出登录。",
+      "settings.cacheHint": "仅清除本机缓存（聊天记录与界面布局），保留登录状态、语言与主题。",
+      "settings.cacheCleared": "缓存已清空",
       "topbar.search.ph": "搜索应用名称或网址…",
       "topbar.add": "＋ 添加应用",
       "topbar.chat": "💬 聊天",
@@ -1192,6 +1197,11 @@
       "settings.appearance": "Appearance",
       "settings.theme.dark": "🌓 Theme: Dark",
       "settings.theme.light": "🌓 Theme: Light",
+      "settings.cache": "Cache",
+      "settings.clearCache": "🧹 Clear Cache",
+      "settings.clearCacheConfirm": "Clear local cache? This wipes local chat history and layout, but won't log you out.",
+      "settings.cacheHint": "Only local cache (chat history & layout) is cleared; login, language and theme are kept.",
+      "settings.cacheCleared": "Cache cleared",
       "topbar.search.ph": "Search apps by name or URL…",
       "topbar.add": "＋ Add App",
       "topbar.chat": "💬 Chat",
@@ -2157,6 +2167,23 @@
   if (settingsClose) settingsClose.onclick = closeSettings;
   const logoutBtn2 = $("#logoutBtn2");
   if (logoutBtn2) logoutBtn2.onclick = logout;
+
+  // 清空本地缓存：保留登录、语言、主题等偏好，清除聊天记录与界面布局等本地缓存
+  const clearCacheBtn = $("#clearCacheBtn");
+  if (clearCacheBtn) clearCacheBtn.onclick = () => {
+    if (!confirm(t("settings.clearCacheConfirm"))) return;
+    const keep = [TOKEN_KEY, LANG_KEY, THEME_KEY]; // 白名单：保留登录与偏好
+    const toRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && !keep.includes(k)) toRemove.push(k);
+    }
+    toRemove.forEach((k) => localStorage.removeItem(k));
+    loadConversations();
+    if (typeof renderConversations === "function") renderConversations();
+    closeSettings();
+    toast(t("settings.cacheCleared"));
+  };
 
   // 移动端单栏：窄屏进入会话/详情时切到“全屏聊天”态（隐藏列表）；返回/关闭时退回列表
   function maybeMobileConversation() {

@@ -434,6 +434,11 @@
           <button id="themeToggleBtn" class="btn ghost block" title="切换深色 / 浅色">🌓 主题：深色</button>
         </div>
         <div class="settings-section">
+          <div class="settings-section-title" data-i18n="settings.cache">缓存</div>
+          <button id="clearCacheBtn" class="btn ghost block" data-i18n="settings.clearCache">🧹 清空缓存</button>
+          <p class="settings-hint" data-i18n="settings.cacheHint">仅清除本机缓存（聊天记录与界面布局），保留登录状态、语言与主题。</p>
+        </div>
+        <div class="settings-section">
           <button id="logoutBtn2" class="btn ghost block danger" data-i18n="topbar.logout">登出</button>
         </div>
       </div>
@@ -441,6 +446,6 @@
     <input id="importFile" type="file" accept="application/json" hidden />
   </div>
 
-  <script src="app.js?v=102"></script>
+  <script src="app.js?v=103"></script>
 </body>
 </html>
