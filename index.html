@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=61" />
+  <link rel="stylesheet" href="styles.css?v=65" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -234,6 +234,9 @@
       <div class="sidebar-resizer" id="sidebarResizer" title="拖动调整列表宽度"></div>
     </aside>
     <section class="chat-main">
+      <div class="chat-mobile-back" id="chatBackBar">
+        <button id="chatBackBtn" class="chat-back-btn" title="返回">‹</button>
+      </div>
       <!-- 聊天视图 -->
       <div id="chatView">
         <div class="chat-header">
@@ -377,6 +380,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=87"></script>
+  <script src="app.js?v=89"></script>
 </body>
 </html>

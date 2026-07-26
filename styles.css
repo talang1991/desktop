@@ -747,6 +747,16 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 .chat-x:hover { background: var(--surface-2); color: var(--text); }
 
+/* 移动端聊天单栏：返回条（默认隐藏，仅窄屏“已进会话/详情”时显示） */
+.chat-mobile-back { display: none; }
+.chat-back-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; padding: 0;
+  border: none; background: transparent; color: var(--text);
+  font-size: 24px; line-height: 1; cursor: pointer; border-radius: 8px; flex-shrink: 0;
+}
+.chat-back-btn:hover { background: var(--surface-2); }
+
 /* 聊天主区域三种视图：聊天 / 好友详情 / 群组详情 */
 #chatView { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 #chatView[hidden] { display: none; }
@@ -1666,6 +1676,114 @@ body.resizing .iframe-frame { pointer-events: none !important; }
   width: 150px;
   height: 92px;
   min-height: 0;
+}
+
+/* ============================================================
+   移动端 / 平板适配（不改动桌面端规则，仅在小屏生效）
+   ============================================================ */
+
+/* 平板 / 大屏手机：顶栏换行、网格 2~3 列、聊天侧栏收窄 */
+@media (max-width: 768px) {
+  .topbar {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+  .search-wrap {
+    order: 3;
+    flex-basis: 100%;
+    max-width: 100%;
+  }
+  .topbar-actions {
+    margin-left: 0;
+    flex-wrap: wrap;
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
+  .content { padding: 12px 14px 36px; }
+  .filters { padding: 12px 14px 4px; }
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 14px;
+  }
+  .chat-panel { height: 100dvh; width: 100vw !important; max-width: 100vw !important; }
+  /* 移动端单栏：列表态仅显示会话列表，进入会话/详情后全屏显示聊天并隐藏列表 */
+  .chat-sidebar { width: 100% !important; max-width: 100% !important; flex: 1 1 auto; display: flex !important; }
+  .chat-main { display: none !important; }
+  .chat-panel.mobile-conversation .chat-sidebar { display: none !important; }
+  .chat-panel.mobile-conversation .chat-main { display: flex !important; }
+  .chat-panel.mobile-conversation .chat-mobile-back { display: flex !important; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .chat-header { flex-wrap: wrap; gap: 8px; padding: 12px; }
+  .chat-status { display: none; }
+  .chat-input-row { padding: 12px; }
+  .modal-card { width: min(520px, 94vw); }
+}
+
+/* 手机：顶栏操作区改为单行横向滚动，网格固定 2 列，弹窗限高可滚动 */
+@media (max-width: 480px) {
+  .topbar { padding: 10px 12px; gap: 8px; }
+  .brand { flex: 0 0 auto; }
+  .brand-text p { display: none; }            /* 隐藏“X 个应用”副标题，省空间 */
+  .user-name { display: none; }               /* 顶栏不显示用户名 */
+
+  /* 操作按钮保持一行，超出则横向滚动，避免占满多行竖向空间 */
+  .topbar-actions {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  .topbar-actions::-webkit-scrollbar { display: none; }
+  .topbar-actions .btn { flex: 0 0 auto; padding: 8px 11px; font-size: 13px; }
+  .search-wrap { order: 3; }
+
+  .content { padding: 12px; }
+  .filters { padding: 10px 12px 4px; gap: 6px; }
+
+  /* 卡片固定 2 列，触控目标更大 */
+  .grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .card { padding: 16px 10px 12px; gap: 8px; }
+  .card .icon { width: 50px; height: 50px; font-size: 26px; }
+  .card .name { font-size: 13px; }
+
+  /* 弹窗：限制高度可滚动，避免长表单（添加应用）超出视口 */
+  .modal-card {
+    width: 94vw;
+    max-height: 90vh;
+    overflow-y: auto;
+    padding: 18px;
+  }
+  .modal-actions { flex-wrap: wrap; }
+  .modal-actions .btn { flex: 1 1 auto; }
+
+  /* 聊天面板：窄屏单栏（规则由 ≤768 媒体查询统一提供，此处仅补充会话态细节） */
+  .chat-panel { height: 100dvh; width: 100vw !important; max-width: 100vw !important; }
+
+  .chat-header { flex-wrap: wrap; gap: 6px; padding: 10px 12px; }
+  .chat-call-btn { padding: 7px 10px; font-size: 13px; }
+  .chat-group-actions { flex-wrap: wrap; }
+  .chat-group-actions .btn { padding: 7px 10px; font-size: 13px; }
+  .chat-input-row { padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  .chat-msg-row { max-width: 88%; }
+  .chat-tabs { padding: 6px 4px 0; gap: 1px; }
+  .chat-tab { font-size: 12px; padding: 7px 4px; }
+
+  /* iframe 卡片收窄，避免超出小屏 */
+  .iframe-page { width: 190px; }
+
+  /* 通话/会议底部控制条避开刘海与底部安全区 */
+  .call-controls { bottom: max(20px, env(safe-area-inset-bottom)); gap: 10px; }
+  .call-ctrl { width: 48px; height: 48px; font-size: 18px; }
+
+  /* 登录卡片铺满 */
+  .auth-view { padding: 16px; }
+  .auth-card { width: 100%; }
+
+  /* toast 不超屏 */
+  .toast { max-width: 90vw; }
 }
 
 

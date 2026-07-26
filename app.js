@@ -1568,13 +1568,20 @@
     if (callState !== "idle") endCall(); // 关闭聊天面板时若正在通话，先结束并通知对方
     if (meetingActive || meetingLeft) leaveGroupMeeting(false); // 软离开：保留重入会入口
     chatPanel.hidden = true; document.body.classList.remove("chat-open"); chatVisible = false;
+    chatPanel.classList.remove("mobile-conversation");
     updateCallButtons();
   }
+  // 移动端单栏：窄屏进入会话/详情时切到“全屏聊天”态（隐藏列表）；返回/关闭时退回列表
+  function maybeMobileConversation() {
+    if (window.innerWidth <= 768) chatPanel.classList.add("mobile-conversation");
+  }
+  const chatBackBtn = $("#chatBackBtn");
+  if (chatBackBtn) chatBackBtn.onclick = () => chatPanel.classList.remove("mobile-conversation");
 
   // ---------- 聊天面板拖拽调整宽度 ----------
   function initChatResizer() {
     const saved = parseInt(localStorage.getItem("chatPanelWidth"), 10);
-    if (saved && saved >= 320) chatPanel.style.width = saved + "px";
+    if (saved && saved >= 320 && saved <= window.innerWidth - 80) chatPanel.style.width = saved + "px";
 
     chatResizer.addEventListener("mousedown", (e) => {
       e.preventDefault();
@@ -1608,7 +1615,8 @@
     const sResizer = $("#sidebarResizer");
     if (!sidebar || !sResizer) return;
     const saved = parseInt(localStorage.getItem("chatSidebarWidth"), 10);
-    if (saved && saved >= 180) sidebar.style.width = saved + "px";
+    const panelW = chatPanel.getBoundingClientRect().width || window.innerWidth;
+    if (saved && saved >= 180 && saved <= panelW - 200) sidebar.style.width = saved + "px";
 
     sResizer.addEventListener("mousedown", (e) => {
       e.preventDefault();
@@ -2098,6 +2106,7 @@
     chatVisible = true;
     chatPanel.hidden = false;
     document.body.classList.add("chat-open");
+    maybeMobileConversation();
     switchChatTab("conversations");
     showChatView();
     currentPeerName = f.username;
@@ -3642,6 +3651,7 @@
     chatVisible = true;
     chatPanel.hidden = false;
     document.body.classList.add("chat-open");
+    maybeMobileConversation();
     // 若离开的是其它群的会议，切换到本群时静默清理软离开状态，避免残留“已离开”面板
     if (meetingLeft && meetingGroupId != null && Number(meetingGroupId) !== Number(g.id)) {
       meetingLeft = false; meetingGroupId = null; meetingType = null;
@@ -3848,6 +3858,7 @@
     chatVisible = true;
     chatPanel.hidden = false;
     document.body.classList.add("chat-open");
+    maybeMobileConversation();
     renderAvatarInto(friendDetailAvatar, f.avatar, (f.username || "?").charAt(0).toUpperCase());
     friendDetailName.textContent = f.username;
     friendDetailStatus.textContent = f.online ? "在线" : "离线";
@@ -3869,6 +3880,7 @@
     chatVisible = true;
     chatPanel.hidden = false;
     document.body.classList.add("chat-open");
+    maybeMobileConversation();
     currentGroup = g.id; // 供设置页内的「退出/添加成员」操作使用
     renderAvatarInto(groupDetailAvatar, g.avatar, (g.name || "?").charAt(0).toUpperCase());
     groupDetailName.textContent = g.name;
