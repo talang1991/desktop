@@ -400,10 +400,25 @@
   let iframeActive = [];    // 当前“打开中”的页面（最多 2 个，用于左右分屏）
   let splitRatio = 0.5;     // 分屏时分隔条位置（0~1，左边占比）
   let dividerEl = null;     // 分屏分隔条
+  let iframeDragPage = null; // 当前正被拖拽的页面（拖到屏幕另一侧重分屏）
+  let iframeDockHidden = localStorage.getItem("iframeDockHidden") === "1"; // 内嵌栏（最小化卡片）是否收起
   function updateDockVisibility() {
     const dock = $("#iframeDock");
     if (!dock) return;
     dock.hidden = dock.querySelectorAll(".iframe-page").length === 0;
+  }
+  // 收起/展开底部那排最小化卡片（不影响激活/分屏页）
+  function applyDockHidden() {
+    const dock = $("#iframeDock");
+    if (!dock) return;
+    dock.classList.toggle("dock-hidden", iframeDockHidden);
+    const t = $("#iframeDockToggle");
+    if (t) t.textContent = iframeDockHidden ? "显示内嵌栏 ▴" : "隐藏内嵌栏 ▾";
+  }
+  function toggleDockHidden() {
+    iframeDockHidden = !iframeDockHidden;
+    localStorage.setItem("iframeDockHidden", iframeDockHidden ? "1" : "0");
+    applyDockHidden();
   }
   function closeIframePage(page) {
     if (!page) return;
@@ -414,62 +429,88 @@
   }
   function syncIframePageButtons(page) {
     if (!page) return;
+    const maxBtn = page.querySelector(".iframe-max");
     const minBtn = page.querySelector(".iframe-min");
-    if (!minBtn) return;
-    // 唯一打开中 → 显示“最小化（—）”；分屏中或卡片态 → 显示“最大化/还原（□）”
-    const sole = iframeActive.length === 1 && iframeActive[0] === page;
-    minBtn.textContent = sole ? "—" : "□";
-    minBtn.title = sole ? "最小化" : "最大化";
+    const inActive = iframeActive.includes(page);
+    const isFullSole = inActive && iframeActive.length === 1 && !page.classList.contains("half");
+    const isHalf = inActive && page.classList.contains("half");
+    const isSplit = inActive && iframeActive.length === 2;
+    // 最小化按钮：打开中（单页/半屏/分屏）显示，卡片态由 CSS 隐藏，始终表示“最小化/收起（—）”
+    if (minBtn) { minBtn.textContent = "—"; minBtn.title = "最小化"; }
+    // 最大化按钮：单页全屏隐藏（CSS）；半屏/分屏显示“最大化/铺满”；卡片显示“打开”
+    if (maxBtn) {
+      if (isFullSole) { /* 单页全屏由 CSS 隐藏，无需设置 */ }
+      else if (isHalf) { maxBtn.textContent = "□"; maxBtn.title = "最大化（铺满）"; }
+      else if (isSplit) { maxBtn.textContent = "□"; maxBtn.title = "最大化当前页"; }
+      else { maxBtn.textContent = "□"; maxBtn.title = "打开"; } // 卡片态
+    }
   }
-  // 根据当前活动页集合重新布局：0=仅卡片；1=单页全屏；2=左右分屏
+  // 根据当前活动页集合重新布局：0=仅卡片；1=单页全屏 或 半屏（dock 还有其它页时）；2=左右分屏
   function layoutIframePages() {
     const dock = $("#iframeDock");
     if (!dock) return;
     const pages = [...dock.querySelectorAll(".iframe-page")];
-    pages.forEach((p) => { p.classList.remove("active", "split"); });
     const n = iframeActive.length;
     const chatOpen = document.body.classList.contains("chat-open");
     const chatW = chatOpen ? Math.min(560, window.innerWidth) : 0;
     const avail = window.innerWidth - chatW;
+    // 清空所有页面定位/状态类，下一步按需重新设置
+    pages.forEach((p) => {
+      p.classList.remove("active", "split", "half");
+      p.style.left = ""; p.style.right = "";
+      p._wasSplit = false;
+    });
     if (n === 1) {
       const p = iframeActive[0];
-      p.classList.add("active");
-      // 从分屏退回单页时清掉分屏遗留的内联定位，恢复全屏（由 CSS 控制）
-      if (p._wasSplit) { p.style.left = ""; p.style.right = ""; p._wasSplit = false; }
-      syncIframePageButtons(p);
+      const total = pages.length;
+      if (total >= 2 && !p._forceFull) {
+        // 半屏态：占据一侧（左半），留出空区域，dock 仍可见，便于打开另一页凑分屏
+        p.classList.add("active", "half");
+        p._wasSplit = true;
+        const D = Math.max(IFRAME_MIN_W, Math.min(splitRatio * avail, avail - IFRAME_MIN_W));
+        p.style.left = "0px";
+        p.style.right = Math.max(window.innerWidth - D, chatW) + "px";
+      } else {
+        // 单页全屏：清除内联定位，由 CSS 的 inset:0 控制
+        p.classList.add("active");
+      }
     } else if (n === 2) {
       const L = iframeActive[0], R = iframeActive[1];
-      L.classList.add("split"); R.classList.add("split");
-      L._wasSplit = true; R._wasSplit = true;
+      [L, R].forEach((x) => { x.classList.add("active", "split"); x._forceFull = false; x._wasSplit = true; });
       const D = Math.max(IFRAME_MIN_W, Math.min(splitRatio * avail, avail - IFRAME_MIN_W));
       L.style.left = "0px";
       L.style.right = (window.innerWidth - D) + "px";
       R.style.left = D + "px";
       R.style.right = chatW + "px";
-      syncIframePageButtons(L);
-      syncIframePageButtons(R);
       if (dividerEl) { dividerEl.style.display = "block"; dividerEl.style.left = D + "px"; }
     }
     if (n !== 2 && dividerEl) dividerEl.style.display = "none";
+    // 对所有页面（含已最小化的卡片）统一同步按钮图标，避免状态与图标错位
+    pages.forEach((p) => syncIframePageButtons(p));
     updateDockVisibility();
   }
-  function minimizeIframePage(page) {
+  function maximizeIframePage(page) {
     if (!page) return;
-    const i = iframeActive.indexOf(page);
-    if (i < 0) { activateIframePage(page); return; } // 卡片态 → 打开
-    if (iframeActive.length === 1) {
-      iframeActive.splice(i, 1); // 唯一打开中 → 最小化收进 dock
-    } else {
-      iframeActive = [page]; // 分屏中 → 最大化当前页（移除另一页）
-    }
+    // “最大化 / 打开”：让该页独占全屏（移除其他打开中的页，并强制铺满，即使 dock 还有其它页）
+    iframeActive = [page];
+    page._forceFull = true;
     layoutIframePages();
+  }
+  function minimizeCurrent(page) {
+    if (!page) return;
+    // “最小化 / 收起”：把当前页从打开中移除，收进 dock（不影响其他页）
+    const i = iframeActive.indexOf(page);
+    if (i >= 0) {
+      iframeActive.splice(i, 1);
+      if (iframeActive.length === 1) iframeActive[0]._forceFull = true; // 分屏中收起一个 → 另一个铺满
+      layoutIframePages();
+    }
   }
   function activateIframePage(page) {
     if (!page) return;
-    if (!iframeActive.includes(page)) {
-      if (iframeActive.length >= 2) iframeActive.shift(); // 超过两个：移除最早的，保持最多两个
-      iframeActive.push(page);
-    }
+    // 从 dock 卡片点开 = 独占全屏：替换其它打开中的页（原页收成卡片），不再半屏/并排
+    iframeActive = [page];
+    page._forceFull = true;
     layoutIframePages();
   }
   function openIframe(url, title) {
@@ -478,8 +519,10 @@
     const safeTitle = title || hostnameOf(safeUrl) || "未命名链接";
     const dock = $("#iframeDock");
     if (!dock) { window.open(safeUrl, "_blank"); return; }
-    // 若该 url 已在打开中（单页或分屏），直接复用，不重复创建
-    if (iframeActive.some((p) => p.dataset.url === safeUrl)) { layoutIframePages(); return; }
+    // 若该 url 的页面已存在（无论打开中还是最小化卡片），直接复用。内嵌打开走“强制全屏”，
+    // 不进入半屏（半屏仅限从 dock 卡片点开时触发，便于再开另一个凑分屏）
+    const existing = [...dock.querySelectorAll(".iframe-page")].find((p) => p.dataset.url === safeUrl);
+    if (existing) { maximizeIframePage(existing); return; }
     const page = document.createElement("div");
     page.className = "iframe-page";
     page.dataset.url = safeUrl;
@@ -491,6 +534,7 @@
         `<a class="iframe-url" target="_blank" rel="noopener noreferrer" href="${escapeHtml(safeUrl)}">${escapeHtml(safeUrl)}</a>` +
         `<div class="iframe-actions">` +
           `<button class="iframe-newtab btn ghost small" title="在新标签页打开">↗ 新标签</button>` +
+          `<button class="iframe-max iframe-x" title="最大化">□</button>` +
           `<button class="iframe-min iframe-x" title="最小化">—</button>` +
           `<button class="iframe-close iframe-x" title="关闭">✕</button>` +
         `</div>` +
@@ -498,10 +542,15 @@
       `<iframe class="iframe-frame" referrerpolicy="no-referrer" ` +
       `sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation allow-modals"></iframe>`;
     page.querySelector(".iframe-close").addEventListener("click", (e) => { e.stopPropagation(); closeIframePage(page); });
+    page.querySelector(".iframe-max").addEventListener("click", (e) => {
+      e.stopPropagation();
+      // 已打开中（半屏/分屏）→ 强制独占全屏；卡片态（已最小化）→ 走“打开”流程（尊重半屏/分屏：有其它页先半屏，便于再开另一个凑分屏）
+      if (iframeActive.includes(page)) maximizeIframePage(page);
+      else activateIframePage(page);
+    });
     page.querySelector(".iframe-min").addEventListener("click", (e) => {
       e.stopPropagation();
-      // 卡片态→打开；单页→最小化；分屏中→最大化当前页（移除另一页）
-      minimizeIframePage(page);
+      minimizeCurrent(page); // 最小化/收起当前页（不影响其他页）
     });
     page.querySelector(".iframe-newtab").addEventListener("click", (e) => { e.stopPropagation(); window.open(safeUrl, "_blank"); });
     // 点击 dock 卡片（非按钮/非拖拽条区域）打开（加入活动页，最多两个并排）
@@ -515,8 +564,23 @@
     if (savedL >= 0) page.style.left = savedL + "px";
     if (savedR >= 0 && !chatVisible) page.style.right = savedR + "px";
     dock.appendChild(page);
-    activateIframePage(page);
+    // 内嵌打开（新建）同样强制全屏：覆盖式打开，不进入半屏。半屏仅由 dock 卡片点开触发
+    maximizeIframePage(page);
     initIframeResizers(page);
+    // 让页面（含最小化卡片）可拖拽：拖到屏幕左/右半释放 → 与另一页面分屏
+    page.draggable = true;
+    page.addEventListener("dragstart", (e) => {
+      iframeDragPage = page;
+      e.dataTransfer.effectAllowed = "move";
+      try { e.dataTransfer.setData("text/plain", page.dataset.url || ""); } catch (_) {}
+      document.body.classList.add("iframe-dragging");
+    });
+    page.addEventListener("dragend", () => {
+      iframeDragPage = null;
+      document.body.classList.remove("iframe-dragging", "iframe-drop-left", "iframe-drop-right");
+      const hint = document.getElementById("iframeDropHint");
+      if (hint) hint.style.display = "none";
+    });
     page.querySelector(".iframe-frame").src = safeUrl; // 节点一次性插入并设置 src，保持常驻运行
   }
 
@@ -607,6 +671,16 @@
     dividerEl.style.display = "none";
     document.body.appendChild(dividerEl);
     initIframeDivider();
+    // 内嵌栏收起/展开按钮：常驻 dock 内（非 .iframe-page 子节点），隐藏卡片后仍可点
+    const dock = $("#iframeDock");
+    if (dock && !$("#iframeDockToggle")) {
+      const t = document.createElement("button");
+      t.id = "iframeDockToggle";
+      t.className = "iframe-dock-toggle";
+      t.addEventListener("click", (e) => { e.stopPropagation(); toggleDockHidden(); });
+      dock.insertBefore(t, dock.firstChild);
+    }
+    applyDockHidden();
     // 聊天面板开/关时重新布局内嵌页，让出右侧空间避免被覆盖
     _chatOpenPrev = document.body.classList.contains("chat-open");
     const mo = new MutationObserver(() => {
@@ -614,6 +688,41 @@
       if (now !== _chatOpenPrev) { _chatOpenPrev = now; layoutIframePages(); }
     });
     mo.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+    // 拖拽页面到屏幕左/右半释放 → 与另一页面左右分屏
+    const dropHint = document.createElement("div");
+    dropHint.id = "iframeDropHint";
+    dropHint.className = "iframe-drop-hint";
+    dropHint.style.display = "none";
+    document.body.appendChild(dropHint);
+    document.addEventListener("dragover", (e) => {
+      if (!iframeDragPage) return;
+      e.preventDefault();
+      const left = e.clientX < window.innerWidth / 2;
+      document.body.classList.toggle("iframe-drop-left", left);
+      document.body.classList.toggle("iframe-drop-right", !left);
+      dropHint.style.display = "block";
+      dropHint.classList.toggle("left", left);
+      dropHint.classList.toggle("right", !left);
+    });
+    document.addEventListener("drop", (e) => {
+      if (!iframeDragPage) return;
+      e.preventDefault();
+      const page = iframeDragPage;
+      iframeDragPage = null;
+      document.body.classList.remove("iframe-dragging", "iframe-drop-left", "iframe-drop-right");
+      dropHint.style.display = "none";
+      // 找“搭档页”：优先当前活动页，否则 dock 里另一个页面
+      let mate = iframeActive.find((p) => p !== page);
+      if (!mate) {
+        const d = $("#iframeDock");
+        mate = d && [...d.querySelectorAll(".iframe-page")].find((p) => p !== page);
+      }
+      if (!mate) { maximizeIframePage(page); return; } // 仅此一页：直接全屏
+      const left = e.clientX < window.innerWidth / 2;
+      // 放下在左半 → 被拖页在左、搭档在右；右半反之。layout 的 n===2 分支完成分屏定位
+      iframeActive = left ? [page, mate] : [mate, page];
+      layoutIframePages();
+    });
   }
   initIframeInfra();
 
