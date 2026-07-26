@@ -1039,6 +1039,11 @@
       "call.hangup": "挂断",
       "call.accept": "接听",
       "call.decline": "拒绝",
+      "call.chat": "💬 聊天",
+      "call.chat.close": "关闭",
+      "call.chat.placeholder": "输入消息…",
+      "call.chat.send": "发送",
+      "call.chat.empty": "通话中可发送文字消息",
       "call.incoming.voice": "语音通话邀请",
       "call.incoming.video": "视频通话邀请",
       "call.incoming.chat": "聊天请求",
@@ -1220,6 +1225,11 @@
       "call.hangup": "Hang up",
       "call.accept": "Accept",
       "call.decline": "Decline",
+      "call.chat": "💬 Chat",
+      "call.chat.close": "Close",
+      "call.chat.placeholder": "Type a message…",
+      "call.chat.send": "Send",
+      "call.chat.empty": "Send text messages during the call",
       "call.incoming.voice": "Incoming voice call",
       "call.incoming.video": "Incoming video call",
       "call.incoming.chat": "Chat request",
@@ -1508,6 +1518,12 @@
   const btnCallShare = $("#btnCallShare");
   const btnCallFull = $("#btnCallFull");
   const btnCallHangup = $("#btnCallHangup");
+  const btnCallChat = $("#btnCallChat");
+  const btnCallChatClose = $("#btnCallChatClose");
+  const callChat = $("#callChat");
+  const callChatList = $("#callChatList");
+  const callChatInput = $("#callChatInput");
+  const callChatSend = $("#callChatSend");
   const incomingAvatar = $("#incomingAvatar");
   const incomingName = $("#incomingName");
   const incomingType = $("#incomingType");
@@ -1848,6 +1864,18 @@
   if (btnCallShare) btnCallShare.onclick = toggleScreenShare;
   if (btnCallFull) btnCallFull.onclick = toggleCallFullscreen;
   if (btnCallHangup) btnCallHangup.onclick = endCall;
+  if (btnCallChat) btnCallChat.onclick = toggleCallChat;
+  if (btnCallChatClose) btnCallChatClose.onclick = () => closeCallChat();
+  if (callChatSend) callChatSend.onclick = sendCallChat;
+  if (callChatInput) {
+    callChatInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendCallChat(); }
+    });
+    callChatInput.addEventListener("input", () => {
+      callChatInput.style.height = "auto";
+      callChatInput.style.height = Math.min(callChatInput.scrollHeight, 120) + "px";
+    });
+  }
   // 全屏状态变化（含按 ESC 退出）时同步按钮高亮
   const syncCallFullBtn = () => {
     const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
@@ -2254,6 +2282,13 @@
         // 会议内聊天：仅渲染到会议聊天抽屉（会议进行中或刚软离开时）
         if (typeof onMeetingMessage === "function") {
           onMeetingMessage({ id: m.id, groupId: m.groupId, from: m.from, text: m.text, ts: m.ts || Date.now() });
+        }
+        break;
+      }
+      case "call-chat": {
+        // 一对一通话内的文字聊天：仅渲染到通话聊天抽屉（且对端须是当前通话对象）
+        if (typeof onCallChatMessage === "function") {
+          onCallChatMessage({ id: m.id, from: m.from, text: m.text, ts: m.ts || Date.now() });
         }
         break;
       }
@@ -3179,6 +3214,8 @@
     if (remoteVideo) remoteVideo.srcObject = null;
     if (localVideo) localVideo.srcObject = null;
     if (callPanel) callPanel.hidden = true;
+    closeCallChat();
+    resetCallChatList();
     resetCallState();
   }
 
@@ -3697,6 +3734,72 @@
     if (meetingGroupId == null || Number(meetingGroupId) !== Number(m.groupId)) return;
     if (!meetingActive && !meetingLeft) return; // 仅会议进行中或刚软离开时可阅读
     appendMeetingMessage(m.from, m.text, m.ts || Date.now(), Number(m.from) === Number(myId));
+  }
+
+  // ---- 一对一通话内聊天 ----
+  function toggleCallChat() {
+    if (!callChat) return;
+    if (callChat.hidden) openCallChat(); else closeCallChat();
+  }
+  function openCallChat() {
+    if (!callChat) return;
+    callChat.hidden = false;
+    if (callPanel) callPanel.classList.add("chat-open");
+    if (btnCallChat) btnCallChat.classList.add("active");
+    if (callChatInput) { callChatInput.focus(); }
+  }
+  function closeCallChat() {
+    if (!callChat) return;
+    callChat.hidden = true;
+    if (callPanel) callPanel.classList.remove("chat-open");
+    if (btnCallChat) btnCallChat.classList.remove("active");
+    if (callChatInput) callChatInput.style.height = "auto";
+  }
+  function resetCallChatList() {
+    if (!callChatList) return;
+    callChatList.innerHTML = '<div class="call-chat-empty">' + t("call.chat.empty") + "</div>";
+  }
+  function appendCallMessage(fromId, text, ts, mine) {
+    if (!callChatList) return;
+    const empty = callChatList.querySelector(".call-chat-empty");
+    if (empty) empty.remove();
+    const row = document.createElement("div");
+    row.className = "call-chat-msg" + (mine ? " me" : "");
+    const meta = document.createElement("div");
+    meta.className = "call-chat-meta";
+    const nm = document.createElement("span");
+    nm.className = "call-chat-name";
+    nm.textContent = mine ? t("meeting.me") : (friends.find((x) => x.id === Number(fromId))?.username || ("#" + fromId));
+    const tm = document.createElement("span");
+    tm.className = "call-chat-time";
+    tm.textContent = new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    meta.append(nm, tm);
+    const body = document.createElement("div");
+    body.className = "call-chat-text";
+    body.textContent = text;
+    row.append(meta, body);
+    callChatList.appendChild(row);
+    callChatList.scrollTop = callChatList.scrollHeight;
+  }
+  function sendCallChat() {
+    if (!callChatInput) return;
+    const text = callChatInput.value.trim();
+    if (!text) return;
+    if (callPeerId == null || callState === "idle") { toast(t("call.busy")); return; }
+    const id = crypto.randomUUID();
+    const ts = Date.now();
+    appendCallMessage(myId, text, ts, true);
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "call-chat", to: callPeerId, id, ts, text }));
+    }
+    callChatInput.value = "";
+    callChatInput.style.height = "auto";
+  }
+  function onCallChatMessage(m) {
+    if (callPeerId == null || callState === "idle") return;
+    if (Number(callPeerId) !== Number(m.from)) return; // 仅渲染当前通话对端的消息
+    appendCallMessage(m.from, m.text, m.ts || Date.now(), Number(m.from) === Number(myId));
+    openCallChat(); // 收到对方消息自动展开抽屉，确保可见
   }
 
   // ---- 收到群会议广播 ----

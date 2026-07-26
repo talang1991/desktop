@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=69" />
+  <link rel="stylesheet" href="styles.css?v=70" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -307,17 +307,33 @@
   <!-- ====== 独立通话浮层（不再依赖聊天面板开合） ====== -->
   <!-- 语音 / 视频通话面板（全屏浮层） -->
   <div id="callPanel" class="call-panel" hidden>
-    <div class="call-remote-wrap">
-      <video id="remoteVideo" class="call-video" autoplay playsinline></video>
-      <div id="callRemoteAvatar" class="call-remote-avatar avatar lg" hidden></div>
-      <div class="call-remote-name" id="callRemoteName"></div>
-      <div class="call-state" id="callStateLabel"></div>
+    <div class="call-body">
+      <div class="call-remote-wrap">
+        <video id="remoteVideo" class="call-video" autoplay playsinline></video>
+        <div id="callRemoteAvatar" class="call-remote-avatar avatar lg" hidden></div>
+        <div class="call-remote-name" id="callRemoteName"></div>
+        <div class="call-state" id="callStateLabel"></div>
+      </div>
+      <video id="localVideo" class="call-local-video" autoplay playsinline muted></video>
     </div>
-    <video id="localVideo" class="call-local-video" autoplay playsinline muted></video>
+    <div id="callChat" class="call-chat" hidden>
+      <div class="call-chat-header">
+        <span data-i18n="call.chat">💬 聊天</span>
+        <button id="btnCallChatClose" class="call-chat-close" data-i18n-title="call.chat.close">✕</button>
+      </div>
+      <div id="callChatList" class="call-chat-list">
+        <div class="call-chat-empty" data-i18n="call.chat.empty">通话中可发送文字消息</div>
+      </div>
+      <div class="call-chat-input">
+        <textarea id="callChatInput" data-i18n-ph="call.chat.placeholder" rows="1"></textarea>
+        <button id="callChatSend" class="call-chat-send" data-i18n="call.chat.send">发送</button>
+      </div>
+    </div>
     <div class="call-controls">
       <button id="btnCallMute" class="call-ctrl" data-i18n-title="call.mute">🎤</button>
       <button id="btnCallCam" class="call-ctrl" data-i18n-title="call.cam">📹</button>
       <button id="btnCallShare" class="call-ctrl" data-i18n-title="call.share" hidden>🖥️</button>
+      <button id="btnCallChat" class="call-ctrl" data-i18n-title="call.chat">💬</button>
       <button id="btnCallFull" class="call-ctrl" data-i18n-title="call.full">⛶</button>
       <button id="btnCallHangup" class="call-ctrl hangup" data-i18n-title="call.hangup">📞</button>
     </div>
@@ -428,6 +444,6 @@
     <input id="importFile" type="file" accept="application/json" hidden />
   </div>
 
-  <script src="app.js?v=97"></script>
+  <script src="app.js?v=98"></script>
 </body>
 </html>

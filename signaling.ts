@@ -252,6 +252,24 @@ export function attachSignaling(server: Server): void {
           return;
         }
 
+        // ---- 一对一通话内的文字聊天（仅转发给对方，不落库）----
+        case "call-chat": {
+          const to = Number(msg.to);
+          if (!to) return;
+          const id = String(msg.id || crypto.randomUUID());
+          const ts = Number(msg.ts) || Date.now();
+          const text = String(msg.text ?? "").slice(0, 4000);
+          if (!text) return;
+          routeTo(to, {
+            type: "call-chat",
+            from: user!.id,
+            id,
+            ts,
+            text,
+          });
+          return;
+        }
+
         // ---- 群会议（多人 WebRTC 全网状）信令广播 ----
         // SDP/ICE 仍走上面已有的 signal（按 userId 定向），这里只负责“谁在会议里”的广播，
         // 让各成员互相建立 RTCPeerConnection。三类消息均校验群成员资格，并排除发送者本人。
