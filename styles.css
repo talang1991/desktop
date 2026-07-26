@@ -215,6 +215,7 @@ html, body {
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .field > span { font-size: 13px; color: var(--text-soft); }
 .field em { color: var(--danger); font-style: normal; }
+.field-label { display: flex; flex-direction: row; align-items: center; gap: 4px; }
 .field input, .field select {
   padding: 10px 12px;
   border: 1px solid var(--border);

@@ -317,15 +317,19 @@
       return matchCat && matchTerm;
     });
 
-    appCount.textContent = `${apps.length} 个应用` + (apps.length !== filtered.length ? `（显示 ${filtered.length}）` : "");
+    if (apps.length === filtered.length) {
+      i18nText(appCount, "app.count", { n: apps.length });
+    } else {
+      i18nText(appCount, "app.count.showing", { n: apps.length, m: filtered.length });
+    }
     grid.innerHTML = "";
 
     if (filtered.length === 0) {
       emptyState.hidden = false;
-      emptyState.querySelector("h2").textContent = apps.length === 0 ? "还没有应用" : "没有匹配的应用";
-      emptyState.querySelector("p").textContent = apps.length === 0
-        ? "点击右上角「＋ 添加应用」开始收集你的常用网站。"
-        : "试试更换分类或搜索关键词。";
+      const emptyH2 = emptyState.querySelector("h2");
+      const emptyP = emptyState.querySelector("p");
+      i18nText(emptyH2, apps.length === 0 ? "app.empty.title" : "app.empty.match");
+      i18nText(emptyP, apps.length === 0 ? "app.empty.hint" : "app.empty.try");
       return;
     }
     emptyState.hidden = true;
@@ -784,7 +788,7 @@
   }
   function openModal(app) {
     editingId = app ? app.id : null;
-    modalTitle.textContent = app ? "编辑应用" : "添加应用";
+    i18nText(modalTitle, app ? "app.modal.edit" : "app.modal.add");
     $("#fName").value = app ? app.name : "";
     $("#fUrl").value = app ? app.url : "";
     $("#fCategory").value = app && app.category ? app.category : "";
@@ -858,7 +862,7 @@
     const payload = {
       name,
       url,
-      category: $("#fCategory").value.trim() || "未分类",
+      category: $("#fCategory").value.trim() || t("app.category.uncategorized"),
       emoji: $("#fEmoji").value.trim(),
       color: selectedColor,
       openNew: $("#fOpenMode").value !== "iframe",
@@ -982,6 +986,31 @@
       "topbar.chat": "💬 聊天",
       "topbar.settings": "⚙ 设置",
       "topbar.logout": "登出",
+      "app.modal.add": "添加应用",
+      "app.modal.edit": "编辑应用",
+      "app.modal.name": "名称",
+      "app.modal.namePh": "例如：Gmail",
+      "app.modal.url": "网址",
+      "app.modal.urlPh": "https://mail.google.com",
+      "app.modal.category": "分类",
+      "app.modal.categoryPh": "工作 / 工具 / 娱乐",
+      "app.modal.icon": "图标（Emoji 或 favicon 链接）",
+      "app.modal.iconPh": "🌟 或 https://…/favicon.ico",
+      "app.modal.iconAuto": "使用网站默认 favicon",
+      "app.modal.color": "主题色",
+      "app.modal.openMode": "打开方式",
+      "app.modal.openMode.new": "新标签页打开",
+      "app.modal.openMode.self": "当前窗口打开",
+      "app.modal.openMode.iframe": "内嵌窗口（iframe）打开",
+      "app.modal.cancel": "取消",
+      "app.modal.save": "保存",
+      "app.empty.title": "还没有应用",
+      "app.empty.match": "没有匹配的应用",
+      "app.empty.hint": "点击右上角「＋ 添加应用」开始收集你的常用网站。",
+      "app.empty.try": "试试更换分类或搜索关键词。",
+      "app.count": "{n} 个应用",
+      "app.count.showing": "{n} 个应用（显示 {m}）",
+      "app.category.uncategorized": "未分类",
       "profile.title": "个人资料",
       "profile.avatarLabel": "头像（Emoji 或图片链接）",
       "profile.avatarPh": "🌟 或 https://…/avatar.png",
@@ -1168,6 +1197,31 @@
       "topbar.chat": "💬 Chat",
       "topbar.settings": "⚙ Settings",
       "topbar.logout": "Log Out",
+      "app.modal.add": "Add App",
+      "app.modal.edit": "Edit App",
+      "app.modal.name": "Name",
+      "app.modal.namePh": "e.g. Gmail",
+      "app.modal.url": "URL",
+      "app.modal.urlPh": "https://mail.google.com",
+      "app.modal.category": "Category",
+      "app.modal.categoryPh": "Work / Tools / Entertainment",
+      "app.modal.icon": "Icon (Emoji or favicon URL)",
+      "app.modal.iconPh": "🌟 or https://…/favicon.ico",
+      "app.modal.iconAuto": "Use site favicon",
+      "app.modal.color": "Theme Color",
+      "app.modal.openMode": "Open Mode",
+      "app.modal.openMode.new": "Open in new tab",
+      "app.modal.openMode.self": "Open in current window",
+      "app.modal.openMode.iframe": "Open in embedded iframe",
+      "app.modal.cancel": "Cancel",
+      "app.modal.save": "Save",
+      "app.empty.title": "No apps yet",
+      "app.empty.match": "No matching apps",
+      "app.empty.hint": "Click \"＋ Add App\" in the top-right to collect your favorite sites.",
+      "app.empty.try": "Try a different category or search keyword.",
+      "app.count": "{n} apps",
+      "app.count.showing": "{n} apps (showing {m})",
+      "app.category.uncategorized": "Uncategorized",
       "profile.title": "Profile",
       "profile.avatarLabel": "Avatar (Emoji or image URL)",
       "profile.avatarPh": "🌟 or https://…/avatar.png",

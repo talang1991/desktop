@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=70" />
+  <link rel="stylesheet" href="styles.css?v=71" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -70,8 +70,8 @@
       <section id="appGrid" class="grid" aria-live="polite"></section>
       <div id="emptyState" class="empty-state" hidden>
         <div class="empty-emoji">🗂️</div>
-        <h2>还没有应用</h2>
-        <p>点击右上角「＋ 添加应用」开始收集你的常用网站。</p>
+        <h2 data-i18n="app.empty.title">还没有应用</h2>
+        <p data-i18n="app.empty.hint">点击右上角「＋ 添加应用」开始收集你的常用网站。</p>
       </div>
     </main>
 
@@ -79,50 +79,50 @@
     <div id="modal" class="modal" hidden>
       <div class="modal-backdrop" data-close></div>
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-        <h2 id="modalTitle">添加应用</h2>
+        <h2 id="modalTitle" data-i18n="app.modal.add">添加应用</h2>
         <form id="appForm">
           <label class="field">
-            <span>名称 <em>*</em></span>
-            <input id="fName" name="name" type="text" required placeholder="例如：Gmail" />
+            <span class="field-label"><span data-i18n="app.modal.name">名称</span><em>*</em></span>
+            <input id="fName" name="name" type="text" required data-i18n-ph="app.modal.namePh" placeholder="例如：Gmail" />
           </label>
 
           <label class="field">
-            <span>网址 <em>*</em></span>
-            <input id="fUrl" name="url" type="url" required placeholder="https://mail.google.com" />
+            <span class="field-label"><span data-i18n="app.modal.url">网址</span><em>*</em></span>
+            <input id="fUrl" name="url" type="url" required data-i18n-ph="app.modal.urlPh" placeholder="https://mail.google.com" />
           </label>
 
           <label class="field">
-            <span>分类</span>
-            <input id="fCategory" name="category" type="text" list="categoryList" placeholder="工作 / 工具 / 娱乐" />
+            <span data-i18n="app.modal.category">分类</span>
+            <input id="fCategory" name="category" type="text" list="categoryList" data-i18n-ph="app.modal.categoryPh" placeholder="工作 / 工具 / 娱乐" />
             <datalist id="categoryList"></datalist>
           </label>
 
           <label class="field">
-            <span>图标（Emoji 或 favicon 链接）</span>
+            <span data-i18n="app.modal.icon">图标（Emoji 或 favicon 链接）</span>
             <div class="icon-input-row">
-              <input id="fEmoji" name="emoji" type="text" placeholder="🌟 或 https://…/favicon.ico" autocomplete="off" />
-              <button type="button" id="fEmojiAuto" class="btn ghost small" title="使用网站默认 favicon">📎</button>
+              <input id="fEmoji" name="emoji" type="text" data-i18n-ph="app.modal.iconPh" placeholder="🌟 或 https://…/favicon.ico" autocomplete="off" />
+              <button type="button" id="fEmojiAuto" class="btn ghost small" data-i18n-title="app.modal.iconAuto" title="使用网站默认 favicon">📎</button>
               <span class="icon-preview" id="iconPreview" aria-hidden="true"></span>
             </div>
           </label>
 
           <label class="field">
-            <span>主题色</span>
+            <span data-i18n="app.modal.color">主题色</span>
             <div class="color-row" id="colorRow"></div>
           </label>
 
           <label class="field">
-            <span>打开方式</span>
+            <span data-i18n="app.modal.openMode">打开方式</span>
             <select id="fOpenMode">
-              <option value="new">新标签页打开</option>
-              <option value="self">当前窗口打开</option>
-              <option value="iframe">内嵌窗口（iframe）打开</option>
+              <option value="new" data-i18n="app.modal.openMode.new">新标签页打开</option>
+              <option value="self" data-i18n="app.modal.openMode.self">当前窗口打开</option>
+              <option value="iframe" data-i18n="app.modal.openMode.iframe">内嵌窗口（iframe）打开</option>
             </select>
           </label>
 
           <div class="modal-actions">
-            <button type="button" class="btn ghost" data-close>取消</button>
-            <button type="submit" class="btn primary" id="saveBtn">保存</button>
+            <button type="button" class="btn ghost" data-close data-i18n="app.modal.cancel">取消</button>
+            <button type="submit" class="btn primary" id="saveBtn" data-i18n="app.modal.save">保存</button>
           </div>
         </form>
       </div>
@@ -159,7 +159,7 @@
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="groupModalTitle">
       <h2 id="groupModalTitle" data-i18n="chat.group.modalTitle">创建群聊</h2>
       <label class="field">
-        <span><span data-i18n="chat.group.nameLabel">群名称</span> <em>*</em></span>
+        <span class="field-label"><span data-i18n="chat.group.nameLabel">群名称</span><em>*</em></span>
         <input id="groupNameInput" type="text" data-i18n-ph="chat.group.namePh" maxlength="32" placeholder="例如：项目组 / 家人们" />
       </label>
       <div class="field">
@@ -444,6 +444,6 @@
     <input id="importFile" type="file" accept="application/json" hidden />
   </div>
 
-  <script src="app.js?v=98"></script>
+  <script src="app.js?v=99"></script>
 </body>
 </html>
