@@ -2533,12 +2533,7 @@
 
   function showIncomingCall(from, type, f) {
     if (!callIncoming) return;
-    // 聊天面板未打开时，来电弹窗不可见——自动展开面板以便接听
-    if (chatPanel.hidden) {
-      chatPanel.hidden = false;
-      document.body.classList.add("chat-open");
-      chatVisible = true;
-    }
+    // 来电卡片已脱离 chatPanel 成为独立浮层，无论聊天面板是否打开都弹出
     // 已有其它通话进行中：直接拒绝对方，避免多路并发
     if (callState !== "idle" && callState !== "incoming") {
       if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {

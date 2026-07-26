@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=58" />
+  <link rel="stylesheet" href="styles.css?v=60" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -295,85 +295,88 @@
         </div>
       </div>
 
-      <!-- 语音 / 视频通话面板（覆盖在聊天区之上） -->
-      <div id="callPanel" class="call-panel" hidden>
-        <div class="call-remote-wrap">
-          <video id="remoteVideo" class="call-video" autoplay playsinline></video>
-          <div id="callRemoteAvatar" class="call-remote-avatar avatar lg" hidden></div>
-          <div class="call-remote-name" id="callRemoteName"></div>
-          <div class="call-state" id="callStateLabel"></div>
-        </div>
-        <video id="localVideo" class="call-local-video" autoplay playsinline muted></video>
-        <div class="call-controls">
-          <button id="btnCallMute" class="call-ctrl" title="静音 / 取消静音">🎤</button>
-          <button id="btnCallCam" class="call-ctrl" title="开关摄像头">📹</button>
-          <button id="btnCallShare" class="call-ctrl" title="共享屏幕" hidden>🖥️</button>
-          <button id="btnCallFull" class="call-ctrl" title="全屏 / 退出全屏">⛶</button>
-          <button id="btnCallHangup" class="call-ctrl hangup" title="挂断">📞</button>
-        </div>
-      </div>
 
-      <!-- 来电弹窗 -->
-      <div id="callIncoming" class="call-incoming" hidden>
-        <div class="call-incoming-card">
-          <div class="call-incoming-avatar" id="incomingAvatar"></div>
-          <div class="call-incoming-name" id="incomingName"></div>
-          <div class="call-incoming-type" id="incomingType"></div>
-          <div class="call-incoming-actions">
-            <button id="btnIncomingAccept" class="call-ctrl accept" title="接听">接听</button>
-            <button id="btnIncomingDecline" class="call-ctrl hangup" title="拒绝">拒绝</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 群会议邀请弹窗 -->
-      <div id="groupCallInvite" class="call-incoming" hidden>
-        <div class="call-incoming-card">
-          <div class="call-incoming-avatar" id="groupCallAvatar"></div>
-          <div class="call-incoming-name" id="groupCallName"></div>
-          <div class="call-incoming-type" id="groupCallType"></div>
-          <div class="call-incoming-actions">
-            <button id="btnGroupCallJoin" class="call-ctrl accept" title="加入会议">加入</button>
-            <button id="btnGroupCallIgnore" class="call-ctrl hangup" title="忽略">忽略</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 群会议面板（多人视频网格） -->
-      <div id="meetingPanel" class="meeting-panel" hidden>
-        <div class="meeting-header">
-          <span class="meeting-title" id="meetingGroupName">群会议</span>
-          <span class="meeting-count" id="meetingCount">1 人</span>
-          <button id="btnMeetingSpotExit" class="meeting-spot-exit" title="退出聚焦，恢复网格" hidden>退出聚焦</button>
-          <button id="btnMeetingFull" class="meeting-full" title="全屏切换">⛶</button>
-          <button id="btnMeetingLeave" class="meeting-leave" title="离开会议">离开会议</button>
-        </div>
-        <div id="meetingGrid" class="meeting-grid">
-          <div class="meeting-tile self" data-uid="self">
-            <video id="meetingLocalVideo" class="meeting-video" autoplay playsinline muted></video>
-            <div class="meeting-avatar" id="meetingSelfAvatar"></div>
-            <span class="meeting-name">我</span>
-          </div>
-        </div>
-        <div id="meetingFilmstrip" class="meeting-filmstrip" hidden></div>
-        <div class="call-controls">
-          <button id="btnMeetingMute" class="call-ctrl" title="静音 / 取消静音">🎤</button>
-          <button id="btnMeetingCam" class="call-ctrl" title="开关摄像头">📹</button>
-          <button id="btnMeetingShare" class="call-ctrl" title="共享屏幕" hidden>🖥️</button>
-          <button id="btnMeetingHangup" class="call-ctrl hangup" title="挂断 / 离开">📞</button>
-        </div>
-        <!-- 离开会议后的状态条：提供“重新加入”入口 -->
-        <div id="meetingLeftBar" class="meeting-left-bar" hidden>
-          <div class="meeting-left-text">你已离开会议</div>
-          <div class="meeting-left-actions">
-            <button id="btnMeetingRejoin" class="call-ctrl accept" title="重新加入会议">重新加入</button>
-            <button id="btnMeetingCloseLeft" class="call-ctrl hangup" title="彻底关闭">关闭</button>
-          </div>
-        </div>
-      </div>
     </section>
   </div>
 
-  <script src="app.js?v=84"></script>
+  <!-- ====== 独立通话浮层（不再依赖聊天面板开合） ====== -->
+  <!-- 语音 / 视频通话面板（全屏浮层） -->
+  <div id="callPanel" class="call-panel" hidden>
+    <div class="call-remote-wrap">
+      <video id="remoteVideo" class="call-video" autoplay playsinline></video>
+      <div id="callRemoteAvatar" class="call-remote-avatar avatar lg" hidden></div>
+      <div class="call-remote-name" id="callRemoteName"></div>
+      <div class="call-state" id="callStateLabel"></div>
+    </div>
+    <video id="localVideo" class="call-local-video" autoplay playsinline muted></video>
+    <div class="call-controls">
+      <button id="btnCallMute" class="call-ctrl" title="静音 / 取消静音">🎤</button>
+      <button id="btnCallCam" class="call-ctrl" title="开关摄像头">📹</button>
+      <button id="btnCallShare" class="call-ctrl" title="共享屏幕" hidden>🖥️</button>
+      <button id="btnCallFull" class="call-ctrl" title="全屏 / 退出全屏">⛶</button>
+      <button id="btnCallHangup" class="call-ctrl hangup" title="挂断">📞</button>
+    </div>
+  </div>
+
+  <!-- 来电弹窗 -->
+  <div id="callIncoming" class="call-incoming" hidden>
+    <div class="call-incoming-card">
+      <div class="call-incoming-avatar" id="incomingAvatar"></div>
+      <div class="call-incoming-name" id="incomingName"></div>
+      <div class="call-incoming-type" id="incomingType"></div>
+      <div class="call-incoming-actions">
+        <button id="btnIncomingAccept" class="call-ctrl accept" title="接听">接听</button>
+        <button id="btnIncomingDecline" class="call-ctrl hangup" title="拒绝">拒绝</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 群会议邀请弹窗 -->
+  <div id="groupCallInvite" class="call-incoming" hidden>
+    <div class="call-incoming-card">
+      <div class="call-incoming-avatar" id="groupCallAvatar"></div>
+      <div class="call-incoming-name" id="groupCallName"></div>
+      <div class="call-incoming-type" id="groupCallType"></div>
+      <div class="call-incoming-actions">
+        <button id="btnGroupCallJoin" class="call-ctrl accept" title="加入会议">加入</button>
+        <button id="btnGroupCallIgnore" class="call-ctrl hangup" title="忽略">忽略</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 群会议面板（多人视频网格） -->
+  <div id="meetingPanel" class="meeting-panel" hidden>
+    <div class="meeting-header">
+      <span class="meeting-title" id="meetingGroupName">群会议</span>
+      <span class="meeting-count" id="meetingCount">1 人</span>
+      <button id="btnMeetingSpotExit" class="meeting-spot-exit" title="退出聚焦，恢复网格" hidden>退出聚焦</button>
+      <button id="btnMeetingFull" class="meeting-full" title="全屏切换">⛶</button>
+      <button id="btnMeetingLeave" class="meeting-leave" title="离开会议">离开会议</button>
+    </div>
+    <div id="meetingGrid" class="meeting-grid">
+      <div class="meeting-tile self" data-uid="self">
+        <video id="meetingLocalVideo" class="meeting-video" autoplay playsinline muted></video>
+        <div class="meeting-avatar" id="meetingSelfAvatar"></div>
+        <span class="meeting-name">我</span>
+      </div>
+    </div>
+    <div id="meetingFilmstrip" class="meeting-filmstrip" hidden></div>
+    <div class="call-controls">
+      <button id="btnMeetingMute" class="call-ctrl" title="静音 / 取消静音">🎤</button>
+      <button id="btnMeetingCam" class="call-ctrl" title="开关摄像头">📹</button>
+      <button id="btnMeetingShare" class="call-ctrl" title="共享屏幕" hidden>🖥️</button>
+      <button id="btnMeetingHangup" class="call-ctrl hangup" title="挂断 / 离开">📞</button>
+    </div>
+    <!-- 离开会议后的状态条：提供"重新加入"入口 -->
+    <div id="meetingLeftBar" class="meeting-left-bar" hidden>
+      <div class="meeting-left-text">你已离开会议</div>
+      <div class="meeting-left-actions">
+        <button id="btnMeetingRejoin" class="call-ctrl accept" title="重新加入会议">重新加入</button>
+        <button id="btnMeetingCloseLeft" class="call-ctrl hangup" title="彻底关闭">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=85"></script>
 </body>
 </html>
