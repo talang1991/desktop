@@ -1130,6 +1130,30 @@
   const convListEl = $("#convList");
   const convEmptyEl = $("#convEmpty");
 
+  // 会话列表点击用事件委托（而非给每个 row 单独绑 onclick）：
+  // renderConversations 每次都 convListEl.innerHTML="" 全量重建，直接绑定会在重建瞬间丢点击；
+  // 委托挂在 convListEl 上，innerHTML 清空不会移除它自身，故任何重建后点击都有效。
+  convListEl.addEventListener("click", (e) => {
+    const closeBtn = e.target.closest(".conv-close");
+    if (closeBtn) {
+      e.stopPropagation();
+      const row = closeBtn.closest(".conv-row");
+      if (row) removeConversation(row.dataset.ctype, Number(row.dataset.cid));
+      return;
+    }
+    const row = e.target.closest(".conv-row");
+    if (!row) return;
+    const cid = Number(row.dataset.cid);
+    const ctype = row.dataset.ctype;
+    if (ctype === "group") {
+      const g = groups.find((x) => x.id === cid);
+      if (g) openGroupConversation(g);
+    } else {
+      const f = friends.find((x) => x.id === cid);
+      if (f) openConversation(f);
+    }
+  });
+
   // Tab 栏（会话 / 好友 / 群组）DOM
   const chatTabs = document.querySelectorAll(".chat-tab");
   const tabPanels = document.querySelectorAll(".tab-panel");
@@ -1954,7 +1978,7 @@
     }
     updateTabBadges();
   }
-  function renderFriends() {
+  function renderFriendList() {
     // 待通过请求
     friendRequestsEl.innerHTML = "";
     if (friendRequests.length) {
@@ -2003,6 +2027,10 @@
         friendListEl.appendChild(row);
       });
     }
+  }
+  // 完整刷新（好友 + 会话列表 + 标签徽章）；renderFriendList 只刷好友侧（用于切换会话时清好友高亮，避免连带重建会话列表）
+  function renderFriends() {
+    renderFriendList();
     renderConversations();
     updateTabBadges();
   }
@@ -3619,7 +3647,7 @@
     setChatStatus(`群聊 · ${(g.members || []).length}人`, "");
     enableChatInput();
     renderGroups();
-    renderFriends();
+    renderFriendList();
     updateMeetingButtons();
     resetChatMessages(g.name);
     groupRenderedIds = new Set();
@@ -3766,20 +3794,8 @@
         `</span>` +
         badge +
         `<button class="conv-close" title="关闭会话">✕</button>`;
-      const open = () => {
-        if (c.type === "group") {
-          const g = groups.find((x) => x.id === c.id);
-          if (g) openGroupConversation(g);
-        } else {
-          const f = friends.find((x) => x.id === c.id);
-          if (f) openConversation(f);
-        }
-      };
-      row.onclick = open;
-      row.querySelector(".conv-close").onclick = (e) => {
-        e.stopPropagation();
-        removeConversation(c.type, c.id);
-      };
+      // 点击分发统一由 convListEl 的事件委托处理（见上方 addEventListener），此处不再单独绑定，
+      // 避免 renderConversations 全量重建时丢失点击。
       convListEl.appendChild(row);
     }
   }
