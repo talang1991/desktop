@@ -1087,7 +1087,10 @@
   const btnMeetingCam = $("#btnMeetingCam");
   const btnMeetingHangup = $("#btnMeetingHangup");
   const btnMeetingLeave = $("#btnMeetingLeave");
-  const groupMeetingBtn = $("#groupMeetingBtn");       // 群聊头部：发起会议
+  const btnMeetingRejoin = $("#btnMeetingRejoin");     // 离开后：重新加入
+  const btnMeetingCloseLeft = $("#btnMeetingCloseLeft"); // 离开后：彻底关闭
+  const meetingLeftBar = $("#meetingLeftBar");
+  const groupMeetingBtn = $("#groupMeetingBtn");       // 群聊头部：发起会议 / 重新加入
   const groupMeetingBtn2 = $("#groupMeetingBtn2");     // 群详情：发起会议
   const groupCallInvite = $("#groupCallInvite");
   const groupCallAvatar = $("#groupCallAvatar");
@@ -1373,12 +1376,14 @@
   if (btnIncomingDecline) btnIncomingDecline.onclick = declineCall;
 
   // 群会议事件
-  if (groupMeetingBtn) groupMeetingBtn.onclick = () => { const g = groups.find((x) => x.id === currentGroup); if (g) startGroupMeeting(g.id, "video"); };
-  if (groupMeetingBtn2) groupMeetingBtn2.onclick = () => { const g = groups.find((x) => x.id === currentGroup); if (g) startGroupMeeting(g.id, "video"); };
+  if (groupMeetingBtn) groupMeetingBtn.onclick = onMeetingHeaderBtn;
+  if (groupMeetingBtn2) groupMeetingBtn2.onclick = onMeetingHeaderBtn;
   if (btnMeetingMute) btnMeetingMute.onclick = toggleMeetingMute;
   if (btnMeetingCam) btnMeetingCam.onclick = toggleMeetingCam;
-  if (btnMeetingHangup) btnMeetingHangup.onclick = leaveGroupMeeting;
-  if (btnMeetingLeave) btnMeetingLeave.onclick = leaveGroupMeeting;
+  if (btnMeetingHangup) btnMeetingHangup.onclick = () => leaveGroupMeeting(false); // 软离开：可重入会
+  if (btnMeetingLeave) btnMeetingLeave.onclick = () => leaveGroupMeeting(false);   // 软离开：可重入会
+  if (btnMeetingRejoin) btnMeetingRejoin.onclick = rejoinGroupMeeting;
+  if (btnMeetingCloseLeft) btnMeetingCloseLeft.onclick = () => leaveGroupMeeting(true); // 彻底关闭
   if (btnGroupCallJoin) btnGroupCallJoin.onclick = () => {
     const pg = pendingGroupCall;
     if (pg) joinGroupMeeting(pg.groupId, pg.media, pg.from);
@@ -1498,7 +1503,7 @@
   }
   function closeChat() {
     if (callState !== "idle") endCall(); // 关闭聊天面板时若正在通话，先结束并通知对方
-    if (meetingActive) leaveGroupMeeting(); // 群会议随聊天面板关闭而结束
+    if (meetingActive || meetingLeft) leaveGroupMeeting(false); // 软离开：保留重入会入口
     chatPanel.hidden = true; document.body.classList.remove("chat-open"); chatVisible = false;
     updateCallButtons();
   }
@@ -1716,6 +1721,10 @@
       case "group-leave":
         // 有成员离开会议：清理其瓦片与连接
         onGroupLeave(m.groupId, m.from);
+        break;
+      case "group-roster":
+        // 服务端回执的权威会议成员名单：以它为准建立（补齐）全网状连接
+        onGroupRoster(m.groupId, m.members);
         break;
       case "peer-left":
         if (currentPeer === m.from) {
@@ -2098,6 +2107,7 @@
   let meetingGroupId = null;       // 会议所属群 id
   let meetingType = null;          // "audio" | "video"
   let meetingMembers = new Set();  // 会议成员 userId 集合（含自己 myId）
+  let meetingLeft = false;         // 是否已软离开（保留 groupId/type，可重新加入）
   // 待接听的群会议邀请（点击“加入”时用到）
   let pendingGroupCall = null;     // { groupId, from, media }
 
@@ -2158,7 +2168,7 @@
 
   function endCurrent() {
     if (callState !== "idle") endCall(); // 退出会话时若正在通话，先通知对方并清理
-    if (meetingActive) leaveGroupMeeting();
+    if (meetingActive || meetingLeft) leaveGroupMeeting(false); // 软离开：保留重入会入口
     if (sigSocket && currentPeer != null) {
       try { sigSocket.send(JSON.stringify({ type: "bye", to: currentPeer })); } catch {}
     }
@@ -2236,9 +2246,14 @@
       // 始终缓存，供会议加入后补渲染（避免“先收到流、后加入会议”导致画面缺失）
       peerStreams.set(id, stream);
       // 群会议成员：直接渲染到会议网格（每个成员一条独立 pc）
-      if (meetingActive && meetingMembers.has(id)) {
-        attachMeetingStream(id, stream);
-        return;
+      if (meetingActive) {
+        // 兜底：会议中收到未登记成员的流（如本地 g.members 快照滞后、权威名单尚未到达，
+        // 或既有 1:1 连接未入会籍），立即登记并渲染，避免“重入会后少一个人”的瓦片缺失。
+        if (!meetingMembers.has(id) && isGroupMemberId(meetingGroupId, id)) {
+          meetingMembers.add(id);
+          updateMeetingCount();
+        }
+        if (meetingMembers.has(id)) { attachMeetingStream(id, stream); return; }
       }
       // 来电未接听前不要渲染/播放（尤其音频自动播放），先缓存，接听后再呈现
       if (callIsCaller || callState === "active") {
@@ -2619,13 +2634,15 @@
     micMuted = false; camOff = false;
     bindMeetingLocal();
     showMeetingPanel(g);
-    // 与所有在线成员建立连接（各建一条 pc，立即携带本端媒体）
-    const others = (g.members || []).filter((m) => m.id !== myId && m.online);
+    // 与所有群成员建立连接（不以 g.members[].online 过滤：该字段仅 loadGroups 时快照，
+    // 可能落后于真实在线状态，按它过滤会在重入会时漏掉“快照中离线、实际在线”的成员）。
+    // 真正可达性由 WebRTC 连接本身判定，离线成员的连接会在失败时自动清理。
+    const others = (g.members || []).filter((m) => m.id !== myId);
     others.forEach((m) => connectMeetingPeer(m.id));
     if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "group-call", groupId, media: type }));
     }
-    toast("已发起群会议，正在呼叫在线成员…");
+    toast("已发起群会议，正在呼叫成员…");
     updateMeetingButtons();
   }
 
@@ -2651,13 +2668,13 @@
     meetingActive = true;
     meetingGroupId = groupId;
     meetingType = type;
-    meetingMembers = meetingMembers || new Set();
-    meetingMembers.add(myId);
+    // 重入会时不要沿用软离开时残留的 meetingMembers（可能含已退会成员），重建为只含自己
+    meetingMembers = new Set([myId]);
     micMuted = false; camOff = false;
     bindMeetingLocal();
     showMeetingPanel(g);
-    // 与所有在线成员建立连接（含发起者与各成员），保证全网状
-    const others = (g.members || []).filter((m) => m.id !== myId && m.online);
+    // 与所有群成员建立连接（不以在线快照过滤，见 startGroupMeeting 说明）；全网状
+    const others = (g.members || []).filter((m) => m.id !== myId);
     others.forEach((m) => connectMeetingPeer(m.id));
     if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "group-join", groupId }));
@@ -2675,6 +2692,9 @@
     // 已连接 / 连接中：无需重建，仅兼容“迟到补加媒体”，并补渲染已缓存的远端流
     if (p.pc && (st === "connected" || st === "connecting" || st === "new")) {
       if (localStream && !p.mediaAdded) addLocalMediaTracks(p);
+      // 已存在的连接也要登记为会议成员（如会议前已存在 1:1 pc，早期返回没加过），
+      // 否则该成员流到达时因不在 meetingMembers 而不渲染，造成瓦片缺失。
+      meetingMembers.add(memberId);
       if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
       return;
     }
@@ -2752,9 +2772,14 @@
     meetingGrid.querySelectorAll(".meeting-tile:not(.self)").forEach((t) => t.remove());
   }
 
-  function leaveGroupMeeting() {
-    if (!meetingActive) return;
-    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+  // 离开会议。soft=false 为彻底关闭（清空所有状态、隐藏面板）；soft=true 为软离开：
+  // 仅断开媒体与成员连接，但保留 meetingGroupId/meetingType 与“已离开”标记，
+  // 面板转入“你已离开会议”状态，提供「重新加入」入口，实现离开后可重入会。
+  function leaveGroupMeeting(soft) {
+    const wasInMeeting = meetingActive || meetingLeft;
+    if (!wasInMeeting) return;
+    // 仍在会议中才广播离开，通知其它成员移除本端瓦片（软离开后再次彻底关闭则无需重复广播）
+    if (meetingActive && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "group-leave", groupId: meetingGroupId }));
     }
     // 关闭所有会议成员 pc（同时清理 peers map 条目，避免与 1:1 连接互相污染）
@@ -2766,13 +2791,54 @@
       localStream.getTracks().forEach((t) => t.stop());
       localStream = null;
     }
-    meetingActive = false;
-    meetingGroupId = null;
-    meetingType = null;
-    meetingMembers = new Set();
-    if (meetingPanel) meetingPanel.hidden = true;
     if (meetingLocalVideo) meetingLocalVideo.srcObject = null;
+    meetingActive = false;
+    if (soft) {
+      // 软离开：保留 groupId/type，转入“已离开”状态，可重新加入
+      meetingLeft = true;
+      showMeetingLeft();
+    } else {
+      // 彻底关闭
+      meetingLeft = false;
+      meetingGroupId = null;
+      meetingType = null;
+      meetingMembers = new Set();
+      hideMeetingLeft();
+      if (meetingPanel) meetingPanel.hidden = true;
+    }
     updateMeetingButtons();
+  }
+
+  // 转入“已离开会议”状态：面板保持打开但隐藏视频网格与控制条，显示重新加入入口
+  function showMeetingLeft() {
+    if (meetingPanel) { meetingPanel.hidden = false; meetingPanel.classList.add("left"); }
+    if (meetingLeftBar) meetingLeftBar.hidden = false;
+    // 复位控制按钮的静音/摄像头视觉状态
+    if (btnMeetingMute) { btnMeetingMute.textContent = "🎤"; btnMeetingMute.classList.remove("off"); }
+    if (btnMeetingCam) { btnMeetingCam.textContent = "📹"; btnMeetingCam.classList.remove("off"); }
+  }
+  function hideMeetingLeft() {
+    if (meetingPanel) meetingPanel.classList.remove("left");
+    if (meetingLeftBar) meetingLeftBar.hidden = true;
+  }
+
+  // 重新加入之前软离开的会议（复用 group-join 广播，按同一群、同一类型重建全网状连接）
+  async function rejoinGroupMeeting() {
+    if (meetingActive) return;
+    const gid = meetingGroupId;
+    const type = meetingType || "video";
+    if (gid == null) return;
+    meetingLeft = false;
+    hideMeetingLeft();
+    await joinGroupMeeting(gid, type);
+  }
+
+  // 群聊头部/详情的会议按钮：若本群有“已离开”的会议则重新加入，否则发起新会议
+  function onMeetingHeaderBtn() {
+    const g = groups.find((x) => x.id === currentGroup);
+    if (!g) return;
+    if (meetingLeft && Number(meetingGroupId) === Number(g.id)) rejoinGroupMeeting();
+    else startGroupMeeting(g.id, "video");
   }
 
   // ---- 收到群会议广播 ----
@@ -2786,6 +2852,9 @@
   function onGroupJoin(groupId, from) {
     from = Number(from);
     if (!meetingActive || meetingGroupId !== Number(groupId)) return;
+    // 重入会时对方上一条连接已被其 group-leave 拆除；此处强制重建一条全新 pc，
+    // 避免复用可能存在的旧连接（旧 localStream 已 stop，复用会导致画面卡在失效流）。
+    teardownPeer(from);
     connectMeetingPeer(from);
   }
   function onGroupLeave(groupId, from) {
@@ -2794,6 +2863,23 @@
     meetingMembers.delete(from);
     removeMeetingTile(from);
     dropPeerConn(from);
+    updateMeetingCount();
+  }
+
+  // 服务端回执的权威群成员名单（发起/加入会议时收到）：以它为准重建成员集合并补齐连接。
+  // 这是“重入会后其他人窗口少一个人”的根因修复——本地 g.members 只是某次 loadGroups 的快照，
+  // 可能与服务端真实成员不一致；若快照漏了某人，本端就不会向其建连，对方也就收不到本端媒体。
+  // 用服务端权威名单兜底，保证发起/加入方对外连接始终完整。
+  function onGroupRoster(groupId, members) {
+    groupId = Number(groupId);
+    if (!meetingActive || Number(meetingGroupId) !== groupId) return;
+    meetingMembers = new Set([myId]);
+    (members || []).forEach((m) => {
+      m = Number(m);
+      if (m === myId) return;
+      meetingMembers.add(m);
+      connectMeetingPeer(m); // 幂等：已连接则早返回，仅补建缺失连接
+    });
     updateMeetingCount();
   }
 
@@ -2833,10 +2919,18 @@
   }
 
   function updateMeetingButtons() {
-    const inGroupChat = chatMode === "group" && currentGroup != null && chatVisible && !chatView.hidden && !meetingActive;
-    const inGroupDetail = chatMode === "group" && currentGroup != null && chatVisible && !groupView.hidden && !meetingActive;
-    if (groupMeetingBtn) groupMeetingBtn.hidden = !inGroupChat;
-    if (groupMeetingBtn2) groupMeetingBtn2.hidden = !inGroupDetail;
+    // 软离开且停留在同一群：头部按钮变为“重新加入”，点击即重入会
+    const rejoinMode = meetingLeft && currentGroup != null && Number(currentGroup) === Number(meetingGroupId) && !meetingActive;
+    const inGroupChat = chatMode === "group" && currentGroup != null && chatVisible && !chatView.hidden;
+    const inGroupDetail = chatMode === "group" && currentGroup != null && chatVisible && !groupView.hidden;
+    if (groupMeetingBtn) {
+      groupMeetingBtn.hidden = !(inGroupChat && !meetingActive);
+      groupMeetingBtn.textContent = rejoinMode ? "🔄 重新加入" : "📹 会议";
+    }
+    if (groupMeetingBtn2) {
+      groupMeetingBtn2.hidden = !(inGroupDetail && !meetingActive);
+      groupMeetingBtn2.textContent = rejoinMode ? "🔄 重新加入" : "📹 发起会议";
+    }
   }
 
   // 用 WebAudio 生成短促提示音，避免依赖外部音频文件
@@ -3060,6 +3154,12 @@
     return { name: m ? m.username : "用户", avatar: m ? m.avatar : "" };
   }
 
+  // 判断某 userId 是否属于某群的成员（用于会议中收到流时做兜底登记校验）
+  function isGroupMemberId(gid, uid) {
+    const g = groups.find((x) => x.id === Number(gid));
+    return !!(g && (g.members || []).some((m) => Number(m.id) === Number(uid)));
+  }
+
   // ---- 群未读（红点）----
   async function loadGroupUnread() {
     if (currentUserId == null) return;
@@ -3128,6 +3228,12 @@
     chatVisible = true;
     chatPanel.hidden = false;
     document.body.classList.add("chat-open");
+    // 若离开的是其它群的会议，切换到本群时静默清理软离开状态，避免残留“已离开”面板
+    if (meetingLeft && meetingGroupId != null && Number(meetingGroupId) !== Number(g.id)) {
+      meetingLeft = false; meetingGroupId = null; meetingType = null;
+      hideMeetingLeft();
+      if (meetingPanel) meetingPanel.hidden = true;
+    }
     switchChatTab("conversations");
     showChatView();
     chatPeerName.textContent = g.name;

@@ -241,6 +241,8 @@ export function attachSignaling(server: Server): void {
           const media = typeof msg.media === "string" ? msg.media : "video";
           const members = (await getGroupMemberIds(groupId)).filter((m) => m !== user!.id);
           routeToEach(members, { type: "group-call", groupId, from: user!.id, media });
+          // 回执发起者权威成员名单：确保本地 g.members 快照过期也不漏连任何人
+          send(ws, { type: "group-roster", groupId, members });
           return;
         }
         case "group-join": {
@@ -252,6 +254,8 @@ export function attachSignaling(server: Server): void {
           }
           const members = (await getGroupMemberIds(groupId)).filter((m) => m !== user!.id);
           routeToEach(members, { type: "group-join", groupId, from: user!.id });
+          // 回执加入者权威成员名单：确保本地 g.members 快照过期也不漏连任何人（重入会漏人根因）
+          send(ws, { type: "group-roster", groupId, members });
           return;
         }
         case "group-leave": {

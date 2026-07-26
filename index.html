@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=49" />
+  <link rel="stylesheet" href="styles.css?v=50" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -351,10 +351,18 @@
           <button id="btnMeetingCam" class="call-ctrl" title="开关摄像头">📹</button>
           <button id="btnMeetingHangup" class="call-ctrl hangup" title="挂断 / 离开">📞</button>
         </div>
+        <!-- 离开会议后的状态条：提供“重新加入”入口 -->
+        <div id="meetingLeftBar" class="meeting-left-bar" hidden>
+          <div class="meeting-left-text">你已离开会议</div>
+          <div class="meeting-left-actions">
+            <button id="btnMeetingRejoin" class="call-ctrl accept" title="重新加入会议">重新加入</button>
+            <button id="btnMeetingCloseLeft" class="call-ctrl hangup" title="彻底关闭">关闭</button>
+          </div>
+        </div>
       </div>
     </section>
   </div>
 
-  <script src="app.js?v=73"></script>
+  <script src="app.js?v=76"></script>
 </body>
 </html>
