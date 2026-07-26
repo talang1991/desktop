@@ -198,11 +198,6 @@ html, body {
 
 /* ---------- Modal ---------- */
 .modal { position: fixed; inset: 0; z-index: 250; place-items: center; }
-/* 聊天抽屉打开时，弹窗不要覆盖右侧聊天面板，居中在左侧应用区；窄屏则覆盖全屏 */
-body.chat-open .modal { right: min(560px, 100vw); }
-@media (max-width: 640px) {
-  body.chat-open .modal { right: 0; }
-}
 .modal[hidden] { display: none; }
 .modal:not([hidden]) { display: grid; }
 .modal-backdrop { position: absolute; inset: 0; background: rgba(10, 12, 20, 0.45); }
