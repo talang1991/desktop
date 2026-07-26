@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=50" />
+  <link rel="stylesheet" href="styles.css?v=52" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -242,7 +242,7 @@
           <div class="chat-status" id="chatStatus">未连接</div>
           <button id="btnVoiceCall" class="chat-call-btn" title="语音通话" hidden>📞</button>
           <button id="btnVideoCall" class="chat-call-btn" title="视频通话" hidden>📹</button>
-          <button id="groupMeetingBtn" class="chat-call-btn" title="发起群会议" hidden>📹会议</button>
+          <button id="groupMeetingBtn" class="chat-call-btn" title="发起群会议" hidden>📹 会议</button>
           <div id="chatGroupActions" class="chat-group-actions" hidden>
             <button id="groupAddMember" class="btn ghost small" title="添加成员">＋成员</button>
             <button id="groupLeave" class="btn ghost small" title="退出群聊">退出</button>
@@ -264,6 +264,10 @@
           <div class="detail-sub" id="friendDetailStatus"></div>
         </div>
         <div class="detail-actions">
+          <div class="detail-call-row">
+            <button id="friendVoiceCallBtn" class="btn call-action" hidden>📞 语音聊天</button>
+            <button id="friendVideoCallBtn" class="btn call-action" hidden>📹 视频聊天</button>
+          </div>
           <button id="friendMessageBtn" class="btn primary">发消息</button>
           <button id="friendRemoveBtn" class="btn ghost danger">移除好友</button>
         </div>
@@ -363,6 +367,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=76"></script>
+  <script src="app.js?v=77"></script>
 </body>
 </html>

@@ -1138,6 +1138,8 @@
   const friendDetailStatus = $("#friendDetailStatus");
   const friendMessageBtn = $("#friendMessageBtn");
   const friendRemoveBtn = $("#friendRemoveBtn");
+  const friendVoiceCallBtn = $("#friendVoiceCallBtn");
+  const friendVideoCallBtn = $("#friendVideoCallBtn");
   const groupDetailAvatar = $("#groupDetailAvatar");
   const groupDetailName = $("#groupDetailName");
   const groupDetailMeta = $("#groupDetailMeta");
@@ -2376,6 +2378,10 @@
     const idle = callState === "idle";
     if (btnVoiceCall) btnVoiceCall.hidden = !(show && idle);
     if (btnVideoCall) btnVideoCall.hidden = !(show && idle);
+    // 好友详情页语音/视频按钮：仅在好友资料视图可见且无进行中的通话时显示
+    const friendShow = idle && !friendView.hidden;
+    if (friendVoiceCallBtn) friendVoiceCallBtn.hidden = !friendShow;
+    if (friendVideoCallBtn) friendVideoCallBtn.hidden = !friendShow;
     updateMeetingButtons();
   }
 
@@ -3452,6 +3458,8 @@
     groupView.hidden = true;
     updateCallButtons();
     friendMessageBtn.onclick = () => openConversation(f);
+    if (friendVoiceCallBtn) friendVoiceCallBtn.onclick = () => startMediaCall(f.id, "audio");
+    if (friendVideoCallBtn) friendVideoCallBtn.onclick = () => startMediaCall(f.id, "video");
     friendRemoveBtn.onclick = async () => {
       await removeFriend(f);
       friendView.hidden = true;

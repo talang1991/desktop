@@ -781,6 +781,11 @@ body.resizing { user-select: none; cursor: col-resize; }
 .detail-sub { font-size: 13px; color: var(--text-soft); }
 .detail-section-title { font-size: 13px; font-weight: 600; color: var(--text-soft); margin-top: 4px; }
 .detail-actions { display: flex; flex-direction: column; gap: 10px; margin-top: auto; padding-top: 8px; }
+.detail-call-row { display: flex; gap: 10px; }
+.detail-call-row .call-action { flex: 1; justify-content: center; }
+.call-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  color: var(--primary); border: 1px solid var(--primary); background: transparent; }
+.call-action:hover { background: var(--primary); color: #fff; }
 .btn.danger { color: var(--danger, #ff4d4f); border-color: var(--danger, #ff4d4f); }
 .btn.danger:hover { background: var(--danger, #ff4d4f); color: #fff; }
 .member-list { display: flex; flex-direction: column; gap: 2px; }
@@ -1297,6 +1302,15 @@ body.resizing .iframe-frame { pointer-events: none !important; }
 }
 .chat-call-btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); transform: translateY(-1px); }
 .chat-call-btn[hidden] { display: none; }
+/* 群聊头部的“📹 会议”按钮：需要容纳图标+文字，不能复用 34x34 小方块 */
+#groupMeetingBtn {
+  width: auto;
+  min-width: 60px;
+  padding: 0 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  gap: 3px;
+}
 
 /* 通话面板：覆盖聊天主区域 */
 .call-panel {
