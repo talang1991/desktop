@@ -265,6 +265,30 @@ export function attachSignaling(server: Server): void {
           routeToEach(members, { type: "group-leave", groupId, from: user!.id });
           return;
         }
+        // 屏幕共享开始/停止广播：让其他成员把该成员的视频瓦片改为 contain（完整显示屏幕，不裁切）。
+        // 支持可选 to 定向（晚加入的成员没收到过广播，由共享者主动补发）。
+        case "group-screen": {
+          const groupId = Number(msg.groupId);
+          if (!groupId) return;
+          const payload = { type: "group-screen", groupId, from: user!.id };
+          if (msg.to) { routeTo(Number(msg.to), payload); }
+          else {
+            const members = (await getGroupMemberIds(groupId)).filter((m) => m !== user!.id);
+            routeToEach(members, payload);
+          }
+          return;
+        }
+        case "group-screen-stop": {
+          const groupId = Number(msg.groupId);
+          if (!groupId) return;
+          const payload = { type: "group-screen-stop", groupId, from: user!.id };
+          if (msg.to) { routeTo(Number(msg.to), payload); }
+          else {
+            const members = (await getGroupMemberIds(groupId)).filter((m) => m !== user!.id);
+            routeToEach(members, payload);
+          }
+          return;
+        }
 
         // 结束当前对话
         case "bye": {

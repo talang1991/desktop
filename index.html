@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=52" />
+  <link rel="stylesheet" href="styles.css?v=57" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -307,6 +307,8 @@
         <div class="call-controls">
           <button id="btnCallMute" class="call-ctrl" title="静音 / 取消静音">🎤</button>
           <button id="btnCallCam" class="call-ctrl" title="开关摄像头">📹</button>
+          <button id="btnCallShare" class="call-ctrl" title="共享屏幕" hidden>🖥️</button>
+          <button id="btnCallFull" class="call-ctrl" title="全屏 / 退出全屏">⛶</button>
           <button id="btnCallHangup" class="call-ctrl hangup" title="挂断">📞</button>
         </div>
       </div>
@@ -342,6 +344,8 @@
         <div class="meeting-header">
           <span class="meeting-title" id="meetingGroupName">群会议</span>
           <span class="meeting-count" id="meetingCount">1 人</span>
+          <button id="btnMeetingSpotExit" class="meeting-spot-exit" title="退出聚焦，恢复网格" hidden>退出聚焦</button>
+          <button id="btnMeetingFull" class="meeting-full" title="全屏切换">⛶</button>
           <button id="btnMeetingLeave" class="meeting-leave" title="离开会议">离开会议</button>
         </div>
         <div id="meetingGrid" class="meeting-grid">
@@ -350,9 +354,11 @@
             <span class="meeting-name">我</span>
           </div>
         </div>
+        <div id="meetingFilmstrip" class="meeting-filmstrip" hidden></div>
         <div class="call-controls">
           <button id="btnMeetingMute" class="call-ctrl" title="静音 / 取消静音">🎤</button>
           <button id="btnMeetingCam" class="call-ctrl" title="开关摄像头">📹</button>
+          <button id="btnMeetingShare" class="call-ctrl" title="共享屏幕" hidden>🖥️</button>
           <button id="btnMeetingHangup" class="call-ctrl hangup" title="挂断 / 离开">📞</button>
         </div>
         <!-- 离开会议后的状态条：提供“重新加入”入口 -->
@@ -367,6 +373,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=77"></script>
+  <script src="app.js?v=83"></script>
 </body>
 </html>

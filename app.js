@@ -1071,6 +1071,8 @@
   const callRemoteAvatar = $("#callRemoteAvatar");
   const btnCallMute = $("#btnCallMute");
   const btnCallCam = $("#btnCallCam");
+  const btnCallShare = $("#btnCallShare");
+  const btnCallFull = $("#btnCallFull");
   const btnCallHangup = $("#btnCallHangup");
   const incomingAvatar = $("#incomingAvatar");
   const incomingName = $("#incomingName");
@@ -1085,11 +1087,15 @@
   const meetingCount = $("#meetingCount");
   const btnMeetingMute = $("#btnMeetingMute");
   const btnMeetingCam = $("#btnMeetingCam");
+  const btnMeetingShare = $("#btnMeetingShare");
   const btnMeetingHangup = $("#btnMeetingHangup");
   const btnMeetingLeave = $("#btnMeetingLeave");
   const btnMeetingRejoin = $("#btnMeetingRejoin");     // 离开后：重新加入
   const btnMeetingCloseLeft = $("#btnMeetingCloseLeft"); // 离开后：彻底关闭
   const meetingLeftBar = $("#meetingLeftBar");
+  const meetingFilmstrip = $("#meetingFilmstrip");
+  const btnMeetingFull = $("#btnMeetingFull");
+  const btnMeetingSpotExit = $("#btnMeetingSpotExit");
   const groupMeetingBtn = $("#groupMeetingBtn");       // 群聊头部：发起会议 / 重新加入
   const groupMeetingBtn2 = $("#groupMeetingBtn2");     // 群详情：发起会议
   const groupCallInvite = $("#groupCallInvite");
@@ -1373,7 +1379,16 @@
   if (btnVideoCall) btnVideoCall.onclick = () => { if (currentPeer != null) startMediaCall(currentPeer, "video"); };
   if (btnCallMute) btnCallMute.onclick = toggleMute;
   if (btnCallCam) btnCallCam.onclick = toggleCamera;
+  if (btnCallShare) btnCallShare.onclick = toggleScreenShare;
+  if (btnCallFull) btnCallFull.onclick = toggleCallFullscreen;
   if (btnCallHangup) btnCallHangup.onclick = endCall;
+  // 全屏状态变化（含按 ESC 退出）时同步按钮高亮
+  const syncCallFullBtn = () => {
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    if (btnCallFull) btnCallFull.classList.toggle("active", !!fsEl && fsEl === callPanel);
+  };
+  document.addEventListener("fullscreenchange", syncCallFullBtn);
+  document.addEventListener("webkitfullscreenchange", syncCallFullBtn);
   if (btnIncomingAccept) btnIncomingAccept.onclick = acceptCall;
   if (btnIncomingDecline) btnIncomingDecline.onclick = declineCall;
 
@@ -1382,8 +1397,29 @@
   if (groupMeetingBtn2) groupMeetingBtn2.onclick = onMeetingHeaderBtn;
   if (btnMeetingMute) btnMeetingMute.onclick = toggleMeetingMute;
   if (btnMeetingCam) btnMeetingCam.onclick = toggleMeetingCam;
+  if (btnMeetingShare) btnMeetingShare.onclick = toggleMeetingScreenShare;
   if (btnMeetingHangup) btnMeetingHangup.onclick = () => leaveGroupMeeting(false); // 软离开：可重入会
   if (btnMeetingLeave) btnMeetingLeave.onclick = () => leaveGroupMeeting(false);   // 软离开：可重入会
+  if (btnMeetingFull) btnMeetingFull.onclick = toggleMeetingFullscreen;
+  if (btnMeetingSpotExit) btnMeetingSpotExit.onclick = exitSpotlight;
+  // 全屏状态由浏览器原生事件驱动（兼容 ESC 退出），同步按钮高亮
+  const _meetFsChange = () => {
+    if (!btnMeetingFull) return;
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    btnMeetingFull.classList.toggle("active", !!fsEl && (fsEl === meetingPanel));
+  };
+  document.addEventListener("fullscreenchange", _meetFsChange);
+  document.addEventListener("webkitfullscreenchange", _meetFsChange);
+  // 点击任一视频瓦片：聚焦该成员（大画面），再次点击同一瓦片退出聚焦
+  if (meetingPanel) {
+    meetingPanel.addEventListener("click", (e) => {
+      const tile = e.target.closest(".meeting-tile");
+      if (!tile || !meetingPanel.contains(tile)) return;
+      const uid = tile.dataset.uid;
+      if (!uid) return;
+      toggleSpotlight(uid);
+    });
+  }
   if (btnMeetingRejoin) btnMeetingRejoin.onclick = rejoinGroupMeeting;
   if (btnMeetingCloseLeft) btnMeetingCloseLeft.onclick = () => leaveGroupMeeting(true); // 彻底关闭
   if (btnGroupCallJoin) btnGroupCallJoin.onclick = () => {
@@ -1727,6 +1763,14 @@
       case "group-roster":
         // 服务端回执的权威会议成员名单：以它为准建立（补齐）全网状连接
         onGroupRoster(m.groupId, m.members);
+        break;
+      case "group-screen":
+        // 某成员开始共享屏幕：标记其瓦片为 contain（完整显示，不裁切）
+        onGroupScreen(m.groupId, m.from);
+        break;
+      case "group-screen-stop":
+        // 某成员停止共享屏幕：恢复普通视频裁切显示
+        onGroupScreenStop(m.groupId, m.from);
         break;
       case "peer-left":
         if (currentPeer === m.from) {
@@ -2097,8 +2141,11 @@
   let callState = "idle";          // idle | outgoing | incoming | active
   let callIsCaller = false;        // 本端是否为发起方
   let pendingRemoteStream = null;  // 来电未接听前缓存的远端流（避免提前播放音频）
+  let remoteIsSharingScreen = false; // 对端是否正在共享屏幕（决定远端视频用 contain 显示）
   let micMuted = false;
   let camOff = false;
+  let screenStream = null;         // 屏幕共享流（getDisplayMedia）
+  let isSharingScreen = false;     // 是否正在共享屏幕
   let incomingCallFrom = null;     // 正在响铃的来电对象
   let incomingCallType = null;
 
@@ -2110,6 +2157,8 @@
   let meetingType = null;          // "audio" | "video"
   let meetingMembers = new Set();  // 会议成员 userId 集合（含自己 myId）
   let meetingLeft = false;         // 是否已软离开（保留 groupId/type，可重新加入）
+  let spotlightUid = null;         // 聚焦观看的成员 uid（"self" 或数字 userId）；null 为网格模式
+  let screenSharingMembers = new Set(); // 正在共享屏幕的会议成员 uid 集合（不含自己，自己单独标记）
   // 待接听的群会议邀请（点击“加入”时用到）
   let pendingGroupCall = null;     // { groupId, from, media }
 
@@ -2277,6 +2326,12 @@
     if (!data) return;
     // 媒体控制信令（接听 / 拒绝 / 挂断）走独立通道，不参与 SDP/ICE 协商
     if (data.kind === "media") { handleMediaControl(data, from); return; }
+    // 对端共享屏幕状态：远端视频改用 contain 完整显示（不裁切）
+    if (data.kind === "screen") {
+      remoteIsSharingScreen = !!data.on;
+      if (remoteVideo) remoteVideo.classList.toggle("screen", remoteIsSharingScreen);
+      return;
+    }
     const p = ensurePeerConn(from);
     if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); }
     try {
@@ -2442,6 +2497,10 @@
     if (remoteVideo) remoteVideo.hidden = type === "audio";
     if (btnCallMute) { btnCallMute.textContent = "🎤"; btnCallMute.classList.remove("off"); }
     if (btnCallCam) { btnCallCam.hidden = type !== "video"; btnCallCam.textContent = "📹"; btnCallCam.classList.remove("off"); }
+    if (btnCallShare) { btnCallShare.hidden = type !== "video"; btnCallShare.classList.remove("active"); }
+    // 新通话开始：复位屏幕共享状态
+    isSharingScreen = false;
+    screenStream = null;
   }
 
   function setCallStateLabel(text) {
@@ -2551,6 +2610,11 @@
       localStream.getTracks().forEach((t) => t.stop());
       localStream = null;
     }
+    if (screenStream) {
+      screenStream.getTracks().forEach((t) => t.stop());
+      screenStream = null;
+    }
+    isSharingScreen = false;
     if (callPeerId != null) {
       const p = getPeerConn(callPeerId);
       if (p && p.pc) {
@@ -2570,6 +2634,8 @@
     callState = "idle";
     callIsCaller = false;
     pendingRemoteStream = null;
+    remoteIsSharingScreen = false;
+    if (remoteVideo) remoteVideo.classList.remove("screen");
     micMuted = false; camOff = false;
     incomingCallFrom = null;
     incomingCallType = null;
@@ -2608,6 +2674,72 @@
     if (btnCallCam) {
       btnCallCam.textContent = camOff ? "🚫" : "📹";
       btnCallCam.classList.toggle("off", camOff);
+    }
+  }
+
+  // 屏幕共享：仅在视频通话中可用。用 getDisplayMedia 取得屏幕流，
+  // 通过 RTCRtpSender.replaceTrack 替换已发送的视频轨道（无需重协商），对方即看到你的屏幕。
+  async function toggleScreenShare() {
+    if (callType !== "video" || callState !== "active") {
+      toast("仅视频通话中可共享屏幕"); return;
+    }
+    if (isSharingScreen) { await stopScreenShare(); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      toast("当前浏览器不支持屏幕共享"); return;
+    }
+    let screen;
+    try {
+      screen = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false });
+    } catch (err) {
+      toast("无法共享屏幕：" + ((err && err.message) || err.name || err));
+      return;
+    }
+    const p = ensurePeerConn(callPeerId);
+    const sender = p && p.pc ? p.pc.getSenders().find((s) => s.track && s.track.kind === "video") : null;
+    if (!sender) {
+      screen.getTracks().forEach((t) => t.stop());
+      toast("未找到视频轨道，无法共享"); return;
+    }
+    const screenTrack = screen.getVideoTracks()[0];
+    try { await sender.replaceTrack(screenTrack); } catch (e) { console.error("[WEBRTC] replaceTrack failed", e); }
+    screenStream = screen;
+    isSharingScreen = true;
+    if (localVideo) { localVideo.srcObject = screenStream; localVideo.classList.add("screen"); } // 本地预览切到屏幕（contain 完整显示）
+    if (btnCallShare) btnCallShare.classList.add("active");
+    // 通知对端：本端开始共享，远端视频改用 contain 完整显示
+    if (callPeerId != null) sendSignal(callPeerId, { kind: "screen", on: true });
+    // 浏览器原生“停止共享”时同步状态
+    screenTrack.onended = () => { stopScreenShare(); };
+  }
+
+  async function stopScreenShare() {
+    if (!isSharingScreen || !screenStream) return;
+    const p = ensurePeerConn(callPeerId);
+    const camTrack = localStream ? localStream.getVideoTracks()[0] : null;
+    if (p && p.pc && camTrack) {
+      const sender = p.pc.getSenders().find((s) => s.track && s.track.kind === "video");
+      if (sender) { try { await sender.replaceTrack(camTrack); } catch (e) { console.error("[WEBRTC] replaceTrack back failed", e); } }
+    }
+    screenStream.getTracks().forEach((t) => t.stop());
+    screenStream = null;
+    isSharingScreen = false;
+    if (localVideo) { if (localStream) localVideo.srcObject = localStream; localVideo.classList.remove("screen"); } // 预览切回摄像头
+    if (btnCallShare) btnCallShare.classList.remove("active");
+    // 通知对端：本端停止共享，远端视频恢复裁切显示
+    if (callPeerId != null) sendSignal(callPeerId, { kind: "screen", on: false });
+  }
+
+  // 全屏：把整个通话面板（含远端视频、本端画中画、控制条）切到全屏，再次点击退出。
+  // 兼容标准 Fullscreen API 与 Safari 的 webkit 前缀。
+  function toggleCallFullscreen() {
+    if (!callPanel) return;
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    if (fsEl) {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (exit) { try { exit.call(document); } catch (e) { console.error("[UI] 退出全屏失败", e); } }
+    } else {
+      const req = callPanel.requestFullscreen || callPanel.webkitRequestFullscreen;
+      if (req) { try { req.call(callPanel); } catch (e) { console.error("[UI] 全屏失败", e); } }
     }
   }
 
@@ -2698,6 +2830,7 @@
     // 已连接 / 连接中：无需重建，仅兼容“迟到补加媒体”，并补渲染已缓存的远端流
     if (p.pc && (st === "connected" || st === "connecting" || st === "new")) {
       if (localStream && !p.mediaAdded) addLocalMediaTracks(p);
+      maybeApplyScreenShare(p); // 共享中：迟到成员也立即发送屏幕轨道
       // 已存在的连接也要登记为会议成员（如会议前已存在 1:1 pc，早期返回没加过），
       // 否则该成员流到达时因不在 meetingMembers 而不渲染，造成瓦片缺失。
       meetingMembers.add(memberId);
@@ -2712,6 +2845,7 @@
       p.mediaAdded = false;
       // 群会议：立即携带本端媒体（mesh 每人各自带媒体，无需等对方先发 offer），触发协商
       if (localStream) addLocalMediaTracks(p);
+      maybeApplyScreenShare(p); // 共享中：新连接也立即发送屏幕轨道
       meetingMembers.add(memberId);
       // 若该成员此前已发来流（先于本端加入会议到达），补渲染到网格
       if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
@@ -2725,7 +2859,11 @@
     if (meetingPanel) {
       meetingPanel.dataset.type = meetingType || "video";
       if (btnMeetingCam) btnMeetingCam.hidden = meetingType !== "video";
+      if (btnMeetingShare) { btnMeetingShare.hidden = meetingType !== "video"; btnMeetingShare.classList.remove("active"); }
     }
+    // 新会议开始：复位屏幕共享状态（与 1:1 共用 screenStream/isSharingScreen，互斥）
+    isSharingScreen = false;
+    screenStream = null;
   }
 
   function showMeetingPanel(g) {
@@ -2740,10 +2878,67 @@
     meetingCount.textContent = meetingMembers.size + " 人";
   }
 
-  // 将某成员的远端流挂到会议网格的一个瓦片里（按 userId 区分）
+  // 全屏：把整个会议面板切到全屏，再次点击退出（兼容 Safari webkit 前缀）。
+  function toggleMeetingFullscreen() {
+    if (!meetingPanel) return;
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    if (fsEl) {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (exit) { try { exit.call(document); } catch (e) { console.error("[UI] 退出全屏失败", e); } }
+    } else {
+      const req = meetingPanel.requestFullscreen || meetingPanel.webkitRequestFullscreen;
+      if (req) { try { req.call(meetingPanel); } catch (e) { console.error("[UI] 全屏失败", e); } }
+    }
+  }
+
+  // 点击瓦片切换聚焦：同一瓦片再点一次退出；点不同瓦片切换聚焦对象。
+  function toggleSpotlight(uid) {
+    if (spotlightUid != null && String(spotlightUid) === String(uid)) {
+      exitSpotlight();
+    } else {
+      enterSpotlight(uid);
+    }
+  }
+
+  function enterSpotlight(uid) {
+    if (!meetingGrid) return;
+    spotlightUid = uid;
+    if (meetingPanel) meetingPanel.classList.add("spotlight");
+    if (btnMeetingSpotExit) btnMeetingSpotExit.hidden = false;
+    // 收集所有瓦片（主网格 + 胶片条都可能含瓦片，切换聚焦时需统一重排）
+    const allTiles = Array.from(meetingGrid.querySelectorAll(".meeting-tile"));
+    if (meetingFilmstrip) meetingFilmstrip.querySelectorAll(".meeting-tile").forEach((t) => allTiles.push(t));
+    allTiles.forEach((tile) => {
+      const isSpot = String(tile.dataset.uid) === String(uid);
+      tile.classList.toggle("spotlight", isSpot);
+      // 被聚焦者进主网格（大画面），其余进底部胶片条（横向一排）
+      const target = isSpot ? meetingGrid : meetingFilmstrip;
+      if (tile.parentElement !== target) target.appendChild(tile);
+    });
+    if (meetingFilmstrip) meetingFilmstrip.hidden = false;
+  }
+
+  function exitSpotlight() {
+    spotlightUid = null;
+    if (meetingPanel) meetingPanel.classList.remove("spotlight");
+    if (btnMeetingSpotExit) btnMeetingSpotExit.hidden = true;
+    // 胶片条中的瓦片全部移回主网格，并取消聚焦高亮
+    if (meetingFilmstrip) {
+      Array.from(meetingFilmstrip.querySelectorAll(".meeting-tile")).forEach((tile) => {
+        tile.classList.remove("spotlight");
+        meetingGrid.appendChild(tile);
+      });
+      meetingFilmstrip.hidden = true;
+    }
+    if (meetingGrid) meetingGrid.querySelectorAll(".meeting-tile.spotlight").forEach((t) => t.classList.remove("spotlight"));
+  }
+
+  // 将某成员的远端流挂到会议网格的一个瓦片里（按 userId 区分）。
+  // 聚焦模式下：被聚焦的成员留在主网格（大画面），其余成员进入底部胶片条。
   function attachMeetingStream(id, stream) {
     if (!meetingGrid) return;
-    let tile = meetingGrid.querySelector('.meeting-tile[data-uid="' + id + '"]');
+    let tile = meetingGrid.querySelector('.meeting-tile[data-uid="' + id + '"]')
+            || (meetingFilmstrip && meetingFilmstrip.querySelector('.meeting-tile[data-uid="' + id + '"]'));
     if (!tile) {
       tile = document.createElement("div");
       tile.className = "meeting-tile";
@@ -2759,7 +2954,15 @@
       tile.appendChild(nm);
       const init = (info.name || String(id)).trim().charAt(0).toUpperCase();
       tile.dataset.initial = init || "?";
-      meetingGrid.appendChild(tile);
+      // 若该成员正在共享屏幕，直接标记为 contain 显示（避免后续才收到广播导致先被裁切）
+      if (screenSharingMembers.has(Number(id))) tile.classList.add("screen");
+      // 聚焦模式且不是被聚焦者 → 进胶片条；否则进主网格
+      const intoStrip = spotlightUid != null && String(spotlightUid) !== String(id);
+      const container = (intoStrip && meetingFilmstrip) ? meetingFilmstrip : meetingGrid;
+      container.appendChild(tile);
+      if (spotlightUid != null && String(spotlightUid) === String(id)) {
+        tile.classList.add("spotlight");
+      }
       updateMeetingCount();
     }
     const v = tile.querySelector("video");
@@ -2768,14 +2971,17 @@
 
   function removeMeetingTile(id) {
     if (!meetingGrid) return;
-    const tile = meetingGrid.querySelector('.meeting-tile[data-uid="' + id + '"]');
+    const tile = meetingGrid.querySelector('.meeting-tile[data-uid="' + id + '"]')
+              || (meetingFilmstrip && meetingFilmstrip.querySelector('.meeting-tile[data-uid="' + id + '"]'));
     if (tile) tile.remove();
+    // 被聚焦的成员离开 → 退出聚焦模式，恢复网格
+    if (spotlightUid != null && String(spotlightUid) === String(id)) exitSpotlight();
     updateMeetingCount();
   }
 
   function clearMeetingTiles() {
-    if (!meetingGrid) return;
-    meetingGrid.querySelectorAll(".meeting-tile:not(.self)").forEach((t) => t.remove());
+    if (meetingGrid) meetingGrid.querySelectorAll(".meeting-tile:not(.self)").forEach((t) => t.remove());
+    if (meetingFilmstrip) meetingFilmstrip.innerHTML = "";
   }
 
   // 离开会议。soft=false 为彻底关闭（清空所有状态、隐藏面板）；soft=true 为软离开：
@@ -2793,10 +2999,22 @@
       if (id !== myId) dropPeerConn(id);
     }
     clearMeetingTiles();
+    // 复位聚焦状态（离开会议后下次进入应为网格模式）
+    spotlightUid = null;
+    screenSharingMembers = new Set();
+    if (meetingPanel) meetingPanel.classList.remove("spotlight");
+    if (btnMeetingSpotExit) btnMeetingSpotExit.hidden = true;
+    if (meetingFilmstrip) meetingFilmstrip.hidden = true;
     if (localStream) {
       localStream.getTracks().forEach((t) => t.stop());
       localStream = null;
     }
+    if (screenStream) {
+      screenStream.getTracks().forEach((t) => t.stop());
+      screenStream = null;
+    }
+    isSharingScreen = false;
+    if (btnMeetingShare) btnMeetingShare.classList.remove("active");
     if (meetingLocalVideo) meetingLocalVideo.srcObject = null;
     meetingActive = false;
     if (soft) {
@@ -2862,11 +3080,17 @@
     // 避免复用可能存在的旧连接（旧 localStream 已 stop，复用会导致画面卡在失效流）。
     teardownPeer(from);
     connectMeetingPeer(from);
+    // 我正在共享屏幕时，晚加入的成员没收到过 group-screen 广播，主动定向补发一次，
+    // 让其把本端瓦片标记为 contain、完整显示共享屏幕
+    if (isSharingScreen && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "group-screen", groupId: meetingGroupId, to: from }));
+    }
   }
   function onGroupLeave(groupId, from) {
     from = Number(from);
     if (!meetingActive || meetingGroupId !== Number(groupId)) return;
     meetingMembers.delete(from);
+    screenSharingMembers.delete(from); // 离开者若曾共享屏幕，清理标记
     removeMeetingTile(from);
     dropPeerConn(from);
     updateMeetingCount();
@@ -2887,6 +3111,28 @@
       connectMeetingPeer(m); // 幂等：已连接则早返回，仅补建缺失连接
     });
     updateMeetingCount();
+  }
+
+  // 标记/取消标记某成员瓦片为“共享屏幕”状态（CSS 用 object-fit: contain 完整显示，避免裁切）
+  function setTileScreenFlag(uid, on) {
+    uid = String(uid);
+    const tile = (meetingGrid && meetingGrid.querySelector('.meeting-tile[data-uid="' + uid + '"]'))
+              || (meetingFilmstrip && meetingFilmstrip.querySelector('.meeting-tile[data-uid="' + uid + '"]'));
+    if (tile) tile.classList.toggle("screen", !!on);
+  }
+
+  // 收到某成员开始/停止共享屏幕的广播：标记其瓦片为 contain 显示
+  function onGroupScreen(groupId, from) {
+    from = Number(from);
+    if (!meetingActive || meetingGroupId !== Number(groupId)) return;
+    screenSharingMembers.add(from);
+    setTileScreenFlag(from, true);
+  }
+  function onGroupScreenStop(groupId, from) {
+    from = Number(from);
+    if (!meetingActive || meetingGroupId !== Number(groupId)) return;
+    screenSharingMembers.delete(from);
+    setTileScreenFlag(from, false);
   }
 
   function showGroupCallInvite(g, from, media, name) {
@@ -2922,6 +3168,74 @@
       btnMeetingCam.textContent = camOff ? "🚫" : "📹";
       btnMeetingCam.classList.toggle("off", camOff);
     }
+  }
+
+  // 群会议屏幕共享（全网状）：对每一条成员连接的视频发送轨道 replaceTrack 为屏幕轨道。
+  // 1:1 共用 screenStream/isSharingScreen 状态（通话与会议互斥，不会同时发生）。
+  async function toggleMeetingScreenShare() {
+    if (meetingType !== "video" || !meetingActive) { toast("仅视频会议中可共享屏幕"); return; }
+    if (isSharingScreen) { await stopMeetingScreenShare(); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      toast("当前浏览器不支持屏幕共享"); return;
+    }
+    let screen;
+    try {
+      screen = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false });
+    } catch (err) {
+      toast("无法共享屏幕：" + ((err && err.message) || err.name || err));
+      return;
+    }
+    const screenTrack = screen.getVideoTracks()[0];
+    screenStream = screen;
+    isSharingScreen = true;
+    await replaceMeetingVideoTrack(screenTrack);        // 已建立的连接立即换屏
+    if (meetingLocalVideo) meetingLocalVideo.srcObject = screenStream;
+    if (btnMeetingShare) btnMeetingShare.classList.add("active");
+    setTileScreenFlag("self", true);                    // 本端预览也完整显示屏幕（不裁切）
+    // 广播：通知其他成员把本端瓦片改为 contain，完整显示共享屏幕
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "group-screen", groupId: meetingGroupId }));
+    }
+    screenTrack.onended = () => { stopMeetingScreenShare(); }; // 浏览器原生停止共享同步
+  }
+
+  async function stopMeetingScreenShare() {
+    if (!isSharingScreen || !screenStream) return;
+    const camTrack = localStream ? localStream.getVideoTracks()[0] : null;
+    await replaceMeetingVideoTrack(camTrack);           // 换回摄像头（camTrack 为 null 时停止发送视频）
+    screenStream.getTracks().forEach((t) => t.stop());
+    screenStream = null;
+    isSharingScreen = false;
+    if (meetingLocalVideo && localStream) meetingLocalVideo.srcObject = localStream;
+    if (btnMeetingShare) btnMeetingShare.classList.remove("active");
+    setTileScreenFlag("self", false);                   // 恢复本端摄像头裁切显示
+    // 广播：通知其他成员恢复本端瓦片为普通视频裁切显示
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "group-screen-stop", groupId: meetingGroupId }));
+    }
+  }
+
+  // 将所有会议成员连接的视频发送轨道替换为 targetTrack（屏幕或摄像头）
+  async function replaceMeetingVideoTrack(targetTrack) {
+    for (const id of meetingMembers) {
+      if (id === myId) continue;
+      const p = getPeerConn(id);
+      if (!p || !p.pc) continue;
+      const sender = p.pc.getSenders().find((s) => s.track && s.track.kind === "video");
+      if (!sender) continue;
+      try { await sender.replaceTrack(targetTrack); }
+      catch (e) { console.error("[MEETING] replaceTrack 失败", id, e); }
+    }
+  }
+
+  // connectMeetingPeer 内调用：若该成员连接刚建好媒体，且本端正在共享，则立即把视频轨道换成屏幕
+  function maybeApplyScreenShare(p) {
+    if (!isSharingScreen || !screenStream || !p || !p.pc) return;
+    const sender = p.pc.getSenders().find((s) => s.track && s.track.kind === "video");
+    if (!sender) return;
+    const screenTrack = screenStream.getVideoTracks()[0];
+    try { sender.replaceTrack(screenTrack); }
+    catch (e) { console.error("[MEETING] applyScreenShare 失败", e); }
   }
 
   function updateMeetingButtons() {
