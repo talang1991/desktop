@@ -999,7 +999,7 @@
       "chat.friend.add": "添加",
       "chat.friend.empty": "还没有好友，添加好友后即可开始聊天",
       "chat.group.title": "👥 群聊",
-      "chat.group.create": "＋ 创建",
+      "chat.group.create1": "＋ 创建",
       "chat.group.empty": "还没有群聊，点「＋ 创建」开始",
       "chat.peer.placeholder": "选择一个好友开始聊天",
       "chat.status.disconnected": "未连接",
@@ -1059,6 +1059,11 @@
       "meeting.left": "你已离开会议",
       "meeting.rejoin": "重新加入",
       "meeting.close": "关闭",
+      "meeting.chat": "会议聊天",
+      "meeting.chat.title": "会议聊天",
+      "meeting.chat.placeholder": "说点什么…（Enter 发送）",
+      "meeting.chat.send": "发送",
+      "meeting.chat.empty": "会议中发消息，只有本会议成员可见",
       "meeting.invite.join": "加入",
       "meeting.invite.ignore": "忽略",
       "meeting.invite.voice": "语音会议邀请",
@@ -1175,7 +1180,7 @@
       "chat.friend.add": "Add",
       "chat.friend.empty": "No friends yet. Add friends to start chatting.",
       "chat.group.title": "👥 Group Chats",
-      "chat.group.create": "＋ Create",
+      "chat.group.create1": "＋ Create",
       "chat.group.empty": "No groups yet. Tap “＋ Create”.",
       "chat.peer.placeholder": "Select a friend to start chatting",
       "chat.status.disconnected": "Disconnected",
@@ -1235,6 +1240,11 @@
       "meeting.left": "You left the meeting",
       "meeting.rejoin": "Rejoin",
       "meeting.close": "Close",
+      "meeting.chat": "Meeting chat",
+      "meeting.chat.title": "Meeting Chat",
+      "meeting.chat.placeholder": "Say something… (Enter to send)",
+      "meeting.chat.send": "Send",
+      "meeting.chat.empty": "Messages here are visible only to meeting participants",
       "meeting.invite.join": "Join",
       "meeting.invite.ignore": "Ignore",
       "meeting.invite.voice": "Voice meeting invite",
@@ -1527,6 +1537,13 @@
   const groupCallAvatar = $("#groupCallAvatar");
   const groupCallName = $("#groupCallName");
   const groupCallType = $("#groupCallType");
+  // 会议内聊天相关 DOM
+  const meetingChat = $("#meetingChat");
+  const meetingChatList = $("#meetingChatList");
+  const meetingChatInput = $("#meetingChatInput");
+  const meetingChatSend = $("#meetingChatSend");
+  const btnMeetingChat = $("#btnMeetingChat");
+  const btnMeetingChatClose = $("#btnMeetingChatClose");
   const btnGroupCallJoin = $("#btnGroupCallJoin");
   const btnGroupCallIgnore = $("#btnGroupCallIgnore");
   const friendListEl = $("#friendList");
@@ -1851,6 +1868,19 @@
   if (btnMeetingLeave) btnMeetingLeave.onclick = () => leaveGroupMeeting(false);   // 软离开：可重入会
   if (btnMeetingFull) btnMeetingFull.onclick = toggleMeetingFullscreen;
   if (btnMeetingSpotExit) btnMeetingSpotExit.onclick = exitSpotlight;
+  // 会议内聊天事件
+  if (btnMeetingChat) btnMeetingChat.onclick = toggleMeetingChat;
+  if (btnMeetingChatClose) btnMeetingChatClose.onclick = () => closeMeetingChat();
+  if (meetingChatSend) meetingChatSend.onclick = sendMeetingChat;
+  if (meetingChatInput) {
+    meetingChatInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); sendMeetingChat(); }
+    });
+    meetingChatInput.addEventListener("input", () => {
+      meetingChatInput.style.height = "auto";
+      meetingChatInput.style.height = Math.min(meetingChatInput.scrollHeight, 120) + "px";
+    });
+  }
   // 全屏状态由浏览器原生事件驱动（兼容 ESC 退出），同步按钮高亮
   const _meetFsChange = () => {
     if (!btnMeetingFull) return;
@@ -2220,6 +2250,13 @@
           ts: m.ts || Date.now(),
         });
         break;
+      case "meeting-chat": {
+        // 会议内聊天：仅渲染到会议聊天抽屉（会议进行中或刚软离开时）
+        if (typeof onMeetingMessage === "function") {
+          onMeetingMessage({ id: m.id, groupId: m.groupId, from: m.from, text: m.text, ts: m.ts || Date.now() });
+        }
+        break;
+      }
       case "group-invite":
         // 被加入群聊：刷新群列表（并补算未读），把该群会话前置
         try { toast(tp("chat.pulled.in", { name: m.group?.name || "群聊" })); } catch {}
@@ -3570,6 +3607,8 @@
       meetingMembers = new Set();
       hideMeetingLeft();
       if (meetingPanel) meetingPanel.hidden = true;
+      closeMeetingChat();
+      if (meetingChatList) meetingChatList.innerHTML = ""; // 彻底关闭：清空会议聊天记录
     }
     updateMeetingButtons();
   }
@@ -3604,6 +3643,60 @@
     if (!g) return;
     if (meetingLeft && Number(meetingGroupId) === Number(g.id)) rejoinGroupMeeting();
     else startGroupMeeting(g.id, "video");
+  }
+
+  // ---- 会议内聊天（文本，仅本会议成员可见，不落 KV） ----
+  function toggleMeetingChat() {
+    if (!meetingChat) return;
+    const open = meetingChat.hidden;
+    meetingChat.hidden = !open;
+    if (btnMeetingChat) btnMeetingChat.classList.toggle("active", open);
+    if (open && meetingChatInput) { meetingChatInput.focus(); }
+  }
+  function closeMeetingChat() {
+    if (meetingChat) meetingChat.hidden = true;
+    if (btnMeetingChat) btnMeetingChat.classList.remove("active");
+  }
+  function appendMeetingMessage(fromId, text, ts, mine) {
+    if (!meetingChatList) return;
+    const empty = meetingChatList.querySelector(".meeting-chat-empty");
+    if (empty) empty.remove();
+    const row = document.createElement("div");
+    row.className = "meeting-chat-msg" + (mine ? " me" : "");
+    const meta = document.createElement("div");
+    meta.className = "meeting-chat-meta";
+    const nm = document.createElement("span");
+    nm.className = "meeting-chat-name";
+    nm.textContent = mine ? t("meeting.me") : (groupMemberName(meetingGroupId, fromId).name || ("#" + fromId));
+    const tm = document.createElement("span");
+    tm.className = "meeting-chat-time";
+    tm.textContent = new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    meta.append(nm, tm);
+    const body = document.createElement("div");
+    body.className = "meeting-chat-text";
+    body.textContent = text;
+    row.append(meta, body);
+    meetingChatList.appendChild(row);
+    meetingChatList.scrollTop = meetingChatList.scrollHeight;
+  }
+  function sendMeetingChat() {
+    if (!meetingChatInput) return;
+    const text = meetingChatInput.value.trim();
+    if (!text) return;
+    if (!meetingActive || meetingGroupId == null) { toast(t("meeting.alreadyIn")); return; }
+    const id = crypto.randomUUID();
+    const ts = Date.now();
+    appendMeetingMessage(myId, text, ts, true);
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "meeting-chat", groupId: meetingGroupId, id, ts, text }));
+    }
+    meetingChatInput.value = "";
+    meetingChatInput.style.height = "auto";
+  }
+  function onMeetingMessage(m) {
+    if (meetingGroupId == null || Number(meetingGroupId) !== Number(m.groupId)) return;
+    if (!meetingActive && !meetingLeft) return; // 仅会议进行中或刚软离开时可阅读
+    appendMeetingMessage(m.from, m.text, m.ts || Date.now(), Number(m.from) === Number(myId));
   }
 
   // ---- 收到群会议广播 ----
@@ -4132,6 +4225,8 @@
       meetingLeft = false; meetingGroupId = null; meetingType = null;
       hideMeetingLeft();
       if (meetingPanel) meetingPanel.hidden = true;
+      closeMeetingChat();
+      if (meetingChatList) meetingChatList.innerHTML = "";
     }
     switchChatTab("conversations");
     showChatView();

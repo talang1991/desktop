@@ -228,6 +228,30 @@ export function attachSignaling(server: Server): void {
           return;
         }
 
+        // 会议内聊天：仅实时广播给群成员（不含发送者），不落 KV（会议结束即清空）
+        case "meeting-chat": {
+          const groupId = Number(msg.groupId);
+          if (!groupId) return;
+          if (!(await isGroupMember(groupId, user!.id))) {
+            send(ws, { type: "error", error: "你不在该群聊中" });
+            return;
+          }
+          const id = String(msg.id || crypto.randomUUID());
+          const ts = Number(msg.ts) || Date.now();
+          const text = String(msg.text ?? "").slice(0, 4000);
+          if (!text) return;
+          const members = (await getGroupMemberIds(groupId)).filter((m) => m !== user!.id);
+          routeToEach(members, {
+            type: "meeting-chat",
+            groupId,
+            from: user!.id,
+            id,
+            ts,
+            text,
+          });
+          return;
+        }
+
         // ---- 群会议（多人 WebRTC 全网状）信令广播 ----
         // SDP/ICE 仍走上面已有的 signal（按 userId 定向），这里只负责“谁在会议里”的广播，
         // 让各成员互相建立 RTCPeerConnection。三类消息均校验群成员资格，并排除发送者本人。

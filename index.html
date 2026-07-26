@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=68" />
+  <link rel="stylesheet" href="styles.css?v=69" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -228,7 +228,7 @@
       <div class="tab-panel" data-panel="groups" hidden>
         <div class="group-head">
           <span class="group-title" data-i18n="chat.group.title">👥 群聊</span>
-          <button id="groupCreateBtn" class="btn ghost small" data-i18n-title="chat.group.create" data-i18n="chat.group.create">＋ 创建</button>
+          <button id="groupCreateBtn" class="btn ghost small" data-i18n-title="chat.group.create" data-i18n="chat.group.create1">＋ 创建</button>
         </div>
         <div id="groupList" class="group-list"></div>
         <div id="groupEmpty" class="friend-empty" hidden data-i18n="chat.group.empty">还没有群聊，点「＋ 创建」开始</div>
@@ -358,18 +358,34 @@
       <button id="btnMeetingFull" class="meeting-full" data-i18n-title="meeting.full">⛶</button>
       <button id="btnMeetingLeave" class="meeting-leave" data-i18n="meeting.leave" data-i18n-title="meeting.leave">离开会议</button>
     </div>
-    <div id="meetingGrid" class="meeting-grid">
-      <div class="meeting-tile self" data-uid="self">
-        <video id="meetingLocalVideo" class="meeting-video" autoplay playsinline muted></video>
-        <div class="meeting-avatar" id="meetingSelfAvatar"></div>
-        <span class="meeting-name" data-i18n="meeting.me">我</span>
+    <div class="meeting-body">
+      <div id="meetingGrid" class="meeting-grid">
+        <div class="meeting-tile self" data-uid="self">
+          <video id="meetingLocalVideo" class="meeting-video" autoplay playsinline muted></video>
+          <div class="meeting-avatar" id="meetingSelfAvatar"></div>
+          <span class="meeting-name" data-i18n="meeting.me">我</span>
+        </div>
+      </div>
+      <div id="meetingFilmstrip" class="meeting-filmstrip" hidden></div>
+      <div id="meetingChat" class="meeting-chat" hidden>
+        <div class="meeting-chat-header">
+          <span data-i18n="meeting.chat.title">会议聊天</span>
+          <button id="btnMeetingChatClose" class="meeting-chat-close" data-i18n-title="meeting.close">✕</button>
+        </div>
+        <div id="meetingChatList" class="meeting-chat-list">
+          <div class="meeting-chat-empty" data-i18n="meeting.chat.empty">会议中发消息，只有本会议成员可见</div>
+        </div>
+        <div class="meeting-chat-input">
+          <input id="meetingChatInput" type="text" maxlength="4000" data-i18n-ph="meeting.chat.placeholder" placeholder="说点什么…（Enter 发送）" autocomplete="off" />
+          <button id="meetingChatSend" class="call-ctrl accept" data-i18n="meeting.chat.send">发送</button>
+        </div>
       </div>
     </div>
-    <div id="meetingFilmstrip" class="meeting-filmstrip" hidden></div>
     <div class="call-controls">
       <button id="btnMeetingMute" class="call-ctrl" data-i18n-title="meeting.mute">🎤</button>
       <button id="btnMeetingCam" class="call-ctrl" data-i18n-title="meeting.cam">📹</button>
       <button id="btnMeetingShare" class="call-ctrl" data-i18n-title="meeting.share" hidden>🖥️</button>
+      <button id="btnMeetingChat" class="call-ctrl" data-i18n-title="meeting.chat">💬</button>
       <button id="btnMeetingHangup" class="call-ctrl hangup" data-i18n-title="meeting.hangup">📞</button>
     </div>
     <!-- 离开会议后的状态条：提供"重新加入"入口 -->
@@ -412,6 +428,6 @@
     <input id="importFile" type="file" accept="application/json" hidden />
   </div>
 
-  <script src="app.js?v=96"></script>
+  <script src="app.js?v=97"></script>
 </body>
 </html>
