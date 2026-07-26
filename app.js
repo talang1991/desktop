@@ -763,7 +763,7 @@
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-      closeContextMenu(); closeModal(); closeProfileModal();
+      closeContextMenu(); closeModal(); closeProfileModal(); closeSettings();
       // 关闭所有打开中的内嵌页（单页 .active 或分屏 .split 都在 iframeActive 中）
       if (iframeActive.length) {
         [...iframeActive].forEach((p) => closeIframePage(p));
@@ -950,12 +950,429 @@
     localStorage.setItem(THEME_KEY, theme);
   }
 
+  // ---------- i18n（中英文切换） ----------
+  const I18N = {
+    zh: {
+      "app.title": "Web 应用导航",
+      "auth.title": "Web 应用导航",
+      "auth.sub": "登录以同步你的应用",
+      "auth.username.ph": "用户名",
+      "auth.password.ph": "密码",
+      "auth.login": "登录",
+      "auth.noAccount.pre": "还没有账号？",
+      "auth.register.link": "注册一个",
+      "auth.regUsername.ph": "用户名（3-32 位）",
+      "auth.regPassword.ph": "密码（至少 6 位）",
+      "auth.register": "注册",
+      "auth.hasAccount.pre": "已有账号？",
+      "auth.login.link": "去登录",
+      "auth.logging": "登录中…",
+      "auth.registering": "注册中…",
+      "settings.title": "设置",
+      "settings.backup": "数据备份",
+      "settings.import": "📥 从 JSON 文件导入",
+      "settings.export": "📤 导出为 JSON 备份",
+      "settings.backupHint": "导入会按网址去重合并；导出为当前账号的全部应用备份。",
+      "settings.language": "语言",
+      "settings.appearance": "外观",
+      "settings.theme.dark": "🌓 主题：深色",
+      "settings.theme.light": "🌓 主题：浅色",
+      "topbar.search.ph": "搜索应用名称或网址…",
+      "topbar.add": "＋ 添加应用",
+      "topbar.chat": "💬 聊天",
+      "topbar.settings": "⚙ 设置",
+      "topbar.logout": "登出",
+      "profile.title": "个人资料",
+      "profile.avatarLabel": "头像（Emoji 或图片链接）",
+      "profile.avatarPh": "🌟 或 https://…/avatar.png",
+      "profile.usernameLabel": "用户名",
+      "profile.cancel": "取消",
+      "profile.save": "保存",
+      "chat.title": "聊天",
+      "chat.close": "关闭",
+      "chat.resizer": "拖动调整宽度",
+      "chat.tab.conversations": "💬 会话",
+      "chat.tab.friends": "👤 好友",
+      "chat.tab.groups": "👥 群组",
+      "chat.conv.empty": "还没有会话，去「好友」或「群组」开始聊天吧",
+      "chat.friend.search.ph": "输入用户名添加好友",
+      "chat.friend.add": "添加",
+      "chat.friend.empty": "还没有好友，添加好友后即可开始聊天",
+      "chat.group.title": "👥 群聊",
+      "chat.group.create": "＋ 创建",
+      "chat.group.empty": "还没有群聊，点「＋ 创建」开始",
+      "chat.peer.placeholder": "选择一个好友开始聊天",
+      "chat.status.disconnected": "未连接",
+      "chat.call.voice": "语音通话",
+      "chat.call.video": "视频通话",
+      "chat.call.meeting": "发起群会议",
+      "chat.group.addMember": "＋成员",
+      "chat.group.leave": "退出",
+      "chat.input.ph": "输入消息…（Enter 发送，Shift+Enter 换行）",
+      "chat.send": "发送",
+      "chat.friend.voiceChat": "📞 语音聊天",
+      "chat.friend.videoChat": "📹 视频聊天",
+      "chat.friend.message": "发消息",
+      "chat.friend.remove": "移除好友",
+      "chat.group.rename": "修改群名称",
+      "chat.group.nameEdit.ph": "输入新群名称，回车保存",
+      "chat.group.members": "群成员",
+      "chat.group.sendMsg": "发消息",
+      "chat.group.startMeeting": "📹 发起会议",
+      "chat.group.meeting": "📹 会议",
+      "chat.group.rejoin": "🔄 重新加入",
+      "chat.group.addMember2": "＋添加成员",
+      "chat.group.leave2": "退出群聊",
+      "chat.back": "返回",
+      "chat.status.signalConnected": "信令已连接",
+      "chat.status.signalDisconnected": "信令断开",
+      "chat.status.offline": "对方不在线（可发送离线消息）",
+      "chat.status.p2p": "P2P 已直连 🔗",
+      "chat.status.connecting": "正在连接…",
+      "chat.status.online": "在线",
+      "chat.status.relay": "直连失败，改用中继",
+      "chat.status.peerEnded": "对方已结束对话（仍可发送离线消息）",
+      "call.mute": "静音 / 取消静音",
+      "call.cam": "开关摄像头",
+      "call.share": "共享屏幕",
+      "call.full": "全屏 / 退出全屏",
+      "call.hangup": "挂断",
+      "call.accept": "接听",
+      "call.decline": "拒绝",
+      "call.incoming.voice": "语音通话邀请",
+      "call.incoming.video": "视频通话邀请",
+      "call.incoming.chat": "聊天请求",
+      "call.state.calling": "呼叫中…",
+      "call.state.ringing": "等待对方接听…",
+      "call.state.connected": "通话中",
+      "call.state.reconnecting": "重连中…",
+      "call.remote.cameraOff": "对方已关闭摄像头",
+      "meeting.title": "群会议",
+      "meeting.leave": "离开会议",
+      "meeting.exitSpotlight": "退出聚焦，恢复网格",
+      "meeting.full": "全屏切换",
+      "meeting.mute": "静音 / 取消静音",
+      "meeting.cam": "开关摄像头",
+      "meeting.share": "共享屏幕",
+      "meeting.hangup": "挂断 / 离开",
+      "meeting.me": "我",
+      "meeting.left": "你已离开会议",
+      "meeting.rejoin": "重新加入",
+      "meeting.close": "关闭",
+      "meeting.invite.join": "加入",
+      "meeting.invite.ignore": "忽略",
+      "meeting.invite.voice": "语音会议邀请",
+      "meeting.invite.video": "视频会议邀请",
+      "meeting.count": "{n} 人",
+      "chat.friend.request": "{name} 请求加你好友",
+      "chat.friend.accept": "接受",
+      "chat.removed": "已移除好友",
+      "chat.added": "已添加为好友",
+      "chat.add.fail": "添加失败",
+      "chat.op.fail": "操作失败",
+      "chat.became.friend": "已与 {name} 成为好友",
+      "chat.sent.request": "已向 {name} 发送好友请求",
+      "chat.pulled.in": "你被拉入群聊「{name}」",
+      "chat.friend.requested": "{name} 已通过你的好友请求",
+      "chat.request.recv": "收到 {name} 的好友请求",
+      "chat.confirm.remove": "确定移除好友「{name}」？",
+      "chat.status.offlineLabel": "离线",
+      "chat.status.pickFriend": "请先选择一个好友",
+      "chat.status.pickGroup": "请先选择一个群聊",
+      "chat.status.connecting2": "连接中，请稍候…",
+      "chat.status.sent": "已发送",
+      "chat.status.sentOffline": "已发送（对方可能离线，上线后接收）",
+      "chat.status.sentOffline2": "已发送（离线消息，对方上线后接收）",
+      "chat.status.relayMode": "中继模式（服务器转发）",
+      "chat.status.groupMembers": "群聊 · {n}人",
+      "chat.status.connectingName": "正在连接 {name} …",
+      "chat.status.chatReq": "收到 {name} 的聊天请求，连接中…",
+      "call.incoming.voiceMsg": "邀请你进行语音通话",
+      "call.incoming.videoMsg": "邀请你进行视频通话",
+      "meeting.invite.voiceMsg": "语音会议 · {name}",
+      "meeting.invite.videoMsg": "视频会议 · {name}",
+      "chat.group.created": "已创建群聊「{name}」",
+      "chat.confirm.leaveGroup": "确定退出群聊「{name}」？",
+      "chat.group.left": "已退出群聊",
+      "chat.thisGroup": "该群",
+      "chat.group.nameUpdated": "群名称已更新",
+      "chat.group.noFriendToCreate": "还没有好友，无法创建群聊",
+      "chat.group.enterName": "请输入群名称",
+      "chat.group.createFail": "创建失败",
+      "chat.group.noCandidate": "没有可添加的好友",
+      "chat.group.invited": "已邀请 {name} 加入群聊",
+      "chat.group.added": "已添加",
+      "chat.group.modalTitle": "创建群聊",
+      "chat.group.nameLabel": "群名称",
+      "chat.group.namePh": "例如：项目组 / 家人们",
+      "chat.group.selectMembers": "选择成员（从好友中）",
+      "chat.group.addMemberTitle": "添加成员",
+      "chat.group.selectFriends": "选择好友加入群聊",
+      "chat.group.cancel": "取消",
+      "chat.group.create": "创建",
+      "call.busy": "已有进行中的通话",
+      "call.leaveMeetingFirst": "请先离开当前群会议",
+      "call.noMediaSupport": "当前浏览器不支持音视频通话",
+      "call.noMediaAccess": "无法访问摄像头/麦克风：",
+      "call.rejected": "对方拒绝了通话",
+      "call.ended": "对方已结束通话",
+      "call.shareVideoOnly": "仅视频通话中可共享屏幕",
+      "call.noShareSupport": "当前浏览器不支持屏幕共享",
+      "call.shareFail": "无法共享屏幕：",
+      "call.noVideoTrack": "未找到视频轨道，无法共享",
+      "call.endCallFirst": "请先结束当前通话",
+      "meeting.alreadyIn": "已在会议中",
+      "meeting.noSupport": "当前浏览器不支持音视频会议",
+      "meeting.inviting": "已发起群会议，正在呼叫成员…",
+      "meeting.inOther": "已在其它群会议中",
+      "meeting.shareVideoOnly": "仅视频会议中可共享屏幕",
+      "chat.group.renameFail": "修改失败："
+    },
+    en: {
+      "app.title": "Web App Navigator",
+      "auth.title": "Web App Navigator",
+      "auth.sub": "Sign in to sync your apps",
+      "auth.username.ph": "Username",
+      "auth.password.ph": "Password",
+      "auth.login": "Sign In",
+      "auth.noAccount.pre": "No account?",
+      "auth.register.link": "Sign up",
+      "auth.regUsername.ph": "Username (3-32 chars)",
+      "auth.regPassword.ph": "Password (min 6 chars)",
+      "auth.register": "Sign Up",
+      "auth.hasAccount.pre": "Have an account?",
+      "auth.login.link": "Sign in",
+      "auth.logging": "Signing in…",
+      "auth.registering": "Signing up…",
+      "settings.title": "Settings",
+      "settings.backup": "Data Backup",
+      "settings.import": "📥 Import from JSON",
+      "settings.export": "📤 Export as JSON backup",
+      "settings.backupHint": "Import merges by URL (dedup); export backs up all your apps.",
+      "settings.language": "Language",
+      "settings.appearance": "Appearance",
+      "settings.theme.dark": "🌓 Theme: Dark",
+      "settings.theme.light": "🌓 Theme: Light",
+      "topbar.search.ph": "Search apps by name or URL…",
+      "topbar.add": "＋ Add App",
+      "topbar.chat": "💬 Chat",
+      "topbar.settings": "⚙ Settings",
+      "topbar.logout": "Log Out",
+      "profile.title": "Profile",
+      "profile.avatarLabel": "Avatar (Emoji or image URL)",
+      "profile.avatarPh": "🌟 or https://…/avatar.png",
+      "profile.usernameLabel": "Username",
+      "profile.cancel": "Cancel",
+      "profile.save": "Save",
+      "chat.title": "Chat",
+      "chat.close": "Close",
+      "chat.resizer": "Drag to resize width",
+      "chat.tab.conversations": "💬 Chats",
+      "chat.tab.friends": "👤 Friends",
+      "chat.tab.groups": "👥 Groups",
+      "chat.conv.empty": "No chats yet. Start one from Friends or Groups.",
+      "chat.friend.search.ph": "Enter username to add friend",
+      "chat.friend.add": "Add",
+      "chat.friend.empty": "No friends yet. Add friends to start chatting.",
+      "chat.group.title": "👥 Group Chats",
+      "chat.group.create": "＋ Create",
+      "chat.group.empty": "No groups yet. Tap “＋ Create”.",
+      "chat.peer.placeholder": "Select a friend to start chatting",
+      "chat.status.disconnected": "Disconnected",
+      "chat.call.voice": "Voice call",
+      "chat.call.video": "Video call",
+      "chat.call.meeting": "Start group meeting",
+      "chat.group.addMember": "＋Member",
+      "chat.group.leave": "Leave",
+      "chat.input.ph": "Type a message… (Enter to send, Shift+Enter for new line)",
+      "chat.send": "Send",
+      "chat.friend.voiceChat": "📞 Voice Chat",
+      "chat.friend.videoChat": "📹 Video Chat",
+      "chat.friend.message": "Message",
+      "chat.friend.remove": "Remove Friend",
+      "chat.group.rename": "Rename group",
+      "chat.group.nameEdit.ph": "Enter new group name, press Enter to save",
+      "chat.group.members": "Members",
+      "chat.group.sendMsg": "Message",
+      "chat.group.startMeeting": "📹 Start Meeting",
+      "chat.group.meeting": "📹 Meeting",
+      "chat.group.rejoin": "🔄 Rejoin",
+      "chat.group.addMember2": "＋Add Member",
+      "chat.group.leave2": "Leave Group",
+      "chat.back": "Back",
+      "chat.status.signalConnected": "Signal connected",
+      "chat.status.signalDisconnected": "Signal disconnected",
+      "chat.status.offline": "Offline (you can send offline messages)",
+      "chat.status.p2p": "P2P connected 🔗",
+      "chat.status.connecting": "Connecting…",
+      "chat.status.online": "Online",
+      "chat.status.relay": "P2P failed, using relay",
+      "chat.status.peerEnded": "Peer ended conversation (offline messages still allowed)",
+      "call.mute": "Mute / Unmute",
+      "call.cam": "Toggle camera",
+      "call.share": "Share screen",
+      "call.full": "Fullscreen / Exit fullscreen",
+      "call.hangup": "Hang up",
+      "call.accept": "Accept",
+      "call.decline": "Decline",
+      "call.incoming.voice": "Incoming voice call",
+      "call.incoming.video": "Incoming video call",
+      "call.incoming.chat": "Chat request",
+      "call.state.calling": "Calling…",
+      "call.state.ringing": "Waiting for answer…",
+      "call.state.connected": "On call",
+      "call.state.reconnecting": "Reconnecting…",
+      "call.remote.cameraOff": "Camera off",
+      "meeting.title": "Group Meeting",
+      "meeting.leave": "Leave meeting",
+      "meeting.exitSpotlight": "Exit spotlight, back to grid",
+      "meeting.full": "Toggle fullscreen",
+      "meeting.mute": "Mute / Unmute",
+      "meeting.cam": "Toggle camera",
+      "meeting.share": "Share screen",
+      "meeting.hangup": "Hang up / Leave",
+      "meeting.me": "You",
+      "meeting.left": "You left the meeting",
+      "meeting.rejoin": "Rejoin",
+      "meeting.close": "Close",
+      "meeting.invite.join": "Join",
+      "meeting.invite.ignore": "Ignore",
+      "meeting.invite.voice": "Voice meeting invite",
+      "meeting.invite.video": "Video meeting invite",
+      "meeting.count": "{n} people",
+      "chat.friend.request": "{name} wants to add you as a friend",
+      "chat.friend.accept": "Accept",
+      "chat.removed": "Friend removed",
+      "chat.added": "Added as friend",
+      "chat.add.fail": "Failed to add",
+      "chat.op.fail": "Operation failed",
+      "chat.became.friend": "You and {name} are now friends",
+      "chat.sent.request": "Friend request sent to {name}",
+      "chat.pulled.in": "You were added to group “{name}”",
+      "chat.friend.requested": "{name} accepted your friend request",
+      "chat.request.recv": "Friend request from {name}",
+      "chat.confirm.remove": "Remove friend “{name}”?",
+      "chat.status.offlineLabel": "Offline",
+      "chat.status.pickFriend": "Please select a friend first",
+      "chat.status.pickGroup": "Please select a group first",
+      "chat.status.connecting2": "Connecting, please wait…",
+      "chat.status.sent": "Sent",
+      "chat.status.sentOffline": "Sent (recipient may be offline; delivered when online)",
+      "chat.status.sentOffline2": "Sent as offline message; delivered when online",
+      "chat.status.relayMode": "Relay mode (server forwarding)",
+      "chat.status.groupMembers": "Group · {n}",
+      "chat.status.connectingName": "Connecting to {name}…",
+      "chat.status.chatReq": "Chat request from {name}, connecting…",
+      "call.incoming.voiceMsg": "Incoming voice call",
+      "call.incoming.videoMsg": "Incoming video call",
+      "meeting.invite.voiceMsg": "Voice meeting · {name}",
+      "meeting.invite.videoMsg": "Video meeting · {name}",
+      "chat.group.created": "Group “{name}” created",
+      "chat.confirm.leaveGroup": "Leave group “{name}”?",
+      "chat.group.left": "Left group",
+      "chat.thisGroup": "this group",
+      "chat.group.nameUpdated": "Group name updated",
+      "chat.group.noFriendToCreate": "No friends to create a group",
+      "chat.group.enterName": "Please enter a group name",
+      "chat.group.createFail": "Failed to create",
+      "chat.group.noCandidate": "No friends available to add",
+      "chat.group.invited": "Invited {name} to the group",
+      "chat.group.added": "Added",
+      "chat.group.modalTitle": "Create Group",
+      "chat.group.nameLabel": "Group name",
+      "chat.group.namePh": "e.g. Project Team / Family",
+      "chat.group.selectMembers": "Select members (from friends)",
+      "chat.group.addMemberTitle": "Add Members",
+      "chat.group.selectFriends": "Select friends to join",
+      "chat.group.cancel": "Cancel",
+      "chat.group.create": "Create",
+      "call.busy": "Call in progress",
+      "call.leaveMeetingFirst": "Leave the current meeting first",
+      "call.noMediaSupport": "Browser doesn't support audio/video calls",
+      "call.noMediaAccess": "Cannot access camera/mic: ",
+      "call.rejected": "Peer declined the call",
+      "call.ended": "Peer ended the call",
+      "call.shareVideoOnly": "Screen share only available in video call",
+      "call.noShareSupport": "Browser doesn't support screen sharing",
+      "call.shareFail": "Cannot share screen: ",
+      "call.noVideoTrack": "No video track to share",
+      "call.endCallFirst": "End the current call first",
+      "meeting.alreadyIn": "Already in a meeting",
+      "meeting.noSupport": "Browser doesn't support video meetings",
+      "meeting.inviting": "Group meeting started, calling members…",
+      "meeting.inOther": "Already in another group meeting",
+      "meeting.shareVideoOnly": "Screen share only in video meeting",
+      "chat.group.renameFail": "Failed to rename: "
+    }
+  };
+  const LANG_KEY = "lang";
+  function getLang() {
+    const l = localStorage.getItem(LANG_KEY);
+    return (l === "en" || l === "zh") ? l : "zh";
+  }
+  function t(key, lang) {
+    lang = lang || getLang();
+    return (I18N[lang] && I18N[lang][key] != null) ? I18N[lang][key] : (I18N.zh[key] != null ? I18N.zh[key] : key);
+  }
+  // 带参数的翻译：tp("meeting.count", { n: 3 }) → "3 人"
+  function tp(key, params, lang) {
+    let s = t(key, lang);
+    if (params) { for (const k in params) s = s.split("{" + k + "}").join(params[k]); }
+    return s;
+  }
+  // 运行时动态设置的文本：记录 key 到 dataset，语言切换时 applyI18n 自动刷新
+  function i18nText(el, key, params) {
+    el.dataset.i18nKey = key;
+    if (params) el.dataset.i18nParams = JSON.stringify(params); else delete el.dataset.i18nParams;
+    el.textContent = tp(key, params);
+  }
+  function i18nTitle(el, key, params) {
+    el.dataset.i18nTitleKey = key;
+    if (params) el.dataset.i18nTitleParams = JSON.stringify(params); else delete el.dataset.i18nTitleParams;
+    el.title = tp(key, params);
+  }
+  function applyI18n(lang) {
+    document.querySelectorAll("[data-i18n]").forEach((el) => {
+      const key = el.getAttribute("data-i18n");
+      const txt = t(key, lang);
+      if (txt != null) el.textContent = txt;
+    });
+    document.querySelectorAll("[data-i18n-ph]").forEach((el) => {
+      const key = el.getAttribute("data-i18n-ph");
+      const txt = t(key, lang);
+      if (txt != null) el.setAttribute("placeholder", txt);
+    });
+    document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+      const key = el.getAttribute("data-i18n-title");
+      const txt = t(key, lang);
+      if (txt != null) el.setAttribute("title", txt);
+    });
+    document.querySelectorAll("[data-i18n-key]").forEach((el) => {
+      const key = el.dataset.i18nKey;
+      if (key) { const params = el.dataset.i18nParams ? JSON.parse(el.dataset.i18nParams) : null; const txt = tp(key, params, lang); if (txt != null) el.textContent = txt; }
+    });
+    document.querySelectorAll("[data-i18n-title-key]").forEach((el) => {
+      const key = el.dataset.i18nTitleKey;
+      if (key) { const params = el.dataset.i18nTitleParams ? JSON.parse(el.dataset.i18nTitleParams) : null; const txt = tp(key, params, lang); if (txt != null) el.setAttribute("title", txt); }
+    });
+    document.documentElement.lang = (lang === "en") ? "en" : "zh-CN";
+  }
+  function setLang(lang) {
+    if (lang !== "en" && lang !== "zh") lang = "zh";
+    localStorage.setItem(LANG_KEY, lang);
+    applyI18n(lang);
+    document.querySelectorAll(".lang-btn").forEach((b) => {
+      b.classList.toggle("active", b.getAttribute("data-lang") === lang);
+    });
+    if (typeof refreshThemeToggle === "function") refreshThemeToggle();
+  }
+
   // ---------- Auth events ----------
   $("#loginForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const btn = e.target.querySelector("button[type=submit]");
     const orig = btn.textContent;
-    btn.disabled = true; btn.textContent = "登录中…";
+    btn.disabled = true; btn.textContent = t("auth.logging");
     try {
       const data = await api("/api/login", {
         method: "POST",
@@ -977,7 +1394,7 @@
     e.preventDefault();
     const btn = e.target.querySelector("button[type=submit]");
     const orig = btn.textContent;
-    btn.disabled = true; btn.textContent = "注册中…";
+    btn.disabled = true; btn.textContent = t("auth.registering");
     try {
       const data = await api("/api/register", {
         method: "POST",
@@ -1017,14 +1434,21 @@
   };
 
   // ---------- Events ----------
+  $("#settingsBtn").onclick = openSettings;
   $("#addBtn").onclick = () => openModal(null);
   $("#exportBtn").onclick = exportJson;
   $("#importBtn").onclick = () => $("#importFile").click();
   $("#importFile").onchange = (e) => { if (e.target.files[0]) importJson(e.target.files[0]); e.target.value = ""; };
-  $("#themeBtn").onclick = () => {
+  $("#themeToggleBtn").onclick = () => {
     const cur = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
     applyTheme(cur === "dark" ? "light" : "dark");
+    refreshThemeToggle();
   };
+  // 语言切换：任意 .lang-btn 点击切换并持久化；登录页与设置页控件联动
+  document.querySelectorAll(".lang-btn").forEach((b) => {
+    b.addEventListener("click", () => setLang(b.getAttribute("data-lang")));
+  });
+  setLang(getLang()); // 启动时应用已保存语言并同步控件高亮
   searchInput.oninput = (e) => { searchTerm = e.target.value; renderGrid(); };
   modal.querySelectorAll("[data-close]").forEach((el) => el.onclick = closeModal);
 
@@ -1514,8 +1938,30 @@
     return { iceServers: servers };
   }
 
-  function setChatStatus(text, cls) {
-    chatStatus.textContent = text;
+  // 固定状态文本 → i18n key 映射（调用点传中文即可自动翻译，语言切换时由 applyI18n 刷新）
+  const STATUS_KEY_MAP = {
+    "信令已连接": "chat.status.signalConnected",
+    "信令断开": "chat.status.signalDisconnected",
+    "对方不在线（可发送离线消息）": "chat.status.offline",
+    "对方已结束对话（仍可发送离线消息）": "chat.status.peerEnded",
+    "P2P 已直连 🔗": "chat.status.p2p",
+    "正在连接…": "chat.status.connecting",
+    "未连接": "chat.status.disconnected",
+    "在线": "chat.status.online",
+    "离线": "chat.status.offlineLabel",
+    "中继模式（服务器转发）": "chat.status.relayMode",
+    "请先选择一个好友": "chat.status.pickFriend",
+    "请先选择一个群聊": "chat.status.pickGroup",
+    "连接中，请稍候…": "chat.status.connecting2",
+    "已发送": "chat.status.sent",
+    "已发送（对方可能离线，上线后接收）": "chat.status.sentOffline",
+    "已发送（离线消息，对方上线后接收）": "chat.status.sentOffline2"
+  };
+  function setChatStatus(text, cls, opts) {
+    opts = opts || {};
+    const key = opts.key || STATUS_KEY_MAP[text];
+    if (key) { i18nText(chatStatus, key, opts.params); }
+    else { chatStatus.textContent = text; delete chatStatus.dataset.i18nKey; delete chatStatus.dataset.i18nParams; }
     chatStatus.className = "chat-status" + (cls ? " " + cls : "");
   }
   // 跨天日期分割：记录最近一条已渲染消息的“本地日期”，日期变化时插入分割条
@@ -1571,6 +2017,19 @@
     chatPanel.classList.remove("mobile-conversation");
     updateCallButtons();
   }
+  // ---------- 设置抽屉 ----------
+  const settingsPanel = $("#settingsPanel");
+  function refreshThemeToggle() {
+    const el = $("#themeToggleBtn");
+    if (!el) return;
+    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+    el.textContent = t(isDark ? "settings.theme.dark" : "settings.theme.light");
+  }
+  function openSettings() { settingsPanel.hidden = false; refreshThemeToggle(); }
+  function closeSettings() { settingsPanel.hidden = true; }
+  const settingsClose = $("#settingsClose");
+  if (settingsClose) settingsClose.onclick = closeSettings;
+
   // 移动端单栏：窄屏进入会话/详情时切到“全屏聊天”态（隐藏列表）；返回/关闭时退回列表
   function maybeMobileConversation() {
     if (window.innerWidth <= 768) chatPanel.classList.add("mobile-conversation");
@@ -1720,12 +2179,12 @@
         break;
       case "friend-request":
         // 收到好友请求：弹提示并刷新请求列表（对方主动发来，实时提醒）
-        try { toast(`收到 ${m.fromUsername || "好友"} 的好友请求`); } catch (e) { console.error("[SIG-CLIENT] toast 失败:", e); }
+        try { toast(tp("chat.request.recv", { name: m.fromUsername || "好友" })); } catch (e) { console.error("[SIG-CLIENT] toast 失败:", e); }
         try { loadFriends(); } catch (e) { console.error("[SIG-CLIENT] loadFriends 失败:", e); }
         break;
       case "friend-accepted":
         // 对方通过了我的好友请求：弹提示并刷新好友列表
-        try { toast(`${m.fromUsername || "好友"} 已通过你的好友请求`); } catch (e) { console.error("[SIG-CLIENT] toast 失败:", e); }
+        try { toast(tp("chat.friend.requested", { name: m.fromUsername || "好友" })); } catch (e) { console.error("[SIG-CLIENT] toast 失败:", e); }
         try { loadFriends(); } catch (e) { console.error("[SIG-CLIENT] loadFriends 失败:", e); }
         break;
       case "incoming-call":
@@ -1763,7 +2222,7 @@
         break;
       case "group-invite":
         // 被加入群聊：刷新群列表（并补算未读），把该群会话前置
-        try { toast(`你被拉入群聊「${m.group?.name || "群聊"}」`); } catch {}
+        try { toast(tp("chat.pulled.in", { name: m.group?.name || "群聊" })); } catch {}
         try {
           await loadGroups();
           if (m.group && m.group.id != null) {
@@ -1996,10 +2455,10 @@
         row.className = "req-row";
         const label = document.createElement("span");
         label.className = "req-name";
-        label.textContent = `${r.username} 请求加你好友`;
+        label.textContent = tp("chat.friend.request", { name: r.username });
         const btn = document.createElement("button");
         btn.className = "btn primary small";
-        btn.textContent = "接受";
+        i18nText(btn, "chat.friend.accept");
         btn.onclick = () => acceptRequest(r.id);
         row.appendChild(label);
         row.appendChild(btn);
@@ -2025,7 +2484,7 @@
             `<span class="dot ${f.online ? "on" : "off"}"></span>` +
             `</span>` +
             `<span class="fname">${escapeHtml(f.username)}</span>` +
-            `<button class="friend-remove" title="移除好友">✕</button>`;
+            `<button class="friend-remove" data-i18n-title="chat.friend.remove">✕</button>`;
         const open = () => showFriendDetail(f);
         row.onclick = open;
         row.querySelector(".friend-remove").onclick = (e) => {
@@ -2050,8 +2509,8 @@
       const r = await api("/api/friends", { method: "POST", body: JSON.stringify({ username }) });
       friendSearch.value = "";
       toast(r.friend.status === "accepted"
-        ? `已与 ${r.friend.username} 成为好友`
-        : `已向 ${r.friend.username} 发送好友请求`);
+        ? tp("chat.became.friend", { name: r.friend.username })
+        : tp("chat.sent.request", { name: r.friend.username }));
       await loadFriends();
       // 新加好友（已成为好友）→ 把会话前置
       if (r.friend.status === "accepted") {
@@ -2059,14 +2518,14 @@
         if (f) upsertConversation("peer", f.id, Date.now(), null, false);
       }
     } catch (e) {
-      toast(e.message || "添加失败");
+      toast(e.message || t("chat.add.fail"));
     }
   }
   async function acceptRequest(id) {
     try {
       const req = friendRequests.find((x) => x.id === id);
       await api("/api/friends/accept", { method: "POST", body: JSON.stringify({ requestId: id }) });
-      toast("已添加为好友");
+      toast(t("chat.added"));
       await loadFriends();
       // 新加好友（对方通过请求）→ 把会话前置
       if (req) {
@@ -2074,18 +2533,18 @@
         if (f) upsertConversation("peer", f.id, Date.now(), null, false);
       }
     } catch (e) {
-      toast(e.message || "操作失败");
+      toast(e.message || t("chat.op.fail"));
     }
   }
   async function removeFriend(f) {
-    if (!confirm(`确定移除好友「${f.username}」？`)) return;
+    if (!confirm(tp("chat.confirm.remove", { name: f.username }))) return;
     try {
       await api("/api/friends/" + f.id, { method: "DELETE" });
-      toast("已移除好友");
+      toast(t("chat.removed"));
       if (currentPeer === f.id) endCurrent();
       await loadFriends();
     } catch (e) {
-      toast(e.message || "操作失败");
+      toast(e.message || t("chat.op.fail"));
     }
   }
 
@@ -2112,6 +2571,7 @@
     currentPeerName = f.username;
     currentPeerAvatar = f.avatar || "";
     chatPeerName.textContent = f.username;
+    delete chatPeerName.dataset.i18nKey;
     renderAvatarInto($("#chatPeerAvatar"), f.avatar, f.username.charAt(0).toUpperCase());
     // 重置顶栏状态，避免从群聊切换过来时仍残留“群聊·X人”
     const p = peers.get(Number(f.id));
@@ -2226,7 +2686,7 @@
     if (hasLive) return; // 已有可用连接：不重复建连、不降级状态
     // 只有该好友是当前显示会话时，才显示“正在连接”
     if (currentPeer != null && Number(currentPeer) === to) {
-      setChatStatus(`正在连接 ${name} …`, "warn");
+      setChatStatus("", "warn", { key: "chat.status.connectingName", params: { name } });
       enteringMsg = addChatMessage("system", `正在连接 ${name} …`);
     }
     enableRelay(to);
@@ -2261,7 +2721,7 @@
       setupPc(p);
       p.mediaAdded = false;
       if (viewingThis) {
-        setChatStatus(`收到 ${f.username} 的聊天请求，连接中…`, "warn");
+        setChatStatus("", "warn", { key: "chat.status.chatReq", params: { name: f.username } });
         clearEntering();
       }
     }
@@ -2278,7 +2738,7 @@
     currentPeer = null;
     currentPeerName = "";
     currentPeerAvatar = "";
-    chatPeerName.textContent = "选择一个好友开始聊天";
+    i18nText(chatPeerName, "chat.peer.placeholder");
     renderAvatarInto($("#chatPeerAvatar"), "", "?");
     setChatStatus("未连接");
     disableChatInput();
@@ -2493,12 +2953,12 @@
 
   async function startMediaCall(peerId, type) {
     peerId = Number(peerId);
-    if (callState !== "idle") { toast("已有进行中的通话"); return; }
-    if (meetingActive) { toast("请先离开当前群会议"); return; }
+    if (callState !== "idle") { toast(t("call.busy")); return; }
+    if (meetingActive) { toast(t("call.leaveMeetingFirst")); return; }
     const f = friends.find((x) => x.id === peerId);
     if (!f) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      toast("当前浏览器不支持音视频通话"); return;
+      toast(t("call.noMediaSupport")); return;
     }
     try {
       localStream = await navigator.mediaDevices.getUserMedia({
@@ -2506,7 +2966,7 @@
         video: type === "video" ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
       });
     } catch (err) {
-      toast("无法访问摄像头/麦克风：" + ((err && err.message) || err.name || err));
+      toast(t("call.noMediaAccess") + ((err && err.message) || err.name || err));
       return;
     }
     callPeerId = peerId;
@@ -2554,8 +3014,19 @@
     screenStream = null;
   }
 
-  function setCallStateLabel(text) {
-    if (callStateLabel) callStateLabel.textContent = text || "";
+  const CALLSTATE_KEY_MAP = {
+    "等待对方接听…": "call.state.ringing",
+    "通话中": "call.state.connected",
+    "呼叫中…": "call.state.calling",
+    "重连中…": "call.state.reconnecting"
+  };
+  function setCallStateLabel(text, opts) {
+    opts = opts || {};
+    const key = opts.key || CALLSTATE_KEY_MAP[text];
+    if (callStateLabel) {
+      if (key) i18nText(callStateLabel, key, opts.params);
+      else { callStateLabel.textContent = text || ""; delete callStateLabel.dataset.i18nKey; }
+    }
   }
 
   function attachRemoteStream(stream) {
@@ -2590,7 +3061,7 @@
     incomingCallType = type;
     callState = "incoming";
     if (incomingName) incomingName.textContent = (f && f.username) || String(from);
-    if (incomingType) incomingType.textContent = type === "video" ? "邀请你进行视频通话" : "邀请你进行语音通话";
+    if (incomingType) i18nText(incomingType, type === "video" ? "call.incoming.videoMsg" : "call.incoming.voiceMsg");
     if (incomingAvatar) renderAvatarInto(incomingAvatar, f && f.avatar, ((f && f.username) || "?").charAt(0).toUpperCase());
     callIncoming.hidden = false;
     try { playRingtone(); } catch {}
@@ -2606,7 +3077,7 @@
     if (from == null) return;
     hideIncomingCall();
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      toast("当前浏览器不支持音视频通话"); declineCall(); return;
+      toast(t("call.noMediaSupport")); declineCall(); return;
     }
     try {
       localStream = await navigator.mediaDevices.getUserMedia({
@@ -2614,7 +3085,7 @@
         video: type === "video" ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
       });
     } catch (err) {
-      toast("无法访问摄像头/麦克风：" + ((err && err.message) || err.name || err));
+      toast(t("call.noMediaAccess") + ((err && err.message) || err.name || err));
       declineCall(); return;
     }
     callPeerId = from;
@@ -2692,12 +3163,12 @@
     from = Number(from);
     if (data.action === "decline") {
       if (callIsCaller && callPeerId === from) {
-        toast("对方拒绝了通话");
+        toast(t("call.rejected"));
         endCallLocal();
       }
     } else if (data.action === "end") {
       if (callPeerId === from) {
-        toast("对方已结束通话");
+        toast(t("call.ended"));
         endCallLocal();
       }
     }
@@ -2727,24 +3198,24 @@
   // 通过 RTCRtpSender.replaceTrack 替换已发送的视频轨道（无需重协商），对方即看到你的屏幕。
   async function toggleScreenShare() {
     if (callType !== "video" || callState !== "active") {
-      toast("仅视频通话中可共享屏幕"); return;
+      toast(t("call.shareVideoOnly")); return;
     }
     if (isSharingScreen) { await stopScreenShare(); return; }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-      toast("当前浏览器不支持屏幕共享"); return;
+      toast(t("call.noShareSupport")); return;
     }
     let screen;
     try {
       screen = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false });
     } catch (err) {
-      toast("无法共享屏幕：" + ((err && err.message) || err.name || err));
+      toast(t("call.shareFail") + ((err && err.message) || err.name || err));
       return;
     }
     const p = ensurePeerConn(callPeerId);
     const sender = p && p.pc ? p.pc.getSenders().find((s) => s.track && s.track.kind === "video") : null;
     if (!sender) {
       screen.getTracks().forEach((t) => t.stop());
-      toast("未找到视频轨道，无法共享"); return;
+      toast(t("call.noVideoTrack")); return;
     }
     const screenTrack = screen.getVideoTracks()[0];
     try { await sender.replaceTrack(screenTrack); } catch (e) { console.error("[WEBRTC] replaceTrack failed", e); }
@@ -2795,12 +3266,12 @@
   async function startGroupMeeting(groupId, type) {
     groupId = Number(groupId);
     type = type === "audio" ? "audio" : "video";
-    if (callState !== "idle") { toast("请先结束当前通话"); return; }
-    if (meetingActive) { toast("已在会议中"); return; }
+    if (callState !== "idle") { toast(t("call.endCallFirst")); return; }
+    if (meetingActive) { toast(t("meeting.alreadyIn")); return; }
     const g = groups.find((x) => x.id === groupId);
     if (!g) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      toast("当前浏览器不支持音视频会议"); return;
+      toast(t("meeting.noSupport")); return;
     }
     try {
       localStream = await navigator.mediaDevices.getUserMedia({
@@ -2808,7 +3279,7 @@
         video: type === "video" ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
       });
     } catch (err) {
-      toast("无法访问摄像头/麦克风：" + ((err && err.message) || err.name || err));
+      toast(t("call.noMediaAccess") + ((err && err.message) || err.name || err));
       return;
     }
     meetingActive = true;
@@ -2826,19 +3297,19 @@
     if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "group-call", groupId, media: type }));
     }
-    toast("已发起群会议，正在呼叫成员…");
+    toast(t("meeting.inviting"));
     updateMeetingButtons();
   }
 
   async function joinGroupMeeting(groupId, type, from) {
     groupId = Number(groupId);
     type = type === "audio" ? "audio" : "video";
-    if (callState !== "idle") { toast("请先结束当前通话"); return; }
-    if (meetingActive && meetingGroupId !== groupId) { toast("已在其它群会议中"); return; }
+    if (callState !== "idle") { toast(t("call.endCallFirst")); return; }
+    if (meetingActive && meetingGroupId !== groupId) { toast(t("meeting.inOther")); return; }
     const g = groups.find((x) => x.id === groupId);
     if (!g) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      toast("当前浏览器不支持音视频会议"); return;
+      toast(t("meeting.noSupport")); return;
     }
     try {
       localStream = await navigator.mediaDevices.getUserMedia({
@@ -2846,7 +3317,7 @@
         video: type === "video" ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
       });
     } catch (err) {
-      toast("无法访问摄像头/麦克风：" + ((err && err.message) || err.name || err));
+      toast(t("call.noMediaAccess") + ((err && err.message) || err.name || err));
       return;
     }
     meetingActive = true;
@@ -2925,13 +3396,17 @@
   function showMeetingPanel(g) {
     if (!meetingPanel) return;
     meetingPanel.hidden = false;
-    if (meetingGroupName) meetingGroupName.textContent = (g && g.name) || "群会议";
+    if (meetingGroupName) {
+      const name = (g && g.name) || t("meeting.title");
+      meetingGroupName.textContent = name;
+      delete meetingGroupName.dataset.i18nKey;
+    }
     updateMeetingCount();
   }
 
   function updateMeetingCount() {
     if (!meetingCount) return;
-    meetingCount.textContent = meetingMembers.size + " 人";
+    i18nText(meetingCount, "meeting.count", { n: meetingMembers.size });
   }
 
   // 全屏：把整个会议面板切到全屏，再次点击退出（兼容 Safari webkit 前缀）。
@@ -3236,7 +3711,7 @@
     if (!groupCallInvite) return;
     pendingGroupCall = { groupId: g ? g.id : null, from, media: media || "video" };
     if (groupCallName) groupCallName.textContent = (name || "群成员") + " 邀请你加入群会议";
-    if (groupCallType) groupCallType.textContent = (media === "audio" ? "语音" : "视频") + "会议 · " + (g ? g.name : "群聊");
+    if (groupCallType) i18nText(groupCallType, media === "audio" ? "meeting.invite.voiceMsg" : "meeting.invite.videoMsg", { name: g ? g.name : "群聊" });
     if (groupCallAvatar) {
       const info = groupMemberName(pendingGroupCall.groupId, from);
       renderAvatarInto(groupCallAvatar, info.avatar, (name || "?").charAt(0).toUpperCase());
@@ -3275,16 +3750,16 @@
   // 群会议屏幕共享（全网状）：对每一条成员连接的视频发送轨道 replaceTrack 为屏幕轨道。
   // 1:1 共用 screenStream/isSharingScreen 状态（通话与会议互斥，不会同时发生）。
   async function toggleMeetingScreenShare() {
-    if (meetingType !== "video" || !meetingActive) { toast("仅视频会议中可共享屏幕"); return; }
+    if (meetingType !== "video" || !meetingActive) { toast(t("meeting.shareVideoOnly")); return; }
     if (isSharingScreen) { await stopMeetingScreenShare(); return; }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-      toast("当前浏览器不支持屏幕共享"); return;
+      toast(t("call.noShareSupport")); return;
     }
     let screen;
     try {
       screen = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false });
     } catch (err) {
-      toast("无法共享屏幕：" + ((err && err.message) || err.name || err));
+      toast(t("call.shareFail") + ((err && err.message) || err.name || err));
       return;
     }
     const screenTrack = screen.getVideoTracks()[0];
@@ -3347,11 +3822,11 @@
     const inGroupDetail = chatMode === "group" && currentGroup != null && chatVisible && !groupView.hidden;
     if (groupMeetingBtn) {
       groupMeetingBtn.hidden = !(inGroupChat && !meetingActive);
-      groupMeetingBtn.textContent = rejoinMode ? "🔄 重新加入" : "📹 会议";
+      i18nText(groupMeetingBtn, rejoinMode ? "chat.group.rejoin" : "chat.group.meeting");
     }
     if (groupMeetingBtn2) {
       groupMeetingBtn2.hidden = !(inGroupDetail && !meetingActive);
-      groupMeetingBtn2.textContent = rejoinMode ? "🔄 重新加入" : "📹 发起会议";
+      i18nText(groupMeetingBtn2, rejoinMode ? "chat.group.rejoin" : "chat.group.startMeeting");
     }
   }
 
@@ -3661,9 +4136,10 @@
     switchChatTab("conversations");
     showChatView();
     chatPeerName.textContent = g.name;
+    delete chatPeerName.dataset.i18nKey;
     renderAvatarInto($("#chatPeerAvatar"), g.avatar, (g.name || "?").charAt(0).toUpperCase());
     chatGroupActions.hidden = false;
-    setChatStatus(`群聊 · ${(g.members || []).length}人`, "");
+    setChatStatus("", "", { key: "chat.status.groupMembers", params: { n: (g.members || []).length } });
     enableChatInput();
     renderGroups();
     renderFriendList();
@@ -3948,12 +4424,13 @@
       renderConversations();
       if (chatMode === "group" && Number(currentGroup) === g.id) {
         chatPeerName.textContent = newName;
+        delete chatPeerName.dataset.i18nKey;
         renderAvatarInto($("#chatPeerAvatar"), gg ? gg.avatar : "", (newName || "?").charAt(0).toUpperCase());
       }
-      toast("群名称已更新");
+      toast(t("chat.group.nameUpdated"));
     } catch (e) {
       cancelGroupRename();
-      toast("修改失败：" + (e?.message || e));
+      toast(t("chat.group.renameFail") + (e?.message || e));
     }
   }
 
@@ -3962,7 +4439,7 @@
     groupNameInput.value = "";
     groupMemberPicker.innerHTML = "";
     if (!friends.length) {
-      groupMemberPicker.innerHTML = `<div class="member-pick-empty">还没有好友，无法创建群聊</div>`;
+      groupMemberPicker.innerHTML = `<div class="member-pick-empty" data-i18n="chat.group.noFriendToCreate">还没有好友，无法创建群聊</div>`;
     } else {
       friends.forEach((f) => {
         const row = document.createElement("label");
@@ -3979,7 +4456,7 @@
 
   async function submitCreateGroup() {
     const name = groupNameInput.value.trim();
-    if (!name) { toast("请输入群名称"); return; }
+    if (!name) { toast(t("chat.group.enterName")); return; }
     const checks = groupMemberPicker.querySelectorAll('input[type="checkbox"]:checked');
     const members = Array.from(checks).map((c) => Number(c.value));
     try {
@@ -3991,10 +4468,10 @@
       const g = r.group;
       groups.push(g);
       renderGroups();
-      toast(`已创建群聊「${g.name}」`);
+      toast(tp("chat.group.created", { name: g.name }));
       openGroupConversation(g);
     } catch (e) {
-      toast(e.message || "创建失败");
+      toast(e.message || t("chat.group.createFail"));
     }
   }
 
@@ -4007,7 +4484,7 @@
     groupAddPicker.innerHTML = "";
     const candidates = friends.filter((f) => !inGroup.has(f.id));
     if (!candidates.length) {
-      groupAddPicker.innerHTML = `<div class="member-pick-empty">没有可添加的好友</div>`;
+      groupAddPicker.innerHTML = `<div class="member-pick-empty" data-i18n="chat.group.noCandidate">没有可添加的好友</div>`;
     } else {
       candidates.forEach((f) => {
         const row = document.createElement("div");
@@ -4022,15 +4499,15 @@
               method: "POST",
               body: JSON.stringify({ userId: f.id }),
             });
-            toast(`已邀请 ${f.username} 加入群聊`);
+            toast(tp("chat.group.invited", { name: f.username }));
             await loadGroups();
             const gg = groups.find((x) => x.id === currentGroup);
-            if (gg) setChatStatus(`群聊 · ${(gg.members || []).length}人`, "");
+            if (gg) setChatStatus("", "", { key: "chat.status.groupMembers", params: { n: (gg.members || []).length } });
             const btn = row.querySelector(".mp-add");
-            btn.textContent = "已添加";
+            i18nText(btn, "chat.group.added");
             btn.disabled = true;
           } catch (e) {
-            toast(e.message || "添加失败");
+            toast(e.message || t("chat.add.fail"));
           }
         };
         groupAddPicker.appendChild(row);
@@ -4043,12 +4520,12 @@
   async function leaveCurrentGroup() {
     if (currentGroup == null) return;
     const g = groups.find((x) => x.id === currentGroup);
-    if (!confirm(`确定退出群聊「${g ? g.name : "该群"}」？`)) return;
+    if (!confirm(tp("chat.confirm.leaveGroup", { name: g ? g.name : t("chat.thisGroup") }))) return;
     try {
       await api(`/api/groups/${currentGroup}/leave`, { method: "DELETE" });
       groups = groups.filter((x) => x.id !== currentGroup);
       clearGroupUnread(currentGroup);
-      toast("已退出群聊");
+      toast(t("chat.group.left"));
     } catch (e) {
       toast(e.message || "退出失败");
       return;
@@ -4057,7 +4534,7 @@
     currentGroup = null;
     chatGroupActions.hidden = true;
     currentPeer = null;
-    chatPeerName.textContent = "选择一个好友开始聊天";
+    i18nText(chatPeerName, "chat.peer.placeholder");
     renderAvatarInto($("#chatPeerAvatar"), "", "?");
     setChatStatus("未连接");
     disableChatInput();
@@ -4079,7 +4556,7 @@
     ChatDB.put(rec).then(() => flushPending());
     if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "group-chat", groupId: gid, id, ts, text }));
-      setChatStatus(`群聊 · ${(groups.find((x) => x.id === gid)?.members || []).length}人`, "");
+      setChatStatus("", "", { key: "chat.status.groupMembers", params: { n: (groups.find((x) => x.id === gid)?.members || []).length } });
     } else {
       setChatStatus("已发送（离线消息，上线后接收）", "ok");
     }

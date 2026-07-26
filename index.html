@@ -4,28 +4,33 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=66" />
+  <link rel="stylesheet" href="styles.css?v=68" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
   <div id="authView" class="auth-view">
     <div class="auth-card">
       <div class="auth-logo">🚀</div>
-      <h1>Web 应用导航</h1>
-      <p class="auth-sub" id="authSub">登录以同步你的应用</p>
+      <h1 data-i18n="auth.title">Web 应用导航</h1>
+      <p class="auth-sub" id="authSub" data-i18n="auth.sub">登录以同步你的应用</p>
+
+      <div class="auth-lang">
+        <button type="button" class="btn ghost lang-btn" data-lang="zh">中文</button>
+        <button type="button" class="btn ghost lang-btn" data-lang="en">English</button>
+      </div>
 
       <form id="loginForm" class="auth-form">
-        <input id="loginUser" type="text" placeholder="用户名" autocomplete="username" required />
-        <input id="loginPass" type="password" placeholder="密码" autocomplete="current-password" required />
-        <button class="btn primary block" type="submit">登录</button>
-        <p class="auth-toggle">还没有账号？<a id="toRegister" href="#">注册一个</a></p>
+        <input id="loginUser" type="text" placeholder="用户名" data-i18n-ph="auth.username.ph" autocomplete="username" required />
+        <input id="loginPass" type="password" placeholder="密码" data-i18n-ph="auth.password.ph" autocomplete="current-password" required />
+        <button class="btn primary block" type="submit" data-i18n="auth.login">登录</button>
+        <p class="auth-toggle"><span data-i18n="auth.noAccount.pre">还没有账号？</span><a id="toRegister" href="#" data-i18n="auth.register.link">注册一个</a></p>
       </form>
 
       <form id="registerForm" class="auth-form" hidden>
-        <input id="regUser" type="text" placeholder="用户名（3-32 位）" autocomplete="username" required />
-        <input id="regPass" type="password" placeholder="密码（至少 6 位）" autocomplete="new-password" required />
-        <button class="btn primary block" type="submit">注册</button>
-        <p class="auth-toggle">已有账号？<a id="toLogin" href="#">去登录</a></p>
+        <input id="regUser" type="text" placeholder="用户名（3-32 位）" data-i18n-ph="auth.regUsername.ph" autocomplete="username" required />
+        <input id="regPass" type="password" placeholder="密码（至少 6 位）" data-i18n-ph="auth.regPassword.ph" autocomplete="new-password" required />
+        <button class="btn primary block" type="submit" data-i18n="auth.register">注册</button>
+        <p class="auth-toggle"><span data-i18n="auth.hasAccount.pre">已有账号？</span><a id="toLogin" href="#" data-i18n="auth.login.link">去登录</a></p>
       </form>
 
       <div id="authError" class="auth-error" hidden></div>
@@ -38,27 +43,24 @@
       <div class="brand">
         <span class="brand-logo">🚀</span>
         <div class="brand-text">
-          <h1>Web 应用导航</h1>
+          <h1 data-i18n="app.title">Web 应用导航</h1>
           <p id="appCount">0 个应用</p>
         </div>
       </div>
 
       <div class="search-wrap">
-        <input id="searchInput" type="search" placeholder="搜索应用名称或网址…" autocomplete="off" />
+        <input id="searchInput" type="search" placeholder="搜索应用名称或网址…" data-i18n-ph="topbar.search.ph" autocomplete="off" />
       </div>
 
       <div class="topbar-actions">
-        <button id="userAvatarBtn" class="avatar-btn" title="个人资料">
+        <button id="userAvatarBtn" class="avatar-btn" title="个人资料" data-i18n-title="profile.title">
           <span id="userAvatar" class="avatar"></span>
         </button>
         <span id="userName" class="user-name"></span>
-        <button id="importBtn" class="btn ghost" title="从 JSON 文件导入">导入</button>
-        <button id="exportBtn" class="btn ghost" title="导出为 JSON 备份">导出</button>
-        <button id="themeBtn" class="btn ghost" title="切换深色/浅色">🌓</button>
-        <button id="addBtn" class="btn primary">＋ 添加应用</button>
-        <button id="chatBtn" class="btn ghost" title="P2P 聊天">💬 聊天<span id="chatUnreadBadge" class="nav-badge" hidden></span></button>
-        <button id="logoutBtn" class="btn ghost">登出</button>
-        <input id="importFile" type="file" accept="application/json" hidden />
+        <button id="settingsBtn" class="btn ghost" title="设置" data-i18n="topbar.settings">⚙ 设置</button>
+        <button id="addBtn" class="btn primary" data-i18n="topbar.add">＋ 添加应用</button>
+        <button id="chatBtn" class="btn ghost" title="P2P 聊天"><span data-i18n="topbar.chat">💬 聊天</span><span id="chatUnreadBadge" class="nav-badge" hidden></span></button>
+        <button id="logoutBtn" class="btn ghost" data-i18n="topbar.logout">登出</button>
       </div>
     </header>
 
@@ -132,21 +134,21 @@
     <div id="profileModal" class="modal" hidden>
       <div class="modal-backdrop" data-close></div>
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="profileTitle">
-        <h2 id="profileTitle">个人资料</h2>
+        <h2 id="profileTitle" data-i18n="profile.title">个人资料</h2>
         <label class="field">
-          <span>头像（Emoji 或图片链接）</span>
+          <span data-i18n="profile.avatarLabel">头像（Emoji 或图片链接）</span>
           <div class="icon-input-row">
-            <input id="pAvatar" type="text" placeholder="🌟 或 https://…/avatar.png" autocomplete="off" />
+            <input id="pAvatar" type="text" placeholder="🌟 或 https://…/avatar.png" data-i18n-ph="profile.avatarPh" autocomplete="off" />
             <span class="icon-preview" id="avatarPreview" aria-hidden="true"></span>
           </div>
         </label>
         <label class="field">
-          <span>用户名</span>
+          <span data-i18n="profile.usernameLabel">用户名</span>
           <div id="profileUsername" class="profile-username"></div>
         </label>
       <div class="modal-actions">
-        <button type="button" class="btn ghost" data-close>取消</button>
-        <button type="button" class="btn primary" id="saveAvatar">保存</button>
+        <button type="button" class="btn ghost" data-close data-i18n="profile.cancel">取消</button>
+        <button type="button" class="btn primary" id="saveAvatar" data-i18n="profile.save">保存</button>
       </div>
     </div>
   </div>
@@ -155,18 +157,18 @@
   <div id="groupModal" class="modal" hidden>
     <div class="modal-backdrop" data-close></div>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="groupModalTitle">
-      <h2 id="groupModalTitle">创建群聊</h2>
+      <h2 id="groupModalTitle" data-i18n="chat.group.modalTitle">创建群聊</h2>
       <label class="field">
-        <span>群名称 <em>*</em></span>
-        <input id="groupNameInput" type="text" maxlength="32" placeholder="例如：项目组 / 家人们" />
+        <span><span data-i18n="chat.group.nameLabel">群名称</span> <em>*</em></span>
+        <input id="groupNameInput" type="text" data-i18n-ph="chat.group.namePh" maxlength="32" placeholder="例如：项目组 / 家人们" />
       </label>
       <div class="field">
-        <span>选择成员（从好友中）</span>
+        <span data-i18n="chat.group.selectMembers">选择成员（从好友中）</span>
         <div id="groupMemberPicker" class="member-picker"></div>
       </div>
       <div class="modal-actions">
-        <button type="button" class="btn ghost" data-close>取消</button>
-        <button type="button" class="btn primary" id="groupCreateConfirm">创建</button>
+        <button type="button" class="btn ghost" data-close data-i18n="chat.group.cancel">取消</button>
+        <button type="button" class="btn primary" id="groupCreateConfirm" data-i18n="chat.group.create">创建</button>
       </div>
     </div>
   </div>
@@ -175,13 +177,13 @@
   <div id="groupAddModal" class="modal" hidden>
     <div class="modal-backdrop" data-close></div>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="groupAddTitle">
-      <h2 id="groupAddTitle">添加成员</h2>
+      <h2 id="groupAddTitle" data-i18n="chat.group.addMemberTitle">添加成员</h2>
       <div class="field">
-        <span>选择好友加入群聊</span>
+        <span data-i18n="chat.group.selectFriends">选择好友加入群聊</span>
         <div id="groupAddPicker" class="member-picker"></div>
       </div>
       <div class="modal-actions">
-        <button type="button" class="btn ghost" data-close>取消</button>
+        <button type="button" class="btn ghost" data-close data-i18n="chat.group.cancel">取消</button>
       </div>
     </div>
   </div>
@@ -191,71 +193,71 @@
 
   <!-- 好友聊天抽屉 -->
   <div id="chatPanel" class="chat-panel" hidden>
-    <div class="chat-resizer" id="chatResizer" title="拖动调整宽度"></div>
+    <div class="chat-resizer" id="chatResizer" data-i18n-title="chat.resizer"></div>
     <aside class="chat-sidebar">
       <div class="chat-sidebar-head">
-        <div class="chat-title">聊天</div>
-        <button id="chatClose" class="chat-x" title="关闭">✕</button>
+        <div class="chat-title" data-i18n="chat.title">聊天</div>
+        <button id="chatClose" class="chat-x" data-i18n-title="chat.close">✕</button>
       </div>
 
       <!-- Tab 栏：会话 / 好友 / 群组 -->
       <div class="chat-tabs">
-        <button class="chat-tab active" data-tab="conversations">💬 会话<span id="tabConvBadge" class="tab-badge" hidden></span></button>
-        <button class="chat-tab" data-tab="friends">👤 好友<span id="tabFriendBadge" class="tab-badge" hidden></span></button>
-        <button class="chat-tab" data-tab="groups">👥 群组</button>
+        <button class="chat-tab active" data-tab="conversations"><span data-i18n="chat.tab.conversations">💬 会话</span><span id="tabConvBadge" class="tab-badge" hidden></span></button>
+        <button class="chat-tab" data-tab="friends"><span data-i18n="chat.tab.friends">👤 好友</span><span id="tabFriendBadge" class="tab-badge" hidden></span></button>
+        <button class="chat-tab" data-tab="groups"><span data-i18n="chat.tab.groups">👥 群组</span></button>
       </div>
 
       <!-- 会话面板：统一展示 私聊 + 群聊，按最近活动排序，可关闭 -->
       <div class="tab-panel" data-panel="conversations">
         <div id="convList" class="conv-list"></div>
-        <div id="convEmpty" class="friend-empty" hidden>还没有会话，去「好友」或「群组」开始聊天吧</div>
+        <div id="convEmpty" class="friend-empty" hidden data-i18n="chat.conv.empty">还没有会话，去「好友」或「群组」开始聊天吧</div>
       </div>
 
       <!-- 好友面板：添加好友 / 好友请求 / 好友列表 -->
       <div class="tab-panel" data-panel="friends" hidden>
         <div class="friend-add">
-          <input id="friendSearch" type="text" placeholder="输入用户名添加好友" maxlength="32" autocomplete="off" />
-          <button id="friendAdd" class="btn primary">添加</button>
+          <input id="friendSearch" type="text" data-i18n-ph="chat.friend.search.ph" placeholder="输入用户名添加好友" maxlength="32" autocomplete="off" />
+          <button id="friendAdd" class="btn primary" data-i18n="chat.friend.add">添加</button>
         </div>
         <div id="friendRequests" class="friend-requests" hidden></div>
         <div id="friendList" class="friend-list"></div>
-        <div id="friendEmpty" class="friend-empty">还没有好友，添加好友后即可开始聊天</div>
+        <div id="friendEmpty" class="friend-empty" data-i18n="chat.friend.empty">还没有好友，添加好友后即可开始聊天</div>
       </div>
 
       <!-- 群组面板：创建群聊 / 群聊列表 -->
       <div class="tab-panel" data-panel="groups" hidden>
         <div class="group-head">
-          <span class="group-title">👥 群聊</span>
-          <button id="groupCreateBtn" class="btn ghost small" title="创建群聊">＋ 创建</button>
+          <span class="group-title" data-i18n="chat.group.title">👥 群聊</span>
+          <button id="groupCreateBtn" class="btn ghost small" data-i18n-title="chat.group.create" data-i18n="chat.group.create">＋ 创建</button>
         </div>
         <div id="groupList" class="group-list"></div>
-        <div id="groupEmpty" class="friend-empty" hidden>还没有群聊，点「＋ 创建」开始</div>
+        <div id="groupEmpty" class="friend-empty" hidden data-i18n="chat.group.empty">还没有群聊，点「＋ 创建」开始</div>
       </div>
       <div class="sidebar-resizer" id="sidebarResizer" title="拖动调整列表宽度"></div>
     </aside>
     <section class="chat-main">
       <div class="chat-mobile-back" id="chatBackBar">
-        <button id="chatBackBtn" class="chat-back-btn" title="返回">‹</button>
+        <button id="chatBackBtn" class="chat-back-btn" data-i18n-title="chat.back">‹</button>
       </div>
       <!-- 聊天视图 -->
       <div id="chatView">
         <div class="chat-header">
           <span id="chatPeerAvatar" class="avatar sm"></span>
-          <div class="chat-title" id="chatPeerName">选择一个好友开始聊天</div>
-          <div class="chat-status" id="chatStatus">未连接</div>
-          <button id="btnVoiceCall" class="chat-call-btn" title="语音通话" hidden>📞</button>
-          <button id="btnVideoCall" class="chat-call-btn" title="视频通话" hidden>📹</button>
-          <button id="groupMeetingBtn" class="chat-call-btn" title="发起群会议" hidden>📹 会议</button>
+          <div class="chat-title" id="chatPeerName" data-i18n="chat.peer.placeholder">选择一个好友开始聊天</div>
+          <div class="chat-status" id="chatStatus" data-i18n="chat.status.disconnected">未连接</div>
+          <button id="btnVoiceCall" class="chat-call-btn" data-i18n-title="chat.call.voice" hidden>📞</button>
+          <button id="btnVideoCall" class="chat-call-btn" data-i18n-title="chat.call.video" hidden>📹</button>
+          <button id="groupMeetingBtn" class="chat-call-btn" data-i18n-title="chat.call.meeting" data-i18n="chat.group.meeting" hidden>📹 会议</button>
           <div id="chatGroupActions" class="chat-group-actions" hidden>
-            <button id="groupAddMember" class="btn ghost small" title="添加成员">＋成员</button>
-            <button id="groupLeave" class="btn ghost small" title="退出群聊">退出</button>
+            <button id="groupAddMember" class="btn ghost small" data-i18n-title="chat.group.addMember" data-i18n="chat.group.addMember">＋成员</button>
+            <button id="groupLeave" class="btn ghost small" data-i18n-title="chat.group.leave" data-i18n="chat.group.leave">退出</button>
           </div>
         </div>
         <div id="chatMessages" class="chat-messages"></div>
         <div class="chat-input-row">
-          <textarea id="chatInput" rows="1" placeholder="输入消息…（Enter 发送，Shift+Enter 换行）"
+          <textarea id="chatInput" rows="1" data-i18n-ph="chat.input.ph" placeholder="输入消息…（Enter 发送，Shift+Enter 换行）"
                     disabled></textarea>
-          <button id="chatSend" class="btn primary" disabled>发送</button>
+          <button id="chatSend" class="btn primary" data-i18n="chat.send" disabled>发送</button>
         </div>
       </div>
 
@@ -268,11 +270,11 @@
         </div>
         <div class="detail-actions">
           <div class="detail-call-row">
-            <button id="friendVoiceCallBtn" class="btn call-action" hidden>📞 语音聊天</button>
-            <button id="friendVideoCallBtn" class="btn call-action" hidden>📹 视频聊天</button>
+            <button id="friendVoiceCallBtn" class="btn call-action" data-i18n="chat.friend.voiceChat" hidden>📞 语音聊天</button>
+            <button id="friendVideoCallBtn" class="btn call-action" data-i18n="chat.friend.videoChat" hidden>📹 视频聊天</button>
           </div>
-          <button id="friendMessageBtn" class="btn primary">发消息</button>
-          <button id="friendRemoveBtn" class="btn ghost danger">移除好友</button>
+          <button id="friendMessageBtn" class="btn primary" data-i18n="chat.friend.message">发消息</button>
+          <button id="friendRemoveBtn" class="btn ghost danger" data-i18n="chat.friend.remove">移除好友</button>
         </div>
       </div>
 
@@ -282,19 +284,19 @@
           <span id="groupDetailAvatar" class="avatar lg"></span>
           <div class="detail-name-row">
             <div class="detail-name" id="groupDetailName"></div>
-            <button id="groupRenameBtn" class="icon-edit" hidden title="修改群名称">✎</button>
+            <button id="groupRenameBtn" class="icon-edit" hidden data-i18n-title="chat.group.rename">✎</button>
           </div>
-          <input id="groupNameEdit" class="detail-name-edit" maxlength="64" hidden
+          <input id="groupNameEdit" class="detail-name-edit" data-i18n-ph="chat.group.nameEdit.ph" maxlength="64" hidden
                  placeholder="输入新群名称，回车保存" />
           <div class="detail-sub" id="groupDetailMeta"></div>
         </div>
-        <div class="detail-section-title">群成员</div>
+        <div class="detail-section-title" data-i18n="chat.group.members">群成员</div>
         <div id="groupDetailMembers" class="member-list"></div>
         <div class="detail-actions">
-          <button id="groupMessageBtn" class="btn primary">发消息</button>
-          <button id="groupMeetingBtn2" class="btn primary" title="发起群会议" hidden>📹 发起会议</button>
-          <button id="groupAddMemberBtn2" class="btn ghost">＋添加成员</button>
-          <button id="groupLeaveBtn2" class="btn ghost danger">退出群聊</button>
+          <button id="groupMessageBtn" class="btn primary" data-i18n="chat.group.sendMsg">发消息</button>
+          <button id="groupMeetingBtn2" class="btn primary" data-i18n-title="chat.call.meeting" data-i18n="chat.group.startMeeting" hidden>📹 发起会议</button>
+          <button id="groupAddMemberBtn2" class="btn ghost" data-i18n="chat.group.addMember2">＋添加成员</button>
+          <button id="groupLeaveBtn2" class="btn ghost danger" data-i18n="chat.group.leave2">退出群聊</button>
         </div>
       </div>
 
@@ -313,11 +315,11 @@
     </div>
     <video id="localVideo" class="call-local-video" autoplay playsinline muted></video>
     <div class="call-controls">
-      <button id="btnCallMute" class="call-ctrl" title="静音 / 取消静音">🎤</button>
-      <button id="btnCallCam" class="call-ctrl" title="开关摄像头">📹</button>
-      <button id="btnCallShare" class="call-ctrl" title="共享屏幕" hidden>🖥️</button>
-      <button id="btnCallFull" class="call-ctrl" title="全屏 / 退出全屏">⛶</button>
-      <button id="btnCallHangup" class="call-ctrl hangup" title="挂断">📞</button>
+      <button id="btnCallMute" class="call-ctrl" data-i18n-title="call.mute">🎤</button>
+      <button id="btnCallCam" class="call-ctrl" data-i18n-title="call.cam">📹</button>
+      <button id="btnCallShare" class="call-ctrl" data-i18n-title="call.share" hidden>🖥️</button>
+      <button id="btnCallFull" class="call-ctrl" data-i18n-title="call.full">⛶</button>
+      <button id="btnCallHangup" class="call-ctrl hangup" data-i18n-title="call.hangup">📞</button>
     </div>
   </div>
 
@@ -328,8 +330,8 @@
       <div class="call-incoming-name" id="incomingName"></div>
       <div class="call-incoming-type" id="incomingType"></div>
       <div class="call-incoming-actions">
-        <button id="btnIncomingAccept" class="call-ctrl accept" title="接听">接听</button>
-        <button id="btnIncomingDecline" class="call-ctrl hangup" title="拒绝">拒绝</button>
+        <button id="btnIncomingAccept" class="call-ctrl accept" data-i18n="call.accept" data-i18n-title="call.accept">接听</button>
+        <button id="btnIncomingDecline" class="call-ctrl hangup" data-i18n="call.decline" data-i18n-title="call.decline">拒绝</button>
       </div>
     </div>
   </div>
@@ -341,8 +343,8 @@
       <div class="call-incoming-name" id="groupCallName"></div>
       <div class="call-incoming-type" id="groupCallType"></div>
       <div class="call-incoming-actions">
-        <button id="btnGroupCallJoin" class="call-ctrl accept" title="加入会议">加入</button>
-        <button id="btnGroupCallIgnore" class="call-ctrl hangup" title="忽略">忽略</button>
+        <button id="btnGroupCallJoin" class="call-ctrl accept" data-i18n="meeting.invite.join" data-i18n-title="meeting.invite.join">加入</button>
+        <button id="btnGroupCallIgnore" class="call-ctrl hangup" data-i18n="meeting.invite.ignore" data-i18n-title="meeting.invite.ignore">忽略</button>
       </div>
     </div>
   </div>
@@ -350,36 +352,66 @@
   <!-- 群会议面板（多人视频网格） -->
   <div id="meetingPanel" class="meeting-panel" hidden>
     <div class="meeting-header">
-      <span class="meeting-title" id="meetingGroupName">群会议</span>
+      <span class="meeting-title" id="meetingGroupName" data-i18n="meeting.title">群会议</span>
       <span class="meeting-count" id="meetingCount">1 人</span>
-      <button id="btnMeetingSpotExit" class="meeting-spot-exit" title="退出聚焦，恢复网格" hidden>退出聚焦</button>
-      <button id="btnMeetingFull" class="meeting-full" title="全屏切换">⛶</button>
-      <button id="btnMeetingLeave" class="meeting-leave" title="离开会议">离开会议</button>
+      <button id="btnMeetingSpotExit" class="meeting-spot-exit" data-i18n-title="meeting.exitSpotlight" hidden>退出聚焦</button>
+      <button id="btnMeetingFull" class="meeting-full" data-i18n-title="meeting.full">⛶</button>
+      <button id="btnMeetingLeave" class="meeting-leave" data-i18n="meeting.leave" data-i18n-title="meeting.leave">离开会议</button>
     </div>
     <div id="meetingGrid" class="meeting-grid">
       <div class="meeting-tile self" data-uid="self">
         <video id="meetingLocalVideo" class="meeting-video" autoplay playsinline muted></video>
         <div class="meeting-avatar" id="meetingSelfAvatar"></div>
-        <span class="meeting-name">我</span>
+        <span class="meeting-name" data-i18n="meeting.me">我</span>
       </div>
     </div>
     <div id="meetingFilmstrip" class="meeting-filmstrip" hidden></div>
     <div class="call-controls">
-      <button id="btnMeetingMute" class="call-ctrl" title="静音 / 取消静音">🎤</button>
-      <button id="btnMeetingCam" class="call-ctrl" title="开关摄像头">📹</button>
-      <button id="btnMeetingShare" class="call-ctrl" title="共享屏幕" hidden>🖥️</button>
-      <button id="btnMeetingHangup" class="call-ctrl hangup" title="挂断 / 离开">📞</button>
+      <button id="btnMeetingMute" class="call-ctrl" data-i18n-title="meeting.mute">🎤</button>
+      <button id="btnMeetingCam" class="call-ctrl" data-i18n-title="meeting.cam">📹</button>
+      <button id="btnMeetingShare" class="call-ctrl" data-i18n-title="meeting.share" hidden>🖥️</button>
+      <button id="btnMeetingHangup" class="call-ctrl hangup" data-i18n-title="meeting.hangup">📞</button>
     </div>
     <!-- 离开会议后的状态条：提供"重新加入"入口 -->
     <div id="meetingLeftBar" class="meeting-left-bar" hidden>
-      <div class="meeting-left-text">你已离开会议</div>
+      <div class="meeting-left-text" data-i18n="meeting.left">你已离开会议</div>
       <div class="meeting-left-actions">
-        <button id="btnMeetingRejoin" class="call-ctrl accept" title="重新加入会议">重新加入</button>
-        <button id="btnMeetingCloseLeft" class="call-ctrl hangup" title="彻底关闭">关闭</button>
+        <button id="btnMeetingRejoin" class="call-ctrl accept" data-i18n="meeting.rejoin" data-i18n-title="meeting.rejoin">重新加入</button>
+        <button id="btnMeetingCloseLeft" class="call-ctrl hangup" data-i18n="meeting.close" data-i18n-title="meeting.close">关闭</button>
       </div>
     </div>
   </div>
 
-  <script src="app.js?v=89"></script>
+  <!-- 设置抽屉（右侧滑入，风格类似聊天弹窗） -->
+  <div id="settingsPanel" class="settings-panel" hidden>
+    <div class="settings-content">
+      <div class="settings-header">
+        <div class="settings-title" data-i18n="settings.title">设置</div>
+        <button id="settingsClose" class="settings-x" title="关闭">✕</button>
+      </div>
+      <div class="settings-body">
+        <div class="settings-section">
+          <div class="settings-section-title" data-i18n="settings.backup">数据备份</div>
+          <button id="importBtn" class="btn ghost block" title="从 JSON 文件导入" data-i18n="settings.import">📥 从 JSON 文件导入</button>
+          <button id="exportBtn" class="btn ghost block" title="导出为 JSON 备份" data-i18n="settings.export">📤 导出为 JSON 备份</button>
+          <p class="settings-hint" data-i18n="settings.backupHint">导入会按网址去重合并；导出为当前账号的全部应用备份。</p>
+        </div>
+        <div class="settings-section">
+          <div class="settings-section-title" data-i18n="settings.language">语言</div>
+          <div class="lang-switch">
+            <button type="button" class="btn ghost block lang-btn" data-lang="zh">中文</button>
+            <button type="button" class="btn ghost block lang-btn" data-lang="en">English</button>
+          </div>
+        </div>
+        <div class="settings-section">
+          <div class="settings-section-title" data-i18n="settings.appearance">外观</div>
+          <button id="themeToggleBtn" class="btn ghost block" title="切换深色 / 浅色">🌓 主题：深色</button>
+        </div>
+      </div>
+    </div>
+    <input id="importFile" type="file" accept="application/json" hidden />
+  </div>
+
+  <script src="app.js?v=96"></script>
 </body>
 </html>
