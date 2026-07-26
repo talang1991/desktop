@@ -2178,7 +2178,7 @@
     };
   }
 
-  function handleSignal(data, from) {
+  async function handleSignal(data, from) {
     from = Number(from);
     if (!data) return;
     // 媒体控制信令（接听 / 拒绝 / 挂断）走独立通道，不参与 SDP/ICE 协商
@@ -2195,15 +2195,27 @@
           console.log("[WEBRTC] 忽略冲突 offer（impolite 方）", from);
           return;
         }
-        p.pc.setRemoteDescription(desc).then(async () => {
+        try {
+          // polite 方遇到冲突时，必须先回滚本地 offer 再接受对方 offer；
+          // 否则 setRemoteDescription 在 have-local-offer 状态抛错，最终协商只保留一方媒体轨道（单向流）。
+          if (offerCollision) {
+            await p.pc.setLocalDescription({ type: "rollback" });
+          }
+          await p.pc.setRemoteDescription(desc);
           if (desc.type === "offer") {
-            await p.pc.setLocalDescription();
+            // 关键：主叫在收到“被叫已接听并 addTrack”的 offer 时，才补加本端媒体，
+            // 使本次 answer 即携带主叫音视频。双方媒体在“单次协商(OFFER_B)”内完成，
+            // 避免主叫先发 OFFER_A 含媒体、被叫接听又 OFFER_B 重复协商，导致主叫媒体流
+            // 在重协商后失效、被叫端画面卡在失效的旧 MediaStream（单向流根因）。
+            // 被叫侧此时 localStream 尚为 null（未接听），因此不会在此误加。
+            if (localStream && !p.mediaAdded) addLocalMediaTracks(p);
+            await p.pc.setLocalDescription(); // 自动生成 answer（含本端媒体）
             sendSignal(from, { sdp: p.pc.localDescription });
           }
-        }).catch((err) => {
+        } catch (err) {
           console.error("[WEBRTC] setRemoteDescription error:", (err && err.message) || err);
           if (!p.ignoreOffer) enableRelay(from);
-        });
+        }
       } else if (data.candidate) {
         p.pc.addIceCandidate(data.candidate).catch((err) => {
           if (!p.ignoreOffer) console.warn("[WEBRTC] addIceCandidate failed:", (err && err.message) || err);
@@ -2300,10 +2312,10 @@
     showCallPanel(type, f);
     setCallStateLabel("等待对方接听…");
     updateCallButtons();
-    // 确保 P2P 连接存在并通知对方（startCall 发送带 media 的 call）；随后加入本端轨道触发协商
+    // 建立 P2P 连接并通知对方（startCall 发送带 media 的 call）。
+    // 注意：主叫不在此时 addTrack，而是等收到被叫“已接听”的 offer 时再补加本端媒体，
+    // 让双方媒体在单次协商内完成（见 handleSignal 的 offer 分支），彻底避免单向流问题。
     startCall(peerId, f.username, type);
-    const p = getPeerConn(peerId);
-    if (p && p.pc) addLocalMediaTracks(p);
   }
 
   function addLocalMediaTracks(p) {
