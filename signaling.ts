@@ -289,6 +289,19 @@ export function attachSignaling(server: Server): void {
           }
           return;
         }
+        // 摄像头开关广播：通知其他成员把该成员的视频瓦片显示/隐藏头像占位（无视频时显示头像）。
+        // 支持可选 to 定向（晚加入的成员没收到过广播，由摄像头关闭者主动补发）。
+        case "group-cam": {
+          const groupId = Number(msg.groupId);
+          if (!groupId) return;
+          const payload = { type: "group-cam", groupId, from: user!.id, on: !!msg.on };
+          if (msg.to) { routeTo(Number(msg.to), payload); }
+          else {
+            const members = (await getGroupMemberIds(groupId)).filter((m) => m !== user!.id);
+            routeToEach(members, payload);
+          }
+          return;
+        }
 
         // 结束当前对话
         case "bye": {

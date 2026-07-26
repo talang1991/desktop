@@ -1541,19 +1541,7 @@ body.resizing .iframe-frame { pointer-events: none !important; }
   white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis;
 }
-/* 语音会议时，瓦片居中显示一个头像占位（复用头像样式） */
-.meeting-panel[data-type="audio"] .meeting-tile::after {
-  content: attr(data-initial);
-  position: absolute;
-  width: 64px; height: 64px;
-  border-radius: 50%;
-  background: var(--primary);
-  color: #fff;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 26px; font-weight: 700;
-}
-.meeting-panel[data-type="audio"] .meeting-tile.self::after { content: "我"; }
-
+/* 语音会议时，视频元素隐藏（瓦片由 .meeting-avatar 显示头像占位，见下） */
 /* 已离开会议状态：隐藏视频网格与控制条，显示“重新加入”状态条 */
 .meeting-panel.left .meeting-grid,
 .meeting-panel.left .call-controls { display: none; }
@@ -1626,6 +1614,32 @@ body.resizing .iframe-frame { pointer-events: none !important; }
 .meeting-tile.spotlight { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
 /* 共享屏幕的瓦片：完整显示屏幕内容（不裁切，黑边留白） */
 .meeting-tile.screen .meeting-video { object-fit: contain; background: #000; }
+
+/* 无视频（摄像头关闭且未共享屏幕）时：隐藏黑屏视频，居中显示头像占位 */
+.meeting-avatar {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  pointer-events: none;
+}
+.meeting-avatar img,
+.meeting-avatar .avatar-letter {
+  width: 72px; height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--primary);
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 28px; font-weight: 700;
+}
+.meeting-tile.no-video .meeting-video { visibility: hidden; }
+.meeting-tile.no-video .meeting-avatar { display: flex; }
+/* 胶片条里的小窗头像略小 */
+.meeting-filmstrip .meeting-avatar img,
+.meeting-filmstrip .meeting-avatar :not(img) { width: 48px; height: 48px; font-size: 20px; }
 
 /* 聚焦模式：主网格只放大被聚焦者，其余进入底部胶片条（横向滚动一排） */
 .meeting-panel.spotlight .meeting-grid {

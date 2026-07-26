@@ -1094,6 +1094,7 @@
   const btnMeetingCloseLeft = $("#btnMeetingCloseLeft"); // 离开后：彻底关闭
   const meetingLeftBar = $("#meetingLeftBar");
   const meetingFilmstrip = $("#meetingFilmstrip");
+  const meetingSelfAvatar = $("#meetingSelfAvatar");
   const btnMeetingFull = $("#btnMeetingFull");
   const btnMeetingSpotExit = $("#btnMeetingSpotExit");
   const groupMeetingBtn = $("#groupMeetingBtn");       // 群聊头部：发起会议 / 重新加入
@@ -1772,6 +1773,10 @@
         // 某成员停止共享屏幕：恢复普通视频裁切显示
         onGroupScreenStop(m.groupId, m.from);
         break;
+      case "group-cam":
+        // 某成员摄像头开关：标记其瓦片是否显示头像占位
+        onGroupCam(m.groupId, m.from, m.on);
+        break;
       case "peer-left":
         if (currentPeer === m.from) {
           setChatStatus("对方已结束对话（仍可发送离线消息）", "warn");
@@ -2159,6 +2164,7 @@
   let meetingLeft = false;         // 是否已软离开（保留 groupId/type，可重新加入）
   let spotlightUid = null;         // 聚焦观看的成员 uid（"self" 或数字 userId）；null 为网格模式
   let screenSharingMembers = new Set(); // 正在共享屏幕的会议成员 uid 集合（不含自己，自己单独标记）
+  let camOffMembers = new Set();       // 已关闭摄像头的会议成员 uid 集合（不含自己，自己用 camOff 标记）
   // 待接听的群会议邀请（点击“加入”时用到）
   let pendingGroupCall = null;     // { groupId, from, media }
 
@@ -2861,9 +2867,19 @@
       if (btnMeetingCam) btnMeetingCam.hidden = meetingType !== "video";
       if (btnMeetingShare) { btnMeetingShare.hidden = meetingType !== "video"; btnMeetingShare.classList.remove("active"); }
     }
-    // 新会议开始：复位屏幕共享状态（与 1:1 共用 screenStream/isSharingScreen，互斥）
+    // 新会议开始：复位摄像头/屏幕共享状态（与 1:1 共用，互斥）
+    if (btnMeetingCam) { btnMeetingCam.textContent = "📹"; btnMeetingCam.classList.remove("off"); }
+    camOff = false;
     isSharingScreen = false;
     screenStream = null;
+    // 本端头像占位（关摄像头 / 未共享时居中显示）
+    if (meetingSelfAvatar) {
+      const selfLetter = (currentUsername || "?").charAt(0).toUpperCase() || "?";
+      meetingSelfAvatar.innerHTML = myAvatar
+        ? renderAvatar(myAvatar, selfLetter)
+        : '<span class="avatar-letter">' + escapeHtml(selfLetter) + "</span>";
+    }
+    updateTileVideoState("self");
   }
 
   function showMeetingPanel(g) {
@@ -2950,7 +2966,15 @@
       nm.className = "meeting-name";
       const info = groupMemberName(meetingGroupId, id);
       nm.textContent = info.name || String(id);
+      // 无视频（摄像头关闭且未共享屏幕）时居中显示头像占位
+      const av = document.createElement("div");
+      av.className = "meeting-avatar";
+      const letter = (info.name || String(id)).trim().charAt(0).toUpperCase() || "?";
+      av.innerHTML = info.avatar
+        ? renderAvatar(info.avatar, letter)
+        : '<span class="avatar-letter">' + escapeHtml(letter) + "</span>";
       tile.appendChild(v);
+      tile.appendChild(av);
       tile.appendChild(nm);
       const init = (info.name || String(id)).trim().charAt(0).toUpperCase();
       tile.dataset.initial = init || "?";
@@ -2967,6 +2991,7 @@
     }
     const v = tile.querySelector("video");
     if (v.srcObject !== stream) v.srcObject = stream;
+    updateTileVideoState(id); // 同步头像占位显示（摄像头关 / 未共享时）
   }
 
   function removeMeetingTile(id) {
@@ -3015,6 +3040,7 @@
     }
     isSharingScreen = false;
     if (btnMeetingShare) btnMeetingShare.classList.remove("active");
+    camOffMembers = new Set(); // 清空远端关摄像头标记
     if (meetingLocalVideo) meetingLocalVideo.srcObject = null;
     meetingActive = false;
     if (soft) {
@@ -3085,12 +3111,18 @@
     if (isSharingScreen && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "group-screen", groupId: meetingGroupId, to: from }));
     }
+    // 我关闭了摄像头时，晚加入的成员没收到过 group-cam 广播，主动定向补发一次，
+    // 让其把本端瓦片显示头像占位
+    if (camOff && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "group-cam", groupId: meetingGroupId, on: false, to: from }));
+    }
   }
   function onGroupLeave(groupId, from) {
     from = Number(from);
     if (!meetingActive || meetingGroupId !== Number(groupId)) return;
     meetingMembers.delete(from);
     screenSharingMembers.delete(from); // 离开者若曾共享屏幕，清理标记
+    camOffMembers.delete(from);        // 离开者若曾关摄像头，清理标记
     removeMeetingTile(from);
     dropPeerConn(from);
     updateMeetingCount();
@@ -3121,6 +3153,22 @@
     if (tile) tile.classList.toggle("screen", !!on);
   }
 
+  // 根据某成员是否“有视频”决定瓦片是否显示头像占位。
+  // 语音（audio）会议 / 视频会议中关摄像头且未共享屏幕 → 无视频，居中显示头像。
+  function updateTileVideoState(uid) {
+    const tile = (meetingGrid && meetingGrid.querySelector('.meeting-tile[data-uid="' + String(uid) + '"]'))
+              || (meetingFilmstrip && meetingFilmstrip.querySelector('.meeting-tile[data-uid="' + String(uid) + '"]'));
+    if (!tile) return;
+    let noVideo;
+    if (uid === "self") {
+      noVideo = meetingType === "audio" ? true : (camOff && !isSharingScreen);
+    } else {
+      const id = Number(uid);
+      noVideo = meetingType === "audio" ? true : (camOffMembers.has(id) && !screenSharingMembers.has(id));
+    }
+    tile.classList.toggle("no-video", !!noVideo);
+  }
+
   // 收到某成员开始/停止共享屏幕的广播：标记其瓦片为 contain 显示
   function onGroupScreen(groupId, from) {
     from = Number(from);
@@ -3133,6 +3181,15 @@
     if (!meetingActive || meetingGroupId !== Number(groupId)) return;
     screenSharingMembers.delete(from);
     setTileScreenFlag(from, false);
+    updateTileVideoState(from); // 恢复视频显示后，可能需隐藏头像占位
+  }
+
+  // 收到某成员摄像头开关状态：标记其瓦片是否显示头像占位（关摄像头且未共享屏幕时显示）
+  function onGroupCam(groupId, from, on) {
+    from = Number(from);
+    if (!meetingActive || meetingGroupId !== Number(groupId)) return;
+    if (on) camOffMembers.delete(from); else camOffMembers.add(from);
+    updateTileVideoState(from);
   }
 
   function showGroupCallInvite(g, from, media, name) {
@@ -3168,6 +3225,11 @@
       btnMeetingCam.textContent = camOff ? "🚫" : "📹";
       btnMeetingCam.classList.toggle("off", camOff);
     }
+    // 广播摄像头开关状态：让其他成员把本端瓦片显示/隐藏头像占位
+    if (meetingActive && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "group-cam", groupId: meetingGroupId, on: !camOff }));
+    }
+    updateTileVideoState("self");
   }
 
   // 群会议屏幕共享（全网状）：对每一条成员连接的视频发送轨道 replaceTrack 为屏幕轨道。
