@@ -380,6 +380,17 @@ export async function getUserByToken(token: string): Promise<{ id: number; usern
   return { id: r.id, username: r.username, avatar: r.avatar };
 }
 
+// 按 id 取用户基本信息（用于会议房间名单展示），不存在返回 null
+export async function getUserById(id: number): Promise<{ id: number; username: string; avatar: string } | null> {
+  ensureDb();
+  if (!Number.isFinite(id) || id < 0) return null; // 访客为负 id，无需查库
+  const rows = await query<{ id: number; username: string; avatar: string }>(
+    `SELECT id, username, avatar FROM users WHERE id = $1`,
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
 // 更新当前用户头像（emoji 或图片链接）
 export async function updateUserAvatar(userId: number, avatar: string): Promise<boolean> {
   ensureDb();

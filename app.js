@@ -208,6 +208,14 @@
 
   // ---------- 登录态 ----------
   function showAuth() {
+    // 带着会议链接进入且未登录：展示访客入会页（输入昵称即可入会，无需注册）
+    if (pendingMeetingId) {
+      if ($("#appView")) $("#appView").hidden = true;
+      if ($("#authView")) $("#authView").hidden = true;
+      if (guestJoinView) guestJoinView.hidden = false;
+      if (guestNameInput) { guestNameInput.value = ""; guestNameInput.focus(); }
+      return;
+    }
     $("#appView").hidden = true;
     $("#authView").hidden = false;
     apps = [];
@@ -233,6 +241,10 @@
     loadGroups();
     // 兜底：登录后稍作延迟再补算一次离线未读，避免信令 welcome 晚到导致红点漏算
     setTimeout(() => { trySyncAll(); syncAllGroupUnread(); }, 1500);
+    // 通过会议链接登录：展示“点击加入”闸门（避免无手势弹摄像头权限被拦截）
+    if (pendingMeetingId) {
+      try { joinMeetingFromLink(pendingMeetingId); } catch (e) { console.error("[INIT] 链接入会闸门失败:", e); }
+    }
   }
   async function checkAuth() {
     try {
@@ -989,6 +1001,7 @@
       "topbar.search.ph": "搜索应用名称或网址…",
       "topbar.add": "＋ 添加应用",
       "topbar.chat": "💬 聊天",
+      "topbar.meeting": "📹 视频会议",
       "topbar.settings": "⚙ 设置",
       "topbar.logout": "登出",
       "app.modal.add": "添加应用",
@@ -1098,10 +1111,21 @@
       "meeting.left": "你已离开会议",
       "meeting.rejoin": "重新加入",
       "meeting.close": "关闭",
+      "meeting.join": "加入会议",
+      "meeting.joinHint": "点击下方「加入会议」开始音视频",
       "meeting.chat": "会议聊天",
       "meeting.chat.title": "会议聊天",
       "meeting.chat.placeholder": "说点什么…（Enter 发送）",
       "meeting.chat.send": "发送",
+      "meeting.roomTitle": "视频会议",
+      "meeting.copyLink": "🔗 复制邀请链接",
+      "meeting.linkCopied": "邀请链接已复制",
+      "meeting.inviteHint": "会议已创建，点击左上角「复制邀请链接」分享给他人",
+      "meeting.guest.title": "加入视频会议",
+      "meeting.guest.sub": "输入昵称即可加入，无需注册",
+      "meeting.guest.namePh": "你的昵称",
+      "meeting.guest.join": "加入会议",
+      "meeting.guest.toLogin": "我是成员，去登录",
       "meeting.chat.empty": "会议中发消息，只有本会议成员可见",
       "meeting.invite.join": "加入",
       "meeting.invite.ignore": "忽略",
@@ -1205,6 +1229,7 @@
       "topbar.search.ph": "Search apps by name or URL…",
       "topbar.add": "＋ Add App",
       "topbar.chat": "💬 Chat",
+      "topbar.meeting": "📹 Video Meeting",
       "topbar.settings": "⚙ Settings",
       "topbar.logout": "Log Out",
       "app.modal.add": "Add App",
@@ -1314,11 +1339,22 @@
       "meeting.left": "You left the meeting",
       "meeting.rejoin": "Rejoin",
       "meeting.close": "Close",
+      "meeting.join": "Join Meeting",
+      "meeting.joinHint": "Tap “Join Meeting” below to start audio/video",
       "meeting.chat": "Meeting chat",
       "meeting.chat.title": "Meeting Chat",
       "meeting.chat.placeholder": "Say something… (Enter to send)",
       "meeting.chat.send": "Send",
       "meeting.chat.empty": "Messages here are visible only to meeting participants",
+      "meeting.roomTitle": "Video Meeting",
+      "meeting.copyLink": "🔗 Copy Invite Link",
+      "meeting.linkCopied": "Invite link copied",
+      "meeting.inviteHint": "Meeting created. Tap “Copy Invite Link” at the top to share with others",
+      "meeting.guest.title": "Join Video Meeting",
+      "meeting.guest.sub": "Enter a nickname to join, no sign-up needed",
+      "meeting.guest.namePh": "Your nickname",
+      "meeting.guest.join": "Join Meeting",
+      "meeting.guest.toLogin": "I'm a member, log in",
       "meeting.invite.join": "Join",
       "meeting.invite.ignore": "Ignore",
       "meeting.invite.voice": "Voice meeting invite",
@@ -1629,6 +1665,13 @@
   const btnMeetingChatClose = $("#btnMeetingChatClose");
   const btnGroupCallJoin = $("#btnGroupCallJoin");
   const btnGroupCallIgnore = $("#btnGroupCallIgnore");
+  // 独立会议房间相关 DOM
+  const meetingStartBtn = $("#meetingStartBtn");           // 顶栏：创建会议
+  const btnMeetingCopyLink = $("#btnMeetingCopyLink");     // 会议内：复制邀请链接
+  const guestJoinView = $("#guestJoinView");               // 访客入会页（未登录）
+  const guestJoinForm = $("#guestJoinForm");
+  const guestNameInput = $("#guestName");
+  const guestToLogin = $("#guestToLogin");                 // 访客页：去登录
   const friendListEl = $("#friendList");
   const friendRequestsEl = $("#friendRequests");
   const friendEmptyEl = $("#friendEmpty");
@@ -2002,6 +2045,12 @@
   };
   if (btnGroupCallIgnore) btnGroupCallIgnore.onclick = hideGroupCallInvite;
 
+  // 独立会议房间：顶栏按钮创建会议 / 会议内复制邀请链接 / 访客入会
+  if (meetingStartBtn) meetingStartBtn.onclick = createMeeting;
+  if (btnMeetingCopyLink) btnMeetingCopyLink.onclick = copyMeetingLink;
+  if (guestJoinForm) guestJoinForm.addEventListener("submit", onGuestJoinSubmit);
+  if (guestToLogin) guestToLogin.onclick = (e) => { e.preventDefault(); showAuth(); };
+
   // 群聊事件
   groupCreateBtn.onclick = openGroupModal;
   groupCreateConfirm.onclick = submitCreateGroup;
@@ -2272,7 +2321,11 @@
     // WebSocket 地址以【浏览器当前页面协议】为准；token 通过 query 传给信令服务做鉴权。
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     const token = localStorage.getItem(TOKEN_KEY) || "";
-    const wsUrl = `${scheme}://${location.host}/ws?token=${encodeURIComponent(token)}`;
+    let wsUrl = `${scheme}://${location.host}/ws?token=${encodeURIComponent(token)}`;
+    // 访客通过会议链接 + 昵称入会：把 room/name 拼到 ws url，服务端据此分配临时身份
+    if (isGuest && guestRoomId) {
+      wsUrl += `&room=${encodeURIComponent(guestRoomId)}&name=${encodeURIComponent(guestName || "Guest")}`;
+    }
     const ws = new WebSocket(wsUrl);
     sigSocket = ws;
     return new Promise((resolve) => {
@@ -2282,6 +2335,7 @@
         setChatStatus("信令已连接", "ok");
         subscribePresence();
         flushPending();            // 断网恢复后把本地未同步的消息补推到服务端
+        flushPendingSignals();     // 冲刷自动入会时缓存的 room-* 信令（如 room-join）
         if (currentPeer) reCall(); // 重连后恢复进行中的对话
         trySyncAll();              // 离线期间漏掉的消息补算未读红点（myId 已就绪，好友列表可能尚未就绪）
         resolve();
@@ -2436,6 +2490,28 @@
       case "group-cam":
         // 某成员摄像头开关：标记其瓦片是否显示头像占位
         onGroupCam(m.groupId, m.from, m.on);
+        break;
+      // ---- 独立会议房间信令（与群会议对称，key 为 roomId）----
+      case "room-join":
+        onRoomJoin(m.from);
+        break;
+      case "room-leave":
+        onRoomLeave(m.from);
+        break;
+      case "room-roster":
+        onRoomRoster(m.roomId, m.members);
+        break;
+      case "room-screen":
+        onRoomScreen(m.from, true);
+        break;
+      case "room-screen-stop":
+        onRoomScreen(m.from, false);
+        break;
+      case "room-cam":
+        onRoomCam(m.from, m.on);
+        break;
+      case "room-chat":
+        onRoomChat(m);
         break;
       case "peer-left":
         if (currentPeer === m.from) {
@@ -2841,6 +2917,16 @@
   let camOffMembers = new Set();       // 已关闭摄像头的会议成员 uid 集合（不含自己，自己用 camOff 标记）
   // 待接听的群会议邀请（点击“加入”时用到）
   let pendingGroupCall = null;     // { groupId, from, media }
+  // 独立会议房间（通过会议链接创建/加入，不依赖群）
+  let meetingMode = "group";        // "group" | "room"
+  let meetingRoomId = null;         // 房间模式下的会议 id（来自链接）
+  let roomPeers = new Map();        // room 模式下 id -> { name, avatar }（用于瓦片/聊天昵称）
+  let pendingSignals = [];          // 信令未连通时缓存的发送（如自动入会时房间 join）
+  let pendingMeetingId = null;      // 启动/登录时从 URL ?meeting= 解析出的待加入会议 id
+  let isGuest = false;              // 访客（未登录，通过 ?meeting= 链接 + 昵称入会）
+  let guestName = "";               // 访客昵称
+  let guestRoomId = null;           // 访客 WS 鉴权用的 room（拼到 ws url）
+  let meetingJoinPending = false;   // 通过链接入会但尚在“点击加入”闸门（未取媒体）
 
   function startCall(to, name, mediaType) {
     to = Number(to);
@@ -3454,6 +3540,7 @@
       return;
     }
     meetingActive = true;
+    meetingMode = "group";
     meetingGroupId = groupId;
     meetingType = type;
     meetingMembers = new Set([myId]);
@@ -3492,6 +3579,7 @@
       return;
     }
     meetingActive = true;
+    meetingMode = "group";
     meetingGroupId = groupId;
     meetingType = type;
     // 重入会时不要沿用软离开时残留的 meetingMembers（可能含已退会成员），重建为只含自己
@@ -3572,6 +3660,7 @@
       meetingGroupName.textContent = name;
       delete meetingGroupName.dataset.i18nKey;
     }
+    if (btnMeetingCopyLink) btnMeetingCopyLink.hidden = (meetingMode !== "room");
     updateMeetingCount();
   }
 
@@ -3650,7 +3739,7 @@
       v.autoplay = true; v.playsInline = true;
       const nm = document.createElement("span");
       nm.className = "meeting-name";
-      const info = groupMemberName(meetingGroupId, id);
+      const info = meetingPeerInfo(id);
       nm.textContent = info.name || String(id);
       // 无视频（摄像头关闭且未共享屏幕）时居中显示头像占位
       const av = document.createElement("div");
@@ -3699,6 +3788,8 @@
   // 仅断开媒体与成员连接，但保留 meetingGroupId/meetingType 与“已离开”标记，
   // 面板转入“你已离开会议”状态，提供「重新加入」入口，实现离开后可重入会。
   function leaveGroupMeeting(soft) {
+    // 独立房间模式：复用 room-* 信令的离开逻辑（签名一致：soft=false 为硬关闭）
+    if (meetingMode === "room") { leaveMeetingRoom(soft); return; }
     const wasInMeeting = meetingActive || meetingLeft;
     if (!wasInMeeting) return;
     // 仍在会议中才广播离开，通知其它成员移除本端瓦片（软离开后再次彻底关闭则无需重复广播）
@@ -3751,6 +3842,15 @@
   function showMeetingLeft() {
     if (meetingPanel) { meetingPanel.hidden = false; meetingPanel.classList.add("left"); }
     if (meetingLeftBar) meetingLeftBar.hidden = false;
+    // 通过链接入会但尚在“点击加入”闸门：把提示语/按钮改为“加入”
+    const leftText = meetingLeftBar && meetingLeftBar.querySelector(".meeting-left-text");
+    if (meetingJoinPending) {
+      if (leftText) i18nText(leftText, "meeting.joinHint");
+      if (btnMeetingRejoin) i18nText(btnMeetingRejoin, "meeting.join");
+    } else {
+      if (leftText) i18nText(leftText, "meeting.left");
+      if (btnMeetingRejoin) i18nText(btnMeetingRejoin, "meeting.rejoin");
+    }
     // 复位控制按钮的静音/摄像头视觉状态
     if (btnMeetingMute) { btnMeetingMute.textContent = "🎤"; btnMeetingMute.classList.remove("off"); }
     if (btnMeetingCam) { btnMeetingCam.textContent = "📹"; btnMeetingCam.classList.remove("off"); }
@@ -3760,14 +3860,267 @@
     if (meetingLeftBar) meetingLeftBar.hidden = true;
   }
 
+  // ===================== 独立会议房间（通过链接创建/加入，不依赖群）=====================
+  // 与会者通过会议链接 ?meeting=<id> 加入；WebRTC 网格与群会议完全复用，
+  // 仅信令改用 room-* 类型、参与名单由服务端内存房间维护。
+
+  // 生成会议房间 id（去除易混淆字符）
+  function randomRoomId() {
+    const chars = "abcdefghijkmnpqrstuvwxyz23456789";
+    let s = "";
+    for (let i = 0; i < 10; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    return s;
+  }
+
+  // 会议邀请链接（用于复制/分享）
+  function meetingInviteLink(roomId) {
+    return location.origin + location.pathname + "?meeting=" + encodeURIComponent(roomId);
+  }
+
+  // 统一信令发送：未连通时缓存，连通后由 onopen 冲刷（解决自动入会时信令尚未就绪）
+  function emitSignal(obj) {
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      try { sigSocket.send(JSON.stringify(obj)); } catch { /* ignore */ }
+    } else {
+      pendingSignals.push(obj);
+    }
+  }
+  function flushPendingSignals() {
+    if (!sigSocket || sigSocket.readyState !== WebSocket.OPEN) return;
+    const arr = pendingSignals; pendingSignals = [];
+    for (const o of arr) { try { sigSocket.send(JSON.stringify(o)); } catch { /* ignore */ } }
+  }
+
+  // 加入（或创建）一个独立会议房间。roomId 为要加入的房间；为空则视为创建新会议。
+  async function joinMeeting(roomId, type) {
+    type = type === "audio" ? "audio" : "video";
+    if (callState !== "idle") { toast(t("call.endCallFirst")); return; }
+    if (meetingActive) {
+      if (String(meetingRoomId) === String(roomId)) return; // 已在同会议
+      toast(t("meeting.inOther")); return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast(t("meeting.noSupport")); return; }
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: type === "video" ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+      });
+    } catch (err) {
+      toast(t("call.noMediaAccess") + ((err && err.message) || err.name || err));
+      return;
+    }
+    meetingMode = "room";
+    meetingRoomId = String(roomId);
+    meetingActive = true;
+    meetingType = type;
+    meetingMembers = new Set([myId]);
+    meetingLeft = false;
+    meetingJoinPending = false;
+    roomPeers = new Map();
+    micMuted = false; camOff = false;
+    bindMeetingLocal();
+    showMeetingPanel(null);
+    if (meetingGroupName) i18nText(meetingGroupName, "meeting.roomTitle");
+    if (btnMeetingCopyLink) btnMeetingCopyLink.hidden = false;
+    if (meetingPanel) meetingPanel.dataset.room = meetingRoomId;
+    // 通知房间内其它成员并拉取权威名单
+    emitSignal({ type: "room-join", roomId: meetingRoomId });
+    toast(t("meeting.inviting"));
+    updateMeetingButtons();
+  }
+
+  // 创建会议：生成房间 id 后加入
+  async function createMeeting() {
+    if (callState !== "idle") { toast(t("call.endCallFirst")); return; }
+    if (meetingActive) { toast(t("meeting.alreadyIn")); return; }
+    const roomId = randomRoomId();
+    await joinMeeting(roomId, "video");
+    toast(t("meeting.inviteHint"));
+  }
+
+  // 软/硬离开独立会议房间（与 leaveGroupMeeting 对称，仅用 room-* 信令）
+  function leaveMeetingRoom(soft) {
+    const wasIn = meetingActive || meetingLeft;
+    if (!wasIn) return;
+    if (meetingActive && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      sigSocket.send(JSON.stringify({ type: "room-leave", roomId: meetingRoomId }));
+    }
+    for (const id of meetingMembers) { if (id !== myId) dropPeerConn(id); }
+    clearMeetingTiles();
+    spotlightUid = null; screenSharingMembers = new Set();
+    if (meetingPanel) meetingPanel.classList.remove("spotlight");
+    if (btnMeetingSpotExit) btnMeetingSpotExit.hidden = true;
+    if (meetingFilmstrip) meetingFilmstrip.hidden = true;
+    if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
+    if (screenStream) { screenStream.getTracks().forEach((t) => t.stop()); screenStream = null; }
+    isSharingScreen = false;
+    if (btnMeetingShare) btnMeetingShare.classList.remove("active");
+    camOffMembers = new Set();
+    if (meetingLocalVideo) meetingLocalVideo.srcObject = null;
+    meetingActive = false;
+    if (soft) {
+      meetingLeft = true; showMeetingLeft();
+    } else {
+      meetingLeft = false; meetingRoomId = null; meetingMembers = new Set();
+      meetingJoinPending = false;
+      hideMeetingLeft();
+      if (meetingPanel) meetingPanel.hidden = true;
+      if (btnMeetingCopyLink) btnMeetingCopyLink.hidden = true;
+      if (meetingPanel) delete meetingPanel.dataset.room;
+      closeMeetingChat();
+      if (meetingChatList) meetingChatList.innerHTML = "";
+    }
+    updateMeetingButtons();
+  }
+
+  // 重新加入之前软离开的独立会议
+  async function rejoinMeetingRoom() {
+    if (meetingActive || meetingRoomId == null) return;
+    // 不要提前清 meetingLeft：joinMeeting 成功后自会清；若取媒体失败则保留闸门可重试
+    await joinMeeting(meetingRoomId, meetingType || "video");
+  }
+
+  // 复制会议邀请链接（带降级方案，兼容非 https / 旧浏览器）
+  function copyMeetingLink() {
+    if (!meetingRoomId) { toast(t("meeting.alreadyIn")); return; }
+    const link = meetingInviteLink(meetingRoomId);
+    const done = () => toast(t("meeting.linkCopied"));
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(link).then(done, () => fallbackCopy(link, done));
+      } else {
+        fallbackCopy(link, done);
+      }
+    } catch (e) { fallbackCopy(link, done); }
+  }
+  function fallbackCopy(text, cb) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      document.execCommand("copy"); document.body.removeChild(ta);
+      if (cb) cb();
+    } catch (e) { toast(text); }
+  }
+
+  // 访客（未登录）提交昵称后入会：建立 room+name 的临时身份连接并直接加入
+  async function enterGuestMeeting(name) {
+    const rid = pendingMeetingId || meetingRoomId;
+    if (!rid) { toast(t("meeting.noSupport")); return; }
+    isGuest = true; guestName = name; guestRoomId = rid; meetingRoomId = rid;
+    // meetingPanel 位于 appView 内，需显示 appView 才能露出浮层；仪表盘在浮层之下、无登录数据故为空
+    if (guestJoinView) guestJoinView.hidden = true;
+    if ($("#authView")) $("#authView").hidden = true;
+    if ($("#appView")) $("#appView").hidden = false;
+    connectSignaling(); // 以 room+name 的临时身份连接（onopen 时冲刷缓存的 room-join）
+    try {
+      // 在“点击加入”手势内获取媒体并缓存 room-join（信令未连通时由 emitSignal 缓冲）
+      await joinMeeting(rid, "video");
+    } catch (err) {
+      console.error("[GUEST] 入会失败:", err);
+    }
+  }
+  function onGuestJoinSubmit(e) {
+    e.preventDefault();
+    const name = (guestNameInput && guestNameInput.value || "").trim();
+    if (!name) { if (guestNameInput) guestNameInput.focus(); return; }
+    enterGuestMeeting(name);
+  }
+
+  // 已登录用户通过会议链接进入：先展示“点击加入”闸门（避免无手势时弹摄像头权限被浏览器拦截）
+  function joinMeetingFromLink(roomId) {
+    roomId = String(roomId);
+    if (callState !== "idle") { toast(t("call.endCallFirst")); return; }
+    if (meetingActive) {
+      if (String(meetingRoomId) === roomId) return;
+      toast(t("meeting.inOther")); return;
+    }
+    meetingMode = "room";
+    meetingRoomId = roomId;
+    meetingType = meetingType || "video";
+    meetingActive = false;
+    meetingLeft = true;        // 复用软离开状态条作为“加入会议”闸门
+    meetingJoinPending = true;
+    roomPeers = new Map();
+    showMeetingPanel(null);
+    if (meetingGroupName) i18nText(meetingGroupName, "meeting.roomTitle");
+    if (btnMeetingCopyLink) btnMeetingCopyLink.hidden = false;
+    if (meetingPanel) meetingPanel.dataset.room = roomId;
+    showMeetingLeft();
+    toast(t("meeting.inviteHint"));
+  }
+
+  // 房间模式下：按 id 取昵称/头像（优先 roomPeers，其次回退 id）
+  function meetingPeerInfo(id) {
+    id = Number(id);
+    if (meetingMode === "room") {
+      const r = roomPeers.get(id);
+      if (r) return { name: r.name || String(id), avatar: r.avatar || "" };
+      return { name: String(id), avatar: "" };
+    }
+    return groupMemberName(meetingGroupId, id);
+  }
+
+  // ---- 房间信令处理（与群会议对称，仅 key 为 roomId）----
+  function onRoomJoin(from) {
+    from = Number(from);
+    if (!meetingActive || meetingRoomId == null) return;
+    teardownPeer(from);
+    connectMeetingPeer(from);
+    if (isSharingScreen && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      emitSignal({ type: "room-screen", roomId: meetingRoomId, to: from });
+    }
+    if (camOff && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      emitSignal({ type: "room-cam", roomId: meetingRoomId, on: false, to: from });
+    }
+  }
+  function onRoomLeave(from) {
+    from = Number(from);
+    if (!meetingActive) return;
+    meetingMembers.delete(from); roomPeers.delete(from);
+    screenSharingMembers.delete(from); camOffMembers.delete(from);
+    removeMeetingTile(from); dropPeerConn(from); updateMeetingCount();
+  }
+  function onRoomRoster(roomId, members) {
+    roomId = String(roomId);
+    if (!meetingActive || String(meetingRoomId) !== roomId) return;
+    roomPeers = new Map();
+    meetingMembers = new Set([myId]);
+    (members || []).forEach((m) => {
+      const id = Number(m.id);
+      roomPeers.set(id, { name: m.name || String(id), avatar: m.avatar || "" });
+      if (id === myId) return;
+      meetingMembers.add(id);
+      connectMeetingPeer(id);
+    });
+    updateMeetingCount();
+  }
+  function onRoomScreen(from, on) {
+    from = Number(from);
+    if (!meetingActive) return;
+    if (on) { screenSharingMembers.add(from); setTileScreenFlag(from, true); }
+    else { screenSharingMembers.delete(from); setTileScreenFlag(from, false); updateTileVideoState(from); }
+  }
+  function onRoomCam(from, on) {
+    from = Number(from);
+    if (!meetingActive) return;
+    if (on) camOffMembers.delete(from); else camOffMembers.add(from);
+    updateTileVideoState(from);
+  }
+  function onRoomChat(m) {
+    if (!meetingActive && !meetingLeft) return;
+    if (String(meetingRoomId) !== String(m.roomId)) return;
+    appendMeetingMessage(m.from, m.text, m.ts || Date.now(), Number(m.from) === Number(myId));
+  }
+
   // 重新加入之前软离开的会议（复用 group-join 广播，按同一群、同一类型重建全网状连接）
   async function rejoinGroupMeeting() {
+    // 独立房间模式：复用 room-* 信令的重入逻辑
+    if (meetingMode === "room") { await rejoinMeetingRoom(); return; }
     if (meetingActive) return;
     const gid = meetingGroupId;
     const type = meetingType || "video";
     if (gid == null) return;
-    meetingLeft = false;
-    hideMeetingLeft();
     await joinGroupMeeting(gid, type);
   }
 
@@ -3801,7 +4154,7 @@
     meta.className = "meeting-chat-meta";
     const nm = document.createElement("span");
     nm.className = "meeting-chat-name";
-    nm.textContent = mine ? t("meeting.me") : (groupMemberName(meetingGroupId, fromId).name || ("#" + fromId));
+    nm.textContent = mine ? t("meeting.me") : (meetingPeerInfo(fromId).name || ("#" + fromId));
     const tm = document.createElement("span");
     tm.className = "meeting-chat-time";
     tm.textContent = new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -3817,11 +4170,13 @@
     if (!meetingChatInput) return;
     const text = meetingChatInput.value.trim();
     if (!text) return;
-    if (!meetingActive || meetingGroupId == null) { toast(t("meeting.alreadyIn")); return; }
+    if (!meetingActive || (meetingMode === "group" && meetingGroupId == null)) { toast(t("meeting.alreadyIn")); return; }
     const id = crypto.randomUUID();
     const ts = Date.now();
     appendMeetingMessage(myId, text, ts, true);
-    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+    if (meetingMode === "room") {
+      emitSignal({ type: "room-chat", roomId: meetingRoomId, id, ts, text });
+    } else if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "meeting-chat", groupId: meetingGroupId, id, ts, text }));
     }
     meetingChatInput.value = "";
@@ -4960,6 +5315,12 @@
       localStorage.getItem(THEME_KEY) ||
       (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
     );
+    // 解析会议邀请链接 ?meeting=<id>：未登录→访客入会页；已登录→登录后展示加入闸门
+    try {
+      const params = new URLSearchParams(location.search);
+      const m = params.get("meeting");
+      if (m) pendingMeetingId = m;
+    } catch (e) {}
     checkAuth();
   }
   init();

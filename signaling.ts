@@ -12,7 +12,7 @@
 
 import type { Server } from "node:http";
 import { WebSocketServer, WebSocket } from "npm:ws@8.18.0";
-import { getUserByToken, isGroupMember, getGroupMemberIds } from "./store.ts";
+import { getUserByToken, isGroupMember, getGroupMemberIds, getUserById } from "./store.ts";
 import { saveMessage, saveGroupMessage } from "./chatstore.ts";
 
 // 根据请求推导前端应连接的 ws URL（与页面同源同端口，仅协议换 ws/wss）。
@@ -69,6 +69,14 @@ const onlineUsers = new Map<number, Set<WebSocket>>();
 const friendsByWs = new Map<WebSocket, Set<number>>();
 // 每个 ws 对应的已鉴权 userId
 const userIdByWs = new Map<WebSocket, number>();
+// userId -> 用户基本信息（用于会议房间名单回执），含访客
+const usersById = new Map<number, { id: number; username: string; avatar?: string }>();
+// 会议房间：roomId -> 参与会议的 userId 集合（内存态，不落库）
+const rooms = new Map<string, Set<number>>();
+// 访客 id 自增计数器（从 -1 递减，避免与真实正 id 冲突）
+let guestSeq = 0;
+// 每个 ws 当前加入的会议房间（用于断开时自动退会）
+const roomsByWs = new Map<WebSocket, string>();
 
 export function isOnline(userId: number): boolean {
   const s = onlineUsers.get(userId);
@@ -104,10 +112,28 @@ function removeOnline(ws: WebSocket): void {
   const s = onlineUsers.get(userId);
   if (s) {
     s.delete(ws);
-    if (s.size === 0) onlineUsers.delete(userId);
+    if (s.size === 0) {
+      onlineUsers.delete(userId);
+      usersById.delete(userId); // 该用户最后一个连接断开：移除基本信息
+    }
   }
   userIdByWs.delete(ws);
   friendsByWs.delete(ws);
+  // 断开时自动退出其所在的会议房间（若有），并通知其它成员
+  const roomId = roomsByWs.get(ws);
+  if (roomId) {
+    roomsByWs.delete(ws);
+    const set = rooms.get(roomId);
+    if (set) {
+      set.delete(userId);
+      if (set.size === 0) rooms.delete(roomId);
+      else {
+        for (const id of set) {
+          routeTo(id, { type: "room-leave", roomId, from: userId });
+        }
+      }
+    }
+  }
   notifyPresence(userId, false);
 }
 
@@ -125,6 +151,35 @@ function routeToEach(ids: number[], obj: unknown, exclude?: number): void {
     if (exclude != null && id === exclude) continue;
     routeTo(id, obj);
   }
+}
+
+// 向会议房间内除 exclude 外的成员广播
+function roomBroadcast(roomId: string, exclude: number, obj: unknown): void {
+  const set = rooms.get(roomId);
+  if (!set) return;
+  for (const id of set) {
+    if (id === exclude) continue;
+    routeTo(id, obj);
+  }
+}
+
+// 生成房间权威成员名单（含昵称/头像，供前端渲染瓦片与聊天昵称）
+async function roomRoster(roomId: string): Promise<Array<{ id: number; name: string; avatar: string }>> {
+  const set = rooms.get(roomId);
+  if (!set) return [];
+  const out: Array<{ id: number; name: string; avatar: string }> = [];
+  for (const id of set) {
+    const u = usersById.get(id);
+    if (u) { out.push({ id, name: u.username, avatar: u.avatar || "" }); continue; }
+    if (id > 0) {
+      try {
+        const db = await getUserById(id);
+        if (db) { out.push({ id, name: db.username, avatar: db.avatar || "" }); usersById.set(id, db); continue; }
+      } catch { /* ignore */ }
+    }
+    out.push({ id, name: String(id), avatar: "" });
+  }
+  return out;
 }
 
 // 向指定 userId 的全部连接实时推送一条消息（如好友请求 / 通过通知）。
@@ -164,12 +219,17 @@ export function attachSignaling(server: Server): void {
     s.isAlive = true;
     ws.on("pong", () => { s.isAlive = true; });
 
-    let user: { id: number; username: string } | null = null;
+    let user: { id: number; username: string; guest?: boolean } | null = null;
     const pending: Array<{ type?: string; [k: string]: unknown }> = [];
     let authed = false;
 
     const handleMessage = async (msg: { type?: string; [k: string]: unknown }) => {
       if (!msg || typeof msg.type !== "string") return;
+      // 访客身份仅允许会议房间相关消息与心跳，避免越权操作其它功能
+      if (user && user.guest) {
+        const allowed = ["room-join", "room-leave", "room-screen", "room-screen-stop", "room-cam", "room-chat", "ping"];
+        if (!allowed.includes(msg.type)) return;
+      }
       switch (msg.type) {
         // 订阅好友在线状态
         case "presence": {
@@ -361,6 +421,72 @@ export function attachSignaling(server: Server): void {
           return;
         }
 
+        // ---- 独立会议房间（通过会议链接创建/加入，不依赖群）----
+        // 房间参与名单保存在内存 rooms 中；下列消息均按 roomId 广播，不校验群成员。
+        case "room-join": {
+          const roomId = String(msg.roomId || "");
+          if (!roomId) return;
+          let set = rooms.get(roomId);
+          if (!set) { set = new Set(); rooms.set(roomId, set); }
+          set.add(user!.id);
+          roomsByWs.set(ws, roomId);
+          // 通知房间内其它成员有新加入者（让其主动建连）
+          for (const id of set) {
+            if (id === user!.id) continue;
+            routeTo(id, { type: "room-join", roomId, from: user!.id });
+          }
+          // 回执发起者权威名单（含名称，供前端渲染瓦片/聊天昵称）
+          const members = await roomRoster(roomId);
+          send(ws, { type: "room-roster", roomId, members });
+          return;
+        }
+        case "room-leave": {
+          const roomId = String(msg.roomId || "");
+          if (!roomId) return;
+          const set = rooms.get(roomId);
+          if (set) {
+            set.delete(user!.id);
+            if (set.size === 0) rooms.delete(roomId);
+            else for (const id of set) routeTo(id, { type: "room-leave", roomId, from: user!.id });
+          }
+          roomsByWs.delete(ws);
+          return;
+        }
+        case "room-screen": {
+          const roomId = String(msg.roomId || "");
+          if (!roomId) return;
+          const payload = { type: "room-screen", roomId, from: user!.id };
+          if (msg.to) routeTo(Number(msg.to), payload);
+          else roomBroadcast(roomId, user!.id, payload);
+          return;
+        }
+        case "room-screen-stop": {
+          const roomId = String(msg.roomId || "");
+          if (!roomId) return;
+          const payload = { type: "room-screen-stop", roomId, from: user!.id };
+          if (msg.to) routeTo(Number(msg.to), payload);
+          else roomBroadcast(roomId, user!.id, payload);
+          return;
+        }
+        case "room-cam": {
+          const roomId = String(msg.roomId || "");
+          if (!roomId) return;
+          const payload = { type: "room-cam", roomId, from: user!.id, on: !!msg.on };
+          if (msg.to) routeTo(Number(msg.to), payload);
+          else roomBroadcast(roomId, user!.id, payload);
+          return;
+        }
+        case "room-chat": {
+          const roomId = String(msg.roomId || "");
+          if (!roomId) return;
+          const id = String(msg.id || crypto.randomUUID());
+          const ts = Number(msg.ts) || Date.now();
+          const text = String(msg.text ?? "").slice(0, 4000);
+          if (!text) return;
+          roomBroadcast(roomId, user!.id, { type: "room-chat", roomId, from: user!.id, id, ts, text });
+          return;
+        }
+
         // 结束当前对话
         case "bye": {
           const to = Number(msg.to);
@@ -391,11 +517,19 @@ export function attachSignaling(server: Server): void {
     ws.on("close", () => removeOnline(ws));
     ws.on("error", () => removeOnline(ws));
 
-    // ---- 鉴权：从 query 取 token ----
+    // ---- 鉴权：从 query 取 token；或通过会议链接以访客身份入会（?room=&name=）----
     try {
       const u = new URL(req.url || "/ws", "http://localhost");
       const token = u.searchParams.get("token") || "";
-      if (token) user = await getUserByToken(token);
+      if (token) {
+        user = await getUserByToken(token);
+      } else {
+        const room = u.searchParams.get("room") || "";
+        if (room) {
+          const name = (u.searchParams.get("name") || "访客").slice(0, 24) || "访客";
+          user = { id: -(++guestSeq), username: name, guest: true };
+        }
+      }
     } catch {
       /* ignore */
     }
@@ -407,6 +541,8 @@ export function attachSignaling(server: Server): void {
 
     authed = true;
     addOnline(user.id, ws);
+    // 记录用户基本信息，供会议房间名单回执（含访客）
+    usersById.set(user.id, { id: user.id, username: user.username, avatar: (user as { avatar?: string }).avatar || "" });
     send(ws, { type: "welcome", userId: user.id, username: user.username });
     // 处理鉴权期间缓存的消息（如客户端 onopen 即发的 presence 订阅 / call）
     for (const m of pending.splice(0)) {

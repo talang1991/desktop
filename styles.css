@@ -1678,6 +1678,19 @@ body.resizing .iframe-frame { pointer-events: none !important; }
   transition: background 0.12s;
 }
 .meeting-leave:hover { background: #c92f2f; }
+.meeting-copy-link {
+  font-size: 13px;
+  color: #fff;
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s;
+}
+.meeting-copy-link:hover { background: rgba(255,255,255,0.22); }
+.meeting-copy-link[hidden] { display: none; }
 
 .meeting-grid {
   flex: 1 1 auto;

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=71" />
+  <link rel="stylesheet" href="styles.css?v=72" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -32,6 +32,20 @@
     </div>
   </div>
 
+  <!-- 访客通过会议链接入会（无需登录） -->
+  <div id="guestJoinView" class="auth-view" hidden>
+    <div class="auth-card">
+      <div class="auth-logo">📹</div>
+      <h1 data-i18n="meeting.guest.title">加入视频会议</h1>
+      <p class="auth-sub" id="guestSub" data-i18n="meeting.guest.sub">输入昵称即可加入，无需注册</p>
+      <form id="guestJoinForm" class="auth-form">
+        <input id="guestName" type="text" placeholder="你的昵称" data-i18n-ph="meeting.guest.namePh" maxlength="24" autocomplete="name" required />
+        <button class="btn primary block" type="submit" data-i18n="meeting.guest.join">加入会议</button>
+      </form>
+      <p class="auth-toggle"><a id="guestToLogin" href="#" data-i18n="meeting.guest.toLogin">我是成员，去登录</a></p>
+    </div>
+  </div>
+
   <!-- 主应用 -->
   <div id="appView" hidden>
     <header class="topbar">
@@ -54,6 +68,7 @@
         <span id="userName" class="user-name"></span>
         <button id="addBtn" class="btn primary" data-i18n="topbar.add">＋ 添加应用</button>
         <button id="chatBtn" class="btn ghost" title="P2P 聊天"><span data-i18n="topbar.chat">💬 聊天</span><span id="chatUnreadBadge" class="nav-badge" hidden></span></button>
+        <button id="meetingStartBtn" class="btn ghost" title="视频会议" data-i18n="topbar.meeting">📹 视频会议</button>
         <button id="settingsBtn" class="btn ghost" title="设置" data-i18n="topbar.settings">⚙ 设置</button>
       </div>
     </header>
@@ -364,6 +379,7 @@
     <div class="meeting-header">
       <span class="meeting-title" id="meetingGroupName" data-i18n="meeting.title">群会议</span>
       <span class="meeting-count" id="meetingCount">1 人</span>
+      <button id="btnMeetingCopyLink" class="meeting-copy-link" data-i18n="meeting.copyLink" data-i18n-title="meeting.copyLink" hidden>🔗 复制邀请链接</button>
       <button id="btnMeetingSpotExit" class="meeting-spot-exit" data-i18n-title="meeting.exitSpotlight" hidden>退出聚焦</button>
       <button id="btnMeetingFull" class="meeting-full" data-i18n-title="meeting.full">⛶</button>
       <button id="btnMeetingLeave" class="meeting-leave" data-i18n="meeting.leave" data-i18n-title="meeting.leave">离开会议</button>
@@ -446,6 +462,6 @@
     <input id="importFile" type="file" accept="application/json" hidden />
   </div>
 
-  <script src="app.js?v=103"></script>
+  <script src="app.js?v=105"></script>
 </body>
 </html>
