@@ -3058,8 +3058,11 @@
     };
     // 接收远端音视频轨道
     p.pc.ontrack = (e) => {
-      const stream = e.streams && e.streams[0];
-      if (!stream) return;
+      let stream = e.streams && e.streams[0];
+      if (!stream) {
+        // 某些浏览器 addTrack 未关联 stream 时 e.streams 为空，用事件轨道组装本地流，避免丢流黑屏
+        try { stream = new MediaStream([e.track]); } catch { return; }
+      }
       // 始终缓存，供会议加入后补渲染（避免“先收到流、后加入会议”导致画面缺失）
       peerStreams.set(id, stream);
       // 群会议成员：直接渲染到会议网格（每个成员一条独立 pc）
@@ -3632,13 +3635,10 @@
       if (localStream) {
         addLocalMediaTracks(p);
       } else {
-        // 无本地媒体（无摄像头 / insecure context）：仍发起一次“空协商”，
-        // 确保 RTCPeerConnection 建立，对端媒体可正常下行（对方能看到我们头像，我们能看到对方画面）。
-        try {
-          const offer = await p.pc.createOffer();
-          await p.pc.setLocalDescription(offer);
-          sendSignal(memberId, { sdp: p.pc.localDescription });
-        } catch (e) { console.error("[MEETING] 空协商失败", memberId, e); }
+        // 无本地媒体（无摄像头 / insecure context）：【不要】发“空协商（空 offer）”。
+        // 空 offer 不含任何媒体 m-line，会使本次协商中对方即便有摄像头也无法下行视频（最终黑屏）。
+        // 这里仅建立 RTCPeerConnection，等待有媒体的一方发起 offer；对方 answer 后视频正常下行。
+        // （若双方都无媒体则不建立连接，但头像占位瓦片已显示，符合预期。）
       }
       maybeApplyScreenShare(p); // 共享中：新连接也立即发送屏幕轨道
       // 若该成员此前已发来流（先于本端加入会议到达），补渲染到网格
