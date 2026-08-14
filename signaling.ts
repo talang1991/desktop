@@ -227,7 +227,9 @@ export function attachSignaling(server: Server): void {
       if (!msg || typeof msg.type !== "string") return;
       // 访客身份仅允许会议房间相关消息与心跳，避免越权操作其它功能
       if (user && user.guest) {
-        const allowed = ["room-join", "room-leave", "room-screen", "room-screen-stop", "room-cam", "room-chat", "ping"];
+        // 访客身份仅允许会议房间相关消息与心跳；signal 为 WebRTC 媒体协商（offer/answer/ICE），
+        // 必须放行，否则通过链接入会的访客无法与任何人建立音视频连接（视频全黑）。
+        const allowed = ["room-join", "room-leave", "room-screen", "room-screen-stop", "room-cam", "room-chat", "ping", "signal"];
         if (!allowed.includes(msg.type)) return;
       }
       switch (msg.type) {
