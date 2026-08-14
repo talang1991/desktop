@@ -2493,7 +2493,7 @@
         break;
       // ---- 独立会议房间信令（与群会议对称，key 为 roomId）----
       case "room-join":
-        onRoomJoin(m.from);
+        onRoomJoin(m.from, m.name);
         break;
       case "room-leave":
         onRoomLeave(m.from);
@@ -3598,7 +3598,13 @@
   }
 
   // 与某一群成员建立（或复用）一条带媒体的 pc；全网状核心：每人各持一条到其它成员的 pc
-  function connectMeetingPeer(memberId) {
+  // 立即为会议成员创建头像占位瓦片（远端流到达前就可见“已加入”），流到达后 ontrack 补全视频
+  function ensureMeetingTile(id) {
+    if (!meetingActive) return;
+    attachMeetingStream(id, null);
+  }
+
+  async function connectMeetingPeer(memberId) {
     memberId = Number(memberId);
     if (memberId === myId || !meetingActive) return;
     const p = ensurePeerConn(memberId);
@@ -3610,6 +3616,7 @@
       // 已存在的连接也要登记为会议成员（如会议前已存在 1:1 pc，早期返回没加过），
       // 否则该成员流到达时因不在 meetingMembers 而不渲染，造成瓦片缺失。
       meetingMembers.add(memberId);
+      if (meetingActive) ensureMeetingTile(memberId);
       if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
       return;
     }
@@ -3619,10 +3626,21 @@
       p.pc._peerId = memberId;
       setupPc(p);
       p.mediaAdded = false;
-      // 群会议：立即携带本端媒体（mesh 每人各自带媒体，无需等对方先发 offer），触发协商
-      if (localStream) addLocalMediaTracks(p);
-      maybeApplyScreenShare(p); // 共享中：新连接也立即发送屏幕轨道
       meetingMembers.add(memberId);
+      if (meetingActive) ensureMeetingTile(memberId); // 立即出现头像占位，确保“已加入”可见
+      // 群会议：立即携带本端媒体（mesh 每人各自带媒体，无需等对方先发 offer），触发协商
+      if (localStream) {
+        addLocalMediaTracks(p);
+      } else {
+        // 无本地媒体（无摄像头 / insecure context）：仍发起一次“空协商”，
+        // 确保 RTCPeerConnection 建立，对端媒体可正常下行（对方能看到我们头像，我们能看到对方画面）。
+        try {
+          const offer = await p.pc.createOffer();
+          await p.pc.setLocalDescription(offer);
+          sendSignal(memberId, { sdp: p.pc.localDescription });
+        } catch (e) { console.error("[MEETING] 空协商失败", memberId, e); }
+      }
+      maybeApplyScreenShare(p); // 共享中：新连接也立即发送屏幕轨道
       // 若该成员此前已发来流（先于本端加入会议到达），补渲染到网格
       if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
     } catch (e) {
@@ -3899,15 +3917,20 @@
       if (String(meetingRoomId) === String(roomId)) return; // 已在同会议
       toast(t("meeting.inOther")); return;
     }
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast(t("meeting.noSupport")); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast(t("meeting.noSupport")); }
+    // 获取媒体失败（无摄像头 / insecure context / 拒绝授权）不阻断入会：
+    // 仍建立连接并看到他人，他人看到自己的头像占位。否则新人因拿不到媒体而“根本没加入会议”。
+    let gotMedia = false;
     try {
       localStream = await navigator.mediaDevices.getUserMedia({
         audio: true,
         video: type === "video" ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
       });
+      gotMedia = true;
     } catch (err) {
+      localStream = null;
+      console.warn("[MEETING] 获取媒体失败，仅以无媒体方式入会:", (err && err.message) || err);
       toast(t("call.noMediaAccess") + ((err && err.message) || err.name || err));
-      return;
     }
     meetingMode = "room";
     meetingRoomId = String(roomId);
@@ -4062,9 +4085,11 @@
   }
 
   // ---- 房间信令处理（与群会议对称，仅 key 为 roomId）----
-  function onRoomJoin(from) {
+  function onRoomJoin(from, name) {
     from = Number(from);
     if (!meetingActive || meetingRoomId == null) return;
+    // 记录新加入者昵称（服务端 room-join 已携带），供瓦片/聊天显示
+    if (name) roomPeers.set(from, { name, avatar: "" });
     teardownPeer(from);
     connectMeetingPeer(from);
     if (isSharingScreen && sigSocket && sigSocket.readyState === WebSocket.OPEN) {

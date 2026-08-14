@@ -433,7 +433,7 @@ export function attachSignaling(server: Server): void {
           // 通知房间内其它成员有新加入者（让其主动建连）
           for (const id of set) {
             if (id === user!.id) continue;
-            routeTo(id, { type: "room-join", roomId, from: user!.id });
+            routeTo(id, { type: "room-join", roomId, from: user!.id, name: user!.username });
           }
           // 回执发起者权威名单（含名称，供前端渲染瓦片/聊天昵称）
           const members = await roomRoster(roomId);
