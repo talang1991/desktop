@@ -125,9 +125,13 @@
     const serverIds = new Set(serverLinks.map((l) => Number(l.id)));
     const local = await LinkDB.allByUser(currentUserId);
     const pending = local.filter((l) => l.synced === false); // 离线新建 / 待更新 / 待删除
+    // 用户已发起删除（墓碑）的链接：服务端可能暂时还残留，重拉时不要再把它们塞回界面
+    const tombstoneIds = new Set(pending.filter((p) => p._tombstone).map((p) => Number(p.id)));
     // 整库重写：先清当前用户缓存，再写入服务端权威数据
     await LinkDB.clearByUser(currentUserId);
-    const serverRecs = serverLinks.map((l) => ({ ...l, userId: currentUserId, synced: true }));
+    const serverRecs = serverLinks
+      .filter((l) => !tombstoneIds.has(Number(l.id)))
+      .map((l) => ({ ...l, userId: currentUserId, synced: true }));
     await LinkDB.putMany(serverRecs);
     // 把离线产生的待同步记录重新并入（不会被服务端数据覆盖）
     for (const p of pending) {
@@ -366,7 +370,8 @@
 
   // ---------- Render ----------
   function renderCategories() {
-    const cats = ["全部", ...Array.from(new Set(apps.map((a) => a.category || "未分类").filter(Boolean)))];
+    const visibleApps = apps.filter((a) => !(a && a._tombstone));
+    const cats = ["全部", ...Array.from(new Set(visibleApps.map((a) => a.category || "未分类").filter(Boolean)))];
     filtersEl.innerHTML = "";
     cats.forEach((cat) => {
       const b = document.createElement("button");
@@ -377,7 +382,7 @@
     });
 
     categoryList.innerHTML = "";
-    Array.from(new Set(apps.map((a) => a.category).filter(Boolean))).forEach((c) => {
+    Array.from(new Set(visibleApps.map((a) => a.category).filter(Boolean))).forEach((c) => {
       const o = document.createElement("option");
       o.value = c;
       categoryList.appendChild(o);
@@ -396,6 +401,7 @@
   function getFilteredApps() {
     const term = searchTerm.trim().toLowerCase();
     return apps.filter((a) => {
+      if (a && a._tombstone) return false; // 待删除的墓碑记录不渲染（删除失败也会保留，避免脏数据反复出现）
       const matchCat = activeCategory === "全部" || (a.category || "未分类") === activeCategory;
       // 坏数据也可能存在于被搜索项中，做空值兜底
       const hayName = (a && a.name != null) ? String(a.name) : "";
@@ -514,12 +520,10 @@
       e.stopPropagation();
       if (!confirm("永久删除该无效条目？")) return;
       const id = a.id;
+      // deleteLinkLocal 已负责：本地立即移除 + 服务端删除（失败留墓碑后台重试）。
+      // 不要在此额外 DELETE 或 syncLinks，否则会把服务端残留的脏数据立刻拉回显示。
       Promise.resolve(deleteLinkLocal(id))
-        .then(async () => {
-          try { await api("/api/links/" + id, { method: "DELETE" }); } catch (e) {}
-          await syncLinks();
-          toast("已清理 1 条无效条目");
-        })
+        .then(() => toast("已清理无效条目"))
         .catch(() => toast("清理失败"));
     });
     // 阻止冒泡以免触发长按检测
