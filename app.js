@@ -1019,6 +1019,85 @@
     reader.readAsText(file);
   }
 
+  // ---------- 导入 Chrome 书签（NETSCAPE-Bookmark-file-1 HTML）----------
+  // 把 <DT><A HREF=...>标题</A> 解析为链接对象；文件夹层级（<H3>）作为分类。
+  function parseChromeBookmarks(text) {
+    const links = [];
+    const folderStack = [];
+    let dlDepth = 0;
+    const decodeEnt = (s) =>
+      s
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&apos;/g, "'");
+
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      // 文件夹开始：<DT><H3 ...>名称</H3>
+      const h3 = line.match(/<H3\b[^>]*>([\s\S]*?)<\/H3>/i);
+      if (h3) {
+        folderStack.push(decodeEnt(h3[1].trim()));
+        continue;
+      }
+      // 进入/退出文件夹容器
+      if (/<DL\b/i.test(line)) dlDepth++;
+      if (/<\/DL>/i.test(line)) {
+        dlDepth--;
+        if (folderStack.length) folderStack.pop();
+        continue;
+      }
+      // 书签条目：<A HREF="..." ...>标题</A>
+      const a = line.match(/<A\b([^>]*)>([\s\S]*?)<\/A>/i);
+      if (a) {
+        const attrs = a[1];
+        const hrefM = attrs.match(/HREF\s*=\s*["']([^"']*)["']/i);
+        if (!hrefM) continue;
+        const url = decodeEnt(hrefM[1].trim());
+        const title = decodeEnt(a[2].replace(/<[^>]+>/g, "").trim());
+        if (!/^https?:\/\//i.test(url)) continue; // 跳过分隔线/占位等非 http 项
+        const category = folderStack.length ? folderStack.join(" / ") : "未分类";
+        links.push({
+          name: title || url,
+          url,
+          category,
+          emoji: "",
+          color: "#4f6ef7",
+          openNew: true,
+          openMode: "new",
+        });
+      }
+    }
+    return links;
+  }
+
+  async function importChromeBookmarks(file) {
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const text = String(reader.result || "");
+        const isChrome =
+          /NETSCAPE-Bookmark-file-1/i.test(text) ||
+          (/<A\b/i.test(text) && /HREF\s*=/i.test(text) && /<\/DL>/i.test(text));
+        if (!isChrome) throw new Error("不是 Chrome 书签文件（应为 .html 导出）");
+        const links = parseChromeBookmarks(text);
+        if (!links.length) throw new Error("未解析到任何书签链接");
+        const data = await api("/api/import", {
+          method: "POST",
+          body: JSON.stringify({ links }),
+        });
+        await syncLinks();
+        toast(`已导入 ${data.created} 条，跳过重复 ${data.skipped} 条`);
+      } catch (e) {
+        toast("导入失败：" + (e.message || "Chrome 书签文件格式不正确"));
+      }
+    };
+    reader.readAsText(file);
+  }
+
   // ---------- Toast ----------
   let toastTimer = null;
   function toast(msg, onClick) {
@@ -1066,6 +1145,7 @@
       "settings.title": "设置",
       "settings.backup": "数据备份",
       "settings.import": "📥 从 JSON 文件导入",
+      "settings.importChrome": "🌐 从 Chrome 书签导入",
       "settings.export": "📤 导出为 JSON 备份",
       "settings.backupHint": "导入会按网址去重合并；导出为当前账号的全部应用备份。",
       "settings.language": "语言",
@@ -1312,6 +1392,7 @@
       "settings.title": "Settings",
       "settings.backup": "Data Backup",
       "settings.import": "📥 Import from JSON",
+      "settings.importChrome": "🌐 Import from Chrome bookmarks",
       "settings.export": "📤 Export as JSON backup",
       "settings.backupHint": "Import merges by URL (dedup); export backs up all your apps.",
       "settings.language": "Language",
@@ -1678,6 +1759,8 @@
   $("#exportBtn").onclick = exportJson;
   $("#importBtn").onclick = () => $("#importFile").click();
   $("#importFile").onchange = (e) => { if (e.target.files[0]) importJson(e.target.files[0]); e.target.value = ""; };
+  $("#importChromeBtn").onclick = () => $("#importChromeFile").click();
+  $("#importChromeFile").onchange = (e) => { if (e.target.files[0]) importChromeBookmarks(e.target.files[0]); e.target.value = ""; };
   $("#themeToggleBtn").onclick = () => {
     const cur = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
     applyTheme(cur === "dark" ? "light" : "dark");

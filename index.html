@@ -448,8 +448,9 @@
         <div class="settings-section">
           <div class="settings-section-title" data-i18n="settings.backup">数据备份</div>
           <button id="importBtn" class="btn ghost block" title="从 JSON 文件导入" data-i18n="settings.import">📥 从 JSON 文件导入</button>
+          <button id="importChromeBtn" class="btn ghost block" title="从 Chrome 书签 HTML 导入" data-i18n="settings.importChrome">🌐 从 Chrome 书签导入</button>
           <button id="exportBtn" class="btn ghost block" title="导出为 JSON 备份" data-i18n="settings.export">📤 导出为 JSON 备份</button>
-          <p class="settings-hint" data-i18n="settings.backupHint">导入会按网址去重合并；导出为当前账号的全部应用备份。</p>
+          <p class="settings-hint" data-i18n="settings.backupHint">导入会按网址去重合并；Chrome 书签的文件夹层级会作为分类。导出为当前账号的全部应用备份。</p>
         </div>
         <div class="settings-section">
           <div class="settings-section-title" data-i18n="settings.language">语言</div>
@@ -478,9 +479,10 @@
         </div>
       </div>
     </div>
-    <input id="importFile" type="file" accept="application/json" hidden />
+    <input id="importFile" type="file" accept="application/json,.json" hidden />
+    <input id="importChromeFile" type="file" accept=".html,text/html" hidden />
   </div>
 
-  <script src="app.js?v=114"></script>
+  <script src="app.js?v=115"></script>
 </body>
 </html>
