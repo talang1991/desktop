@@ -1,7 +1,8 @@
 // api.ts —— 认证与链接 CRUD 路由处理（基于本地可靠存储 store.ts）
 import {
   registerUser, findUserByUsername, verifyPassword, createSession,
-  getUserByToken, deleteSession, listLinks, createLink, updateLink, deleteLink,
+  getUserByToken, deleteSession, listSessions, deleteOtherSessions, revokeSession, touchSession,
+  listLinks, createLink, updateLink, deleteLink,
   bulkImportLinks,
   sendFriendRequest, listFriends, listFriendRequests, acceptFriendRequest, getFriendRequestRequester, removeFriend,
   updateUserAvatar, updateUserUsername, areFriends,
@@ -9,6 +10,13 @@ import {
   renameGroup, getGroupMemberIds,
   DbUnavailableError,
 } from "./store.ts";
+
+// 归一化设备类型：仅允许 mobile/tablet/desktop，其它一律 desktop
+function normalizeDevice(d: unknown): string {
+  const v = String(d || "").toLowerCase();
+  if (v === "mobile" || v === "tablet" || v === "desktop") return v;
+  return "desktop";
+}
 import { getWsPublicUrl, getIceServers, isOnline, pushToUser } from "./signaling.ts";
 import { saveMessage, getMessages, saveGroupMessage, getGroupMessages, chatKvReady } from "./chatstore.ts";
 
@@ -58,7 +66,7 @@ export async function handleApi(req: Request): Promise<Response> {
   try {
     // ---- 注册 ----
     if (path === "/api/register" && method === "POST") {
-      const { username, password, avatar } = await req.json();
+      const { username, password, avatar, device } = await req.json();
       let user: User;
       try {
         user = await registerUser(String(username), String(password), avatar ? String(avatar) : "");
@@ -67,18 +75,18 @@ export async function handleApi(req: Request): Promise<Response> {
         const status = /已存在/.test(msg) ? 409 : 400;
         return json({ error: msg }, status);
       }
-      const token = await createSession(user.id);
+      const token = await createSession(user.id, normalizeDevice(device), String(req.headers.get("user-agent") || ""));
       return json({ user: { id: user.id, username: user.username, avatar: user.avatar }, token }, 201);
     }
 
     // ---- 登录 ----
     if (path === "/api/login" && method === "POST") {
-      const { username, password } = await req.json();
+      const { username, password, device } = await req.json();
       const u = await findUserByUsername(String(username));
       if (!u) return json({ error: "用户名或密码错误" }, 401);
       const ok = await verifyPassword(String(password), u.password_hash);
       if (!ok) return json({ error: "用户名或密码错误" }, 401);
-      const token = await createSession(u.id);
+      const token = await createSession(u.id, normalizeDevice(device), String(req.headers.get("user-agent") || ""));
       return json({ user: { id: u.id, username: u.username, avatar: u.avatar }, token });
     }
 
@@ -91,7 +99,9 @@ export async function handleApi(req: Request): Promise<Response> {
 
     // ---- 当前用户 ----
     if (path === "/api/me" && method === "GET") {
+      const token = getBearer(req);
       const user = await requireUser(req);
+      if (token) await touchSession(token);
       return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar } : null });
     }
 
@@ -112,6 +122,46 @@ export async function handleApi(req: Request): Promise<Response> {
         username = r.username ?? username;
       }
       return json({ user: { id: user.id, username, avatar } });
+    }
+
+    // ---- 登录设备管理：列出当前账号所有会话（多端登录）----
+    if (path === "/api/sessions" && method === "GET") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const token = getBearer(req);
+      const rows = await listSessions(user.id);
+      // 标记当前会话，并尽量从 user_agent 推断更友好的设备标签
+      const sessions = rows.map((s) => ({
+        token: s.token,
+        device: s.device,
+        ua: s.user_agent,
+        created_at: s.created_at,
+        last_active: s.last_active,
+        current: s.token === token,
+      }));
+      return json({ sessions });
+    }
+
+    // ---- 登录设备管理：撤销指定会话（踢出某台设备）----
+    if (path === "/api/sessions/revoke" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const b = await req.json().catch(() => ({}));
+      const tk = String(b?.token || "");
+      if (!tk) return json({ error: "缺少会话 token" }, 400);
+      const ok = await revokeSession(tk, user.id);
+      if (!ok) return json({ error: "会话不存在或无权操作" }, 400);
+      return json({ ok: true });
+    }
+
+    // ---- 登录设备管理：登出除当前设备外的所有其他会话 ----
+    if (path === "/api/sessions/logout-others" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const token = getBearer(req);
+      if (!token) return json({ error: "未登录" }, 401);
+      const n = await deleteOtherSessions(user.id, token);
+      return json({ ok: true, revoked: n });
     }
 
     // ---- 信令服务地址 + ICE 配置（P2P 聊天用）----

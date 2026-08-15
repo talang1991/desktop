@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=73" />
+  <link rel="stylesheet" href="styles.css?v=74" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -468,6 +468,12 @@
           <p class="settings-hint" data-i18n="settings.cacheHint">仅清除本机缓存（聊天记录与界面布局），保留登录状态、语言与主题。</p>
         </div>
         <div class="settings-section">
+          <div class="settings-section-title" data-i18n="settings.devices">登录设备</div>
+          <div id="sessionsList" class="sessions-list"></div>
+          <button id="logoutOthersBtn" class="btn ghost block" data-i18n="settings.logoutOthers">登出其他设备</button>
+          <p class="settings-hint" data-i18n="settings.devicesHint">这里列出当前账号登录过的所有设备，可单独登出某台或一键登出其他设备。</p>
+        </div>
+        <div class="settings-section">
           <button id="logoutBtn2" class="btn ghost block danger" data-i18n="topbar.logout">登出</button>
         </div>
       </div>
@@ -475,6 +481,6 @@
     <input id="importFile" type="file" accept="application/json" hidden />
   </div>
 
-  <script src="app.js?v=111"></script>
+  <script src="app.js?v=112"></script>
 </body>
 </html>

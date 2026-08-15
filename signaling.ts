@@ -71,8 +71,26 @@ const friendsByWs = new Map<WebSocket, Set<number>>();
 const userIdByWs = new Map<WebSocket, number>();
 // userId -> 用户基本信息（用于会议房间名单回执），含访客
 const usersById = new Map<number, { id: number; username: string; avatar?: string }>();
-// 会议房间：roomId -> 参与会议的 userId 集合（内存态，不落库）
-const rooms = new Map<string, Set<number>>();
+// 会议房间：roomId -> (userId -> 连接计数)。按连接计数而非按 userId 去重，
+// 以支持同一账号在多台设备（手机/电脑）同时入会：一台设备离开不会把同账号的另一台设备“踢出”。
+const rooms = new Map<string, Map<number, number>>();
+
+// 房间增加一名参与者（按 userId 计数，支持同账号多连接）
+function roomAdd(roomId: string, userId: number): void {
+  let m = rooms.get(roomId);
+  if (!m) { m = new Map(); rooms.set(roomId, m); }
+  m.set(userId, (m.get(userId) || 0) + 1);
+}
+// 房间移除一名参与者；返回该 userId 是否仍在房间（计数 > 0 说明同账号还有其它设备）
+function roomRemove(roomId: string, userId: number): boolean {
+  const m = rooms.get(roomId);
+  if (!m) return false;
+  const c = (m.get(userId) || 0) - 1;
+  if (c <= 0) m.delete(userId);
+  else m.set(userId, c);
+  if (m.size === 0) rooms.delete(roomId);
+  return m.has(userId);
+}
 // 访客 id 自增计数器（从 -1 递减，避免与真实正 id 冲突）
 let guestSeq = 0;
 // 每个 ws 当前加入的会议房间（用于断开时自动退会）
@@ -119,16 +137,17 @@ function removeOnline(ws: WebSocket): void {
   }
   userIdByWs.delete(ws);
   friendsByWs.delete(ws);
-  // 断开时自动退出其所在的会议房间（若有），并通知其它成员
+  // 断开时自动退出其所在的会议房间（若有），并通知其它成员。
+  // 按连接计数移除：同账号其它设备仍在房间时，不误发 room-leave（避免把同账号其它设备“踢出”）。
   const roomId = roomsByWs.get(ws);
   if (roomId) {
     roomsByWs.delete(ws);
-    const set = rooms.get(roomId);
-    if (set) {
-      set.delete(userId);
-      if (set.size === 0) rooms.delete(roomId);
-      else {
-        for (const id of set) {
+    const m = rooms.get(roomId);
+    if (m) {
+      const stillIn = roomRemove(roomId, userId);
+      if (!stillIn) {
+        for (const id of m.keys()) {
+          if (id === userId) continue;
           routeTo(id, { type: "room-leave", roomId, from: userId });
         }
       }
@@ -153,11 +172,11 @@ function routeToEach(ids: number[], obj: unknown, exclude?: number): void {
   }
 }
 
-// 向会议房间内除 exclude 外的成员广播
+// 向会议房间内除 exclude(userId) 外的成员广播
 function roomBroadcast(roomId: string, exclude: number, obj: unknown): void {
-  const set = rooms.get(roomId);
-  if (!set) return;
-  for (const id of set) {
+  const m = rooms.get(roomId);
+  if (!m) return;
+  for (const id of m.keys()) {
     if (id === exclude) continue;
     routeTo(id, obj);
   }
@@ -165,10 +184,10 @@ function roomBroadcast(roomId: string, exclude: number, obj: unknown): void {
 
 // 生成房间权威成员名单（含昵称/头像，供前端渲染瓦片与聊天昵称）
 async function roomRoster(roomId: string): Promise<Array<{ id: number; name: string; avatar: string }>> {
-  const set = rooms.get(roomId);
-  if (!set) return [];
+  const m = rooms.get(roomId);
+  if (!m) return [];
   const out: Array<{ id: number; name: string; avatar: string }> = [];
-  for (const id of set) {
+  for (const id of m.keys()) {
     const u = usersById.get(id);
     if (u) { out.push({ id, name: u.username, avatar: u.avatar || "" }); continue; }
     if (id > 0) {
@@ -428,12 +447,11 @@ export function attachSignaling(server: Server): void {
         case "room-join": {
           const roomId = String(msg.roomId || "");
           if (!roomId) return;
-          let set = rooms.get(roomId);
-          if (!set) { set = new Set(); rooms.set(roomId, set); }
-          set.add(user!.id);
+          roomAdd(roomId, user!.id);
           roomsByWs.set(ws, roomId);
-          // 通知房间内其它成员有新加入者（让其主动建连）
-          for (const id of set) {
+          const m = rooms.get(roomId)!;
+          // 通知房间内其它「账号」有新加入者（让其主动建连）；同账号其它设备本就在房间内，无需重复通知
+          for (const id of m.keys()) {
             if (id === user!.id) continue;
             routeTo(id, { type: "room-join", roomId, from: user!.id, name: user!.username });
           }
@@ -445,13 +463,18 @@ export function attachSignaling(server: Server): void {
         case "room-leave": {
           const roomId = String(msg.roomId || "");
           if (!roomId) return;
-          const set = rooms.get(roomId);
-          if (set) {
-            set.delete(user!.id);
-            if (set.size === 0) rooms.delete(roomId);
-            else for (const id of set) routeTo(id, { type: "room-leave", roomId, from: user!.id });
-          }
           roomsByWs.delete(ws);
+          const m = rooms.get(roomId);
+          if (m) {
+            const stillIn = roomRemove(roomId, user!.id);
+            // 仅当该账号已完全离开房间才通知其它成员（否则同账号还有其它设备，不应误发离开）
+            if (!stillIn) {
+              for (const id of m.keys()) {
+                if (id === user!.id) continue;
+                routeTo(id, { type: "room-leave", roomId, from: user!.id });
+              }
+            }
+          }
           return;
         }
         case "room-screen": {

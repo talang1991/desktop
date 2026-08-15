@@ -499,6 +499,25 @@ html, body {
 }
 .settings-panel .btn.block { display: block; width: 100%; margin-bottom: 10px; text-align: left; }
 .settings-hint { font-size: 12px; color: var(--text-2); line-height: 1.5; margin: 6px 0 0; }
+.sessions-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.session-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border: 1px solid var(--border, #e3e6ee);
+  border-radius: 10px; background: var(--surface, #fff);
+}
+.session-row.current { border-color: var(--accent, #4f6ef7); background: color-mix(in srgb, var(--accent, #4f6ef7) 8%, var(--surface, #fff)); }
+.session-row.muted { justify-content: center; color: var(--text-2); border-style: dashed; }
+.session-icon { font-size: 18px; line-height: 1; width: 24px; text-align: center; }
+.session-meta { flex: 1; min-width: 0; }
+.session-device { font-size: 14px; font-weight: 600; color: var(--text-1); }
+.session-current { color: var(--accent, #4f6ef7); font-weight: 600; font-size: 12px; }
+.session-sub { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+.session-revoke {
+  border: 1px solid var(--border, #e3e6ee); background: transparent; color: var(--danger, #e5484d);
+  border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.session-revoke:hover { background: color-mix(in srgb, var(--danger, #e5484d) 10%, transparent); }
+.session-revoke:disabled { opacity: .5; cursor: default; }
 .auth-lang { display: flex; gap: 8px; justify-content: center; margin: 10px 0 2px; }
 .lang-switch { display: flex; gap: 8px; }
 .lang-switch .lang-btn { flex: 1; }

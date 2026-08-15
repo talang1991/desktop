@@ -223,6 +223,19 @@ export async function initStore(): Promise<void> {
               expires_at TIMESTAMPTZ NOT NULL
             )`,
           );
+          // 兼容已存在的 sessions 表：补充多端登录所需的设备/UA/时间列
+          await c.queryObject(
+            `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS device TEXT NOT NULL DEFAULT 'desktop'`,
+          );
+          await c.queryObject(
+            `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_agent TEXT NOT NULL DEFAULT ''`,
+          );
+          await c.queryObject(
+            `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
+          );
+          await c.queryObject(
+            `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_active TIMESTAMPTZ NOT NULL DEFAULT now()`,
+          );
           await c.queryObject(
             `CREATE TABLE IF NOT EXISTS friendships (
               id SERIAL PRIMARY KEY,
@@ -353,15 +366,60 @@ export async function findUserByUsername(username: string): Promise<StoredUser |
 }
 
 // ---------------- 会话 ----------------
-export async function createSession(userId: number): Promise<string> {
+// device: "mobile" | "desktop" | "tablet"（多端登录展示用）；userAgent 原样留存便于排查
+export async function createSession(
+  userId: number,
+  device = "desktop",
+  userAgent = "",
+): Promise<string> {
   ensureDb();
   const token = newSessionToken();
   const expires = new Date(Date.now() + SESSION_MS);
   await query(
-    `INSERT INTO sessions (token, user_id, expires_at) VALUES ($1,$2,$3)`,
-    [token, userId, expires.toISOString()],
+    `INSERT INTO sessions (token, user_id, expires_at, device, user_agent, created_at, last_active)
+     VALUES ($1,$2,$3,$4,$5, now(), now())`,
+    [token, userId, expires.toISOString(), device, userAgent],
   );
   return token;
+}
+
+// 列出某用户的所有会话（按登录时间倒序），用于「登录设备」管理面板
+export async function listSessions(
+  userId: number,
+): Promise<Array<{ token: string; device: string; user_agent: string; created_at: string; last_active: string }>> {
+  ensureDb();
+  const rows = await query<{ token: string; device: string; user_agent: string; created_at: string; last_active: string }>(
+    `SELECT token, device, user_agent, created_at, last_active
+     FROM sessions WHERE user_id = $1 ORDER BY last_active DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+// 剔除某用户除当前 token 外的所有会话（一键登出其他设备），返回被踢出的会话数
+export async function deleteOtherSessions(userId: number, exceptToken: string): Promise<number> {
+  ensureDb();
+  const rows = await query<{ token: string }>(
+    `DELETE FROM sessions WHERE user_id = $1 AND token <> $2 RETURNING token`,
+    [userId, exceptToken],
+  );
+  return rows.length;
+}
+
+// 撤销指定会话（须属于该用户，防止越权踢人）
+export async function revokeSession(token: string, userId: number): Promise<boolean> {
+  ensureDb();
+  const rows = await query<{ token: string }>(
+    `DELETE FROM sessions WHERE token = $1 AND user_id = $2 RETURNING token`,
+    [token, userId],
+  );
+  return rows.length > 0;
+}
+
+// 更新会话活跃时间（/api/me 拉取时顺带刷新，用于「最近活跃」展示）
+export async function touchSession(token: string): Promise<void> {
+  ensureDb();
+  await query(`UPDATE sessions SET last_active = now() WHERE token = $1`, [token]).catch(() => {});
 }
 
 export async function getUserByToken(token: string): Promise<{ id: number; username: string; avatar: string } | null> {

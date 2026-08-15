@@ -4,6 +4,10 @@
 
   const THEME_KEY = "web-app-launcher:theme";
   const TOKEN_KEY = "web-app-launcher:token";
+  // 当前设备类型，登录时上报给服务端用于「登录设备」管理面板展示
+  const DEVICE_TYPE = /iPad|Tablet/i.test(navigator.userAgent)
+    ? "tablet"
+    : (/Mobi|Android|iPhone|iPod/i.test(navigator.userAgent) ? "mobile" : "desktop");
   const COLORS = [
     "#4f6ef7", "#e5484d", "#12a594", "#f5a623",
     "#9b5de5", "#f15bb5", "#00bbf9", "#8ac926",
@@ -1047,6 +1051,19 @@
       "settings.clearCacheConfirm": "确定清空本地缓存？这会清除本机聊天记录与界面布局，但不会退出登录。",
       "settings.cacheHint": "仅清除本机缓存（聊天记录与界面布局），保留登录状态、语言与主题。",
       "settings.cacheCleared": "缓存已清空",
+      "settings.devices": "登录设备",
+      "settings.logoutOthers": "登出其他设备",
+      "settings.devicesHint": "这里列出当前账号登录过的所有设备，可单独登出某台或一键登出其他设备。",
+      "settings.currentDevice": "当前设备",
+      "settings.revoke": "登出",
+      "settings.noOtherDevices": "没有其他登录设备",
+      "settings.deviceMobile": "手机",
+      "settings.deviceTablet": "平板",
+      "settings.deviceDesktop": "电脑",
+      "settings.devicesLoadErr": "设备列表加载失败",
+      "settings.logoutOthersDone": "已登出其他设备",
+      "settings.revoked": "已登出该设备",
+      "settings.deviceActive": "活跃于",
       "topbar.search.ph": "搜索应用名称或网址…",
       "topbar.add": "＋ 添加应用",
       "topbar.chat": "💬 聊天",
@@ -1280,6 +1297,19 @@
       "settings.clearCacheConfirm": "Clear local cache? This wipes local chat history and layout, but won't log you out.",
       "settings.cacheHint": "Only local cache (chat history & layout) is cleared; login, language and theme are kept.",
       "settings.cacheCleared": "Cache cleared",
+      "settings.devices": "Devices",
+      "settings.logoutOthers": "Log out other devices",
+      "settings.devicesHint": "Lists all devices signed in to this account. You can sign out a single device or all others at once.",
+      "settings.currentDevice": "This device",
+      "settings.revoke": "Sign out",
+      "settings.noOtherDevices": "No other devices",
+      "settings.deviceMobile": "Mobile",
+      "settings.deviceTablet": "Tablet",
+      "settings.deviceDesktop": "Desktop",
+      "settings.devicesLoadErr": "Failed to load devices",
+      "settings.logoutOthersDone": "Other devices signed out",
+      "settings.revoked": "Device signed out",
+      "settings.deviceActive": "Active",
       "topbar.search.ph": "Search apps by name or URL…",
       "topbar.add": "＋ Add App",
       "topbar.chat": "💬 Chat",
@@ -1557,6 +1587,7 @@
         body: JSON.stringify({
           username: $("#loginUser").value.trim(),
           password: $("#loginPass").value,
+          device: DEVICE_TYPE,
         }),
       });
       localStorage.setItem(TOKEN_KEY, data.token);
@@ -1579,6 +1610,7 @@
         body: JSON.stringify({
           username: $("#regUser").value.trim(),
           password: $("#regPass").value,
+          device: DEVICE_TYPE,
         }),
       });
       localStorage.setItem(TOKEN_KEY, data.token);
@@ -2271,6 +2303,7 @@
   function openSettings() {
     settingsPanel.hidden = false;
     refreshThemeToggle();
+    loadSessions(); // 进入设置即刷新「登录设备」列表
   }
   function closeSettings() { settingsPanel.hidden = true; }
   const settingsClose = $("#settingsClose");
@@ -2294,6 +2327,92 @@
     closeSettings();
     toast(t("settings.cacheCleared"));
   };
+
+  // ---------- 登录设备管理（多端登录）----------
+  const sessionsList = $("#sessionsList");
+  const logoutOthersBtn = $("#logoutOthersBtn");
+
+  function deviceLabel(device) {
+    if (device === "mobile") return "📱 " + t("settings.deviceMobile");
+    if (device === "tablet") return "📟 " + t("settings.deviceTablet");
+    return "💻 " + t("settings.deviceDesktop");
+  }
+  // 将服务端返回的 ISO 时间格式化为“YYYY-MM-DD HH:mm”本地时间
+  function fmtSessionTime(iso) {
+    try {
+      const d = new Date(iso);
+      const p = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    } catch { return ""; }
+  }
+
+  async function loadSessions() {
+    if (!sessionsList) return;
+    sessionsList.innerHTML = `<div class="session-row muted">…</div>`;
+    try {
+      const r = await api("/api/sessions");
+      renderSessions(r.sessions || []);
+    } catch (e) {
+      sessionsList.innerHTML = `<div class="session-row muted">${t("settings.devicesLoadErr")}</div>`;
+    }
+  }
+
+  function renderSessions(sessions) {
+    if (!sessionsList) return;
+    if (!sessions.length) {
+      sessionsList.innerHTML = `<div class="session-row muted">${t("settings.noOtherDevices")}</div>`;
+      return;
+    }
+    sessionsList.innerHTML = "";
+    for (const s of sessions) {
+      const row = document.createElement("div");
+      row.className = "session-row" + (s.current ? " current" : "");
+      const others = s.current ? "" : `<button class="session-revoke" data-token="${s.token}">${t("settings.revoke")}</button>`;
+      row.innerHTML = `
+        <div class="session-icon">${deviceLabel(s.device).slice(0, 2)}</div>
+        <div class="session-meta">
+          <div class="session-device">${deviceLabel(s.device)}${s.current ? ` · <span class="session-current">${t("settings.currentDevice")}</span>` : ""}</div>
+          <div class="session-sub">${t("settings.deviceActive")} ${fmtSessionTime(s.last_active)}</div>
+        </div>
+        ${others}`;
+      sessionsList.appendChild(row);
+    }
+  }
+
+  // 单独登出某台设备
+  if (sessionsList) {
+    sessionsList.addEventListener("click", async (e) => {
+      const btn = e.target.closest(".session-revoke");
+      if (!btn) return;
+      const token = btn.getAttribute("data-token");
+      if (!token) return;
+      btn.disabled = true;
+      try {
+        await api("/api/sessions/revoke", { method: "POST", body: JSON.stringify({ token }) });
+        toast(t("settings.revoked"));
+        loadSessions();
+      } catch (err) {
+        toast(err.message || t("settings.devicesLoadErr"));
+        btn.disabled = false;
+      }
+    });
+  }
+
+  // 一键登出其他所有设备
+  if (logoutOthersBtn) {
+    logoutOthersBtn.onclick = async () => {
+      logoutOthersBtn.disabled = true;
+      try {
+        const r = await api("/api/sessions/logout-others", { method: "POST" });
+        toast(t("settings.logoutOthersDone") + (r.revoked ? `（${r.revoked}）` : ""));
+        loadSessions();
+      } catch (err) {
+        toast(err.message || t("settings.devicesLoadErr"));
+      } finally {
+        logoutOthersBtn.disabled = false;
+      }
+    };
+  }
 
   // 移动端单栏：窄屏进入会话/详情时切到“全屏聊天”态（隐藏列表）；返回/关闭时退回列表
   function maybeMobileConversation() {
