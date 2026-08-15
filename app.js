@@ -908,21 +908,6 @@
       toast(e.message || "保存失败");
     }
   }
-  // 设置页单独保存昵称
-  async function saveNicknameFromSettings() {
-    try {
-      const nickname = $("#settingsNickname").value.trim();
-      if (!nickname) { toast(t("settings.nicknameEmpty") || "请输入昵称"); return; }
-      const r = await api("/api/me", {
-        method: "PUT",
-        body: JSON.stringify({ username: nickname }),
-      });
-      applyProfileUpdate(r.user);
-      toast(t("settings.nicknameSaved") || "昵称已更新");
-    } catch (e) {
-      toast(e.message || "保存失败");
-    }
-  }
   function closeProfileModal() { profileModal.hidden = true; }
 
   form.addEventListener("submit", async (e) => {
@@ -1062,11 +1047,6 @@
       "settings.clearCacheConfirm": "确定清空本地缓存？这会清除本机聊天记录与界面布局，但不会退出登录。",
       "settings.cacheHint": "仅清除本机缓存（聊天记录与界面布局），保留登录状态、语言与主题。",
       "settings.cacheCleared": "缓存已清空",
-      "settings.nickname": "昵称",
-      "settings.nicknamePh": "你的昵称",
-      "settings.nicknameHint": "昵称会显示给你的好友、群成员和会议中的其他人。",
-      "settings.nicknameEmpty": "请输入昵称",
-      "settings.nicknameSaved": "昵称已更新",
       "topbar.search.ph": "搜索应用名称或网址…",
       "topbar.add": "＋ 添加应用",
       "topbar.chat": "💬 聊天",
@@ -1300,11 +1280,6 @@
       "settings.clearCacheConfirm": "Clear local cache? This wipes local chat history and layout, but won't log you out.",
       "settings.cacheHint": "Only local cache (chat history & layout) is cleared; login, language and theme are kept.",
       "settings.cacheCleared": "Cache cleared",
-      "settings.nickname": "Nickname",
-      "settings.nicknamePh": "Your nickname",
-      "settings.nicknameHint": "Your nickname is shown to your friends, group members and others in meetings.",
-      "settings.nicknameEmpty": "Please enter a nickname",
-      "settings.nicknameSaved": "Nickname updated",
       "topbar.search.ph": "Search apps by name or URL…",
       "topbar.add": "＋ Add App",
       "topbar.chat": "💬 Chat",
@@ -1662,7 +1637,6 @@
   $("#userAvatarBtn").onclick = openProfileModal;
   $("#pAvatar").addEventListener("input", updateAvatarPreview);
   $("#saveAvatar").onclick = saveProfile;
-  $("#saveNicknameBtn").onclick = saveNicknameFromSettings;
   profileModal.querySelectorAll("[data-close]").forEach((el) => el.onclick = closeProfileModal);
 
   // 图标预览实时更新 + 一键填入网站默认 favicon
@@ -2296,8 +2270,6 @@
   }
   function openSettings() {
     settingsPanel.hidden = false;
-    const sn = $("#settingsNickname");
-    if (sn) sn.value = currentUsername;
     refreshThemeToggle();
   }
   function closeSettings() { settingsPanel.hidden = true; }
