@@ -5424,6 +5424,17 @@
   // 网络恢复时：把本地未同步的消息补推到服务端，并补算离线期间漏掉的未读红点
   window.addEventListener("online", () => { flushPending(); trySyncAll(); syncLinks(); });
 
+  // ---------- Service Worker：对带版本号的 JS/CSS 做本地缓存，离线也可用 ----------
+  function registerServiceWorker() {
+    // 非安全上下文（如 http 局域网 IP）或旧浏览器没有 navigator.serviceWorker，直接跳过不影响主流程
+    if (!("serviceWorker" in navigator)) return;
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/sw.js").catch((e) => {
+        console.warn("[SW] 注册失败（已忽略，不影响主流程）:", (e && e.message) || e);
+      });
+    });
+  }
+
   // ---------- Init ----------
   function init() {
     applyTheme(
@@ -5436,6 +5447,7 @@
       const m = params.get("meeting");
       if (m) pendingMeetingId = m;
     } catch (e) {}
+    registerServiceWorker();
     checkAuth();
   }
   init();

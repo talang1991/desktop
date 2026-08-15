@@ -69,11 +69,12 @@ async function serveStatic(req: Request): Promise<Response> {
     // ① 入口 HTML（含 ?meeting= 会议邀请链接）始终 no-cache，确保每次导航都能拿到引用最新资源版本的页面壳；
     // ② 带版本号（?v=）的静态资源（app.js?v=107 / styles.css?v=73 等）内容随版本号变化而稳定，
     //    可长期缓存（immutable），浏览器不再重复请求，版本号变更即换全新 URL 强制刷新；
-    // ③ 其余无版本资源保守缓存 1 小时。
+    // ③ Service Worker 脚本（sw.js）必须 no-cache，否则其 1 小时缓存会延迟 SW 更新、导致新缓存逻辑不生效；
+    // ④ 其余无版本资源保守缓存 1 小时。
     const headers: Record<string, string> = {
       "content-type": contentType(target),
     };
-    if (target.endsWith(".html")) {
+    if (target.endsWith(".html") || pathname.endsWith("/sw.js")) {
       headers["cache-control"] = "no-cache";
       headers["pragma"] = "no-cache";
     } else if (url.searchParams.has("v")) {
