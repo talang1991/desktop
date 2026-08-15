@@ -156,10 +156,14 @@ self.addEventListener("fetch", (event) => {
 self.addEventListener("message", (event) => {
   const data = (event && event.data) || {};
   if (data.type === "QUERY_HTML_VERSION") {
-    caches.open(CACHE).then(async (cache) => {
-      const v = await loadHtmlVersion(cache);
-      if (event.source && v) event.source.postMessage({ type: "HTML_VERSION", version: v });
-    });
+    // 直接问服务端拿最新 HTML 版本（network-first，绕过本端缓存），彻底消除“本端优先返回旧缓存、
+    // 后台 revalidation 尚未完成”导致的竞态——无论 SW 当前缓存/后台更新是否就绪，页面都能拿到真实最新版本。
+    // 仅在服务端不可用 / 无版本时回退到缓存元数据（sw-meta）。
+    const reply = (v) => { if (event.source && v) event.source.postMessage({ type: "HTML_VERSION", version: v }); };
+    fetch(self.location.origin + "/", { cache: "no-store" })
+      .then((r) => (r && r.ok ? r.text() : Promise.reject()))
+      .then((html) => { const v = extractAppVersion(html); if (v) reply(v); else throw new Error("no-ver"); })
+      .catch(() => caches.open(CACHE).then(async (c) => reply(await loadHtmlVersion(c))));
   }
 });
 

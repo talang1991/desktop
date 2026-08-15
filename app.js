@@ -5602,7 +5602,8 @@
       else if (data.type === "HTML_VERSION" && data.version) handleServerVersion(data.version);
       else if (data.type === "SW_READY" && data.htmlVersion) handleServerVersion(data.htmlVersion);
     });
-    // 监听就绪后主动问一次 SW：当前服务端最新 HTML 版本是多少（避免错过 SW 的主动推送）
+    // 向已激活的 SW 查询“服务端最新 HTML 版本”。SW 会直接问服务端（绕过本端缓存），
+    // 因此无论 SW 本端优先返回的是否为旧缓存、后台 revalidation 是否已完成，都能拿到真实最新版本。
     const query = () => {
       if (navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({ type: "QUERY_HTML_VERSION" });
@@ -5610,6 +5611,13 @@
     };
     if (navigator.serviceWorker.controller) query();
     else navigator.serviceWorker.addEventListener("controllerchange", query);
+    // SW 激活后兜底再查一次（应对首屏 controller 早期为 null、尚未接管页面的窗口期）
+    if (navigator.serviceWorker.ready && typeof navigator.serviceWorker.ready.then === "function") {
+      navigator.serviceWorker.ready.then(query).catch(() => {});
+    }
+    // 延迟二次查询：确保 SW 后台 revalidation / 接管完成，即使 SW_VERSION_UPDATE 快速路径
+    // 因客户端接管时机丢失，也能兜底弹出更新提示。
+    setTimeout(query, 1500);
   }
 
   // ---------- Init ----------
