@@ -4,7 +4,7 @@ import {
   getUserByToken, deleteSession, listLinks, createLink, updateLink, deleteLink,
   bulkImportLinks,
   sendFriendRequest, listFriends, listFriendRequests, acceptFriendRequest, getFriendRequestRequester, removeFriend,
-  updateUserAvatar, areFriends,
+  updateUserAvatar, updateUserUsername, areFriends,
   createGroup, addGroupMember, listUserGroups, getGroupBasic, isGroupMember, leaveGroup,
   renameGroup, getGroupMemberIds,
   DbUnavailableError,
@@ -95,13 +95,23 @@ export async function handleApi(req: Request): Promise<Response> {
       return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar } : null });
     }
 
-    // ---- 更新当前用户资料（头像）----
+    // ---- 更新当前用户资料（头像 / 昵称）----
     if (path === "/api/me" && method === "PUT") {
       const user = await requireUser(req);
       if (!user) return json({ error: "未登录" }, 401);
       const b = await req.json();
-      await updateUserAvatar(user.id, String(b.avatar ?? "").slice(0, 2048));
-      return json({ user: { id: user.id, username: user.username, avatar: String(b.avatar ?? "") } });
+      let avatar = user.avatar;
+      let username = user.username;
+      if (typeof b.avatar === "string") {
+        avatar = String(b.avatar).slice(0, 2048);
+        await updateUserAvatar(user.id, avatar);
+      }
+      if (typeof b.username === "string" && b.username.trim()) {
+        const r = await updateUserUsername(user.id, b.username);
+        if (!r.ok) return json({ error: r.error || "昵称保存失败" }, 400);
+        username = r.username ?? username;
+      }
+      return json({ user: { id: user.id, username, avatar } });
     }
 
     // ---- 信令服务地址 + ICE 配置（P2P 聊天用）----

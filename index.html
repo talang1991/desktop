@@ -152,8 +152,8 @@
           </div>
         </label>
         <label class="field">
-          <span data-i18n="profile.usernameLabel">用户名</span>
-          <div id="profileUsername" class="profile-username"></div>
+          <span data-i18n="profile.nicknameLabel">昵称（展示给你的好友与会议中的其他人）</span>
+          <input id="pNickname" type="text" maxlength="32" placeholder="你的昵称" data-i18n-ph="profile.nicknamePh" autocomplete="off" />
         </label>
       <div class="modal-actions">
         <button type="button" class="btn ghost" data-close data-i18n="profile.cancel">取消</button>
@@ -455,6 +455,14 @@
           <p class="settings-hint" data-i18n="settings.cacheHint">仅清除本机缓存（聊天记录与界面布局），保留登录状态、语言与主题。</p>
         </div>
         <div class="settings-section">
+          <div class="settings-section-title" data-i18n="settings.nickname">昵称</div>
+          <div class="icon-input-row">
+            <input id="settingsNickname" type="text" maxlength="32" placeholder="你的昵称" data-i18n-ph="settings.nicknamePh" autocomplete="off" />
+            <button id="saveNicknameBtn" class="btn primary" data-i18n="profile.save">保存</button>
+          </div>
+          <p class="settings-hint" data-i18n="settings.nicknameHint">昵称会显示给你的好友、群成员和会议中的其他人。</p>
+        </div>
+        <div class="settings-section">
           <button id="logoutBtn2" class="btn ghost block danger" data-i18n="topbar.logout">登出</button>
         </div>
       </div>
@@ -462,6 +470,6 @@
     <input id="importFile" type="file" accept="application/json" hidden />
   </div>
 
-  <script src="app.js?v=105"></script>
+  <script src="app.js?v=106"></script>
 </body>
 </html>

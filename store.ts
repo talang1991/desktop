@@ -401,6 +401,31 @@ export async function updateUserAvatar(userId: number, avatar: string): Promise<
   return rows.length > 0;
 }
 
+// 更新当前用户昵称（即展示名，复用 username 列）。
+// 仅用于“已登录用户修改自己的展示名”路径，校验较注册更宽松（允许中文/空格等），
+// 但受 username 列的 UNIQUE 约束限制（重复昵称会失败）。
+export async function updateUserUsername(
+  userId: number,
+  username: string,
+): Promise<{ ok: boolean; username?: string; error?: string }> {
+  ensureDb();
+  const name = String(username ?? "").trim();
+  if (!name) return { ok: false, error: "昵称不能为空" };
+  if (name.length > 32) return { ok: false, error: "昵称最多 32 个字符" };
+  try {
+    const rows = await query<{ id: number; username: string }>(
+      `UPDATE users SET username = $1 WHERE id = $2 RETURNING id, username`,
+      [name, userId],
+    );
+    if (rows.length === 0) return { ok: false, error: "用户不存在" };
+    return { ok: true, username: rows[0].username };
+  } catch (e) {
+    const msg = String((e as { message?: string })?.message || e);
+    if (/unique/i.test(msg)) return { ok: false, error: "该昵称已被使用" };
+    return { ok: false, error: "昵称保存失败，请重试" };
+  }
+}
+
 export async function deleteSession(token: string): Promise<void> {
   ensureDb();
   await query(`DELETE FROM sessions WHERE token = $1`, [token]).catch(() => {});

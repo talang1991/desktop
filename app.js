@@ -834,9 +834,9 @@
   }
   function closeModal() { modal.hidden = true; editingId = null; }
 
-  // ---------- 个人资料 / 头像 ----------
+  // ---------- 个人资料 / 头像 / 昵称 ----------
   function openProfileModal() {
-    $("#profileUsername").textContent = currentUsername;
+    $("#pNickname").value = currentUsername;
     $("#pAvatar").value = myAvatar;
     updateAvatarPreview();
     profileModal.hidden = false;
@@ -848,16 +848,48 @@
     el.style.background = "var(--surface-2)";
     el.innerHTML = renderAvatar(val, (currentUsername || "?").charAt(0).toUpperCase());
   }
-  async function saveAvatar() {
+  // 把服务端返回的最新资料写回本地（昵称 / 头像），并刷新相关展示
+  function applyProfileUpdate(u) {
+    if (!u) return;
+    if (typeof u.username === "string" && u.username) {
+      currentUsername = u.username;
+      const un = $("#userName");
+      if (un) un.textContent = currentUsername;
+    }
+    if (typeof u.avatar === "string") {
+      myAvatar = u.avatar;
+    }
+    renderAvatarInto($("#userAvatar"), myAvatar, (currentUsername || "?").charAt(0).toUpperCase());
+    // 重新拉取好友 / 群，使新昵称在列表中生效
+    if (typeof loadFriends === "function") loadFriends();
+    if (typeof loadGroups === "function") loadGroups();
+  }
+  async function saveProfile() {
     try {
+      const nickname = $("#pNickname").value.trim();
+      const avatar = $("#pAvatar").value.trim();
       const r = await api("/api/me", {
         method: "PUT",
-        body: JSON.stringify({ avatar: $("#pAvatar").value.trim() }),
+        body: JSON.stringify({ username: nickname, avatar }),
       });
-      myAvatar = r.user.avatar;
-      renderAvatarInto($("#userAvatar"), myAvatar, (currentUsername || "?").charAt(0).toUpperCase());
+      applyProfileUpdate(r.user);
       closeProfileModal();
-      toast("头像已更新");
+      toast("资料已更新");
+    } catch (e) {
+      toast(e.message || "保存失败");
+    }
+  }
+  // 设置页单独保存昵称
+  async function saveNicknameFromSettings() {
+    try {
+      const nickname = $("#settingsNickname").value.trim();
+      if (!nickname) { toast(t("settings.nicknameEmpty") || "请输入昵称"); return; }
+      const r = await api("/api/me", {
+        method: "PUT",
+        body: JSON.stringify({ username: nickname }),
+      });
+      applyProfileUpdate(r.user);
+      toast(t("settings.nicknameSaved") || "昵称已更新");
     } catch (e) {
       toast(e.message || "保存失败");
     }
@@ -998,6 +1030,11 @@
       "settings.clearCacheConfirm": "确定清空本地缓存？这会清除本机聊天记录与界面布局，但不会退出登录。",
       "settings.cacheHint": "仅清除本机缓存（聊天记录与界面布局），保留登录状态、语言与主题。",
       "settings.cacheCleared": "缓存已清空",
+      "settings.nickname": "昵称",
+      "settings.nicknamePh": "你的昵称",
+      "settings.nicknameHint": "昵称会显示给你的好友、群成员和会议中的其他人。",
+      "settings.nicknameEmpty": "请输入昵称",
+      "settings.nicknameSaved": "昵称已更新",
       "topbar.search.ph": "搜索应用名称或网址…",
       "topbar.add": "＋ 添加应用",
       "topbar.chat": "💬 聊天",
@@ -1032,6 +1069,8 @@
       "profile.title": "个人资料",
       "profile.avatarLabel": "头像（Emoji 或图片链接）",
       "profile.avatarPh": "🌟 或 https://…/avatar.png",
+      "profile.nicknameLabel": "昵称（展示给你的好友与会议中的其他人）",
+      "profile.nicknamePh": "你的昵称",
       "profile.usernameLabel": "用户名",
       "profile.cancel": "取消",
       "profile.save": "保存",
@@ -1226,6 +1265,11 @@
       "settings.clearCacheConfirm": "Clear local cache? This wipes local chat history and layout, but won't log you out.",
       "settings.cacheHint": "Only local cache (chat history & layout) is cleared; login, language and theme are kept.",
       "settings.cacheCleared": "Cache cleared",
+      "settings.nickname": "Nickname",
+      "settings.nicknamePh": "Your nickname",
+      "settings.nicknameHint": "Your nickname is shown to your friends, group members and others in meetings.",
+      "settings.nicknameEmpty": "Please enter a nickname",
+      "settings.nicknameSaved": "Nickname updated",
       "topbar.search.ph": "Search apps by name or URL…",
       "topbar.add": "＋ Add App",
       "topbar.chat": "💬 Chat",
@@ -1260,6 +1304,8 @@
       "profile.title": "Profile",
       "profile.avatarLabel": "Avatar (Emoji or image URL)",
       "profile.avatarPh": "🌟 or https://…/avatar.png",
+      "profile.nicknameLabel": "Nickname (shown to your friends and others in meetings)",
+      "profile.nicknamePh": "Your nickname",
       "profile.usernameLabel": "Username",
       "profile.cancel": "Cancel",
       "profile.save": "Save",
@@ -1575,10 +1621,11 @@
   searchInput.oninput = (e) => { searchTerm = e.target.value; renderGrid(); };
   modal.querySelectorAll("[data-close]").forEach((el) => el.onclick = closeModal);
 
-  // 个人资料 / 头像
+  // 个人资料 / 头像 / 昵称
   $("#userAvatarBtn").onclick = openProfileModal;
   $("#pAvatar").addEventListener("input", updateAvatarPreview);
-  $("#saveAvatar").onclick = saveAvatar;
+  $("#saveAvatar").onclick = saveProfile;
+  $("#saveNicknameBtn").onclick = saveNicknameFromSettings;
   profileModal.querySelectorAll("[data-close]").forEach((el) => el.onclick = closeProfileModal);
 
   // 图标预览实时更新 + 一键填入网站默认 favicon
@@ -2210,7 +2257,12 @@
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
     el.textContent = t(isDark ? "settings.theme.dark" : "settings.theme.light");
   }
-  function openSettings() { settingsPanel.hidden = false; refreshThemeToggle(); }
+  function openSettings() {
+    settingsPanel.hidden = false;
+    const sn = $("#settingsNickname");
+    if (sn) sn.value = currentUsername;
+    refreshThemeToggle();
+  }
   function closeSettings() { settingsPanel.hidden = true; }
   const settingsClose = $("#settingsClose");
   if (settingsClose) settingsClose.onclick = closeSettings;
