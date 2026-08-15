@@ -3660,11 +3660,13 @@
     camOff = false;
     isSharingScreen = false;
     screenStream = null;
-    // 本端头像占位（关摄像头 / 未共享时居中显示）
+    // 本端头像占位（关摄像头 / 未共享 / 未拿到媒体时居中显示）
     if (meetingSelfAvatar) {
-      const selfLetter = (currentUsername || "?").charAt(0).toUpperCase() || "?";
-      meetingSelfAvatar.innerHTML = myAvatar
-        ? renderAvatar(myAvatar, selfLetter)
+      const selfName = currentUsername || (typeof guestName === "string" ? guestName : "");
+      const selfLetter = (selfName || "?").trim().charAt(0).toUpperCase() || "?";
+      const av = (typeof myAvatar === "string" && myAvatar) ? myAvatar : "";
+      meetingSelfAvatar.innerHTML = av
+        ? renderAvatar(av, selfLetter)
         : '<span class="avatar-letter">' + escapeHtml(selfLetter) + "</span>";
     }
     updateTileVideoState("self");
@@ -3941,6 +3943,7 @@
     meetingJoinPending = false;
     roomPeers = new Map();
     micMuted = false; camOff = false;
+    hideMeetingLeft(); // 闸门→进入会议：移除 .left 类，否则 CSS 把 .meeting-grid 和 .call-controls 都隐藏了
     bindMeetingLocal();
     showMeetingPanel(null);
     if (meetingGroupName) i18nText(meetingGroupName, "meeting.roomTitle");
@@ -4341,7 +4344,7 @@
     if (tile) tile.classList.toggle("screen", !!on);
   }
 
-  // 根据某成员是否“有视频”决定瓦片是否显示头像占位。
+  // 根据某成员是否"有视频"决定瓦片是否显示头像占位。
   // 语音（audio）会议 / 视频会议中关摄像头且未共享屏幕 → 无视频，居中显示头像。
   function updateTileVideoState(uid) {
     const tile = (meetingGrid && meetingGrid.querySelector('.meeting-tile[data-uid="' + String(uid) + '"]'))
@@ -4349,7 +4352,9 @@
     if (!tile) return;
     let noVideo;
     if (uid === "self") {
+      // 本端：audio / 关摄像头 / 未共享屏幕 / 根本没拿到媒体（无摄像头/insecure context/拒绝授权）→ 无视频
       noVideo = meetingType === "audio" ? true : (camOff && !isSharingScreen);
+      if (!localStream) noVideo = true;
     } else {
       const id = Number(uid);
       noVideo = meetingType === "audio" ? true : (camOffMembers.has(id) && !screenSharingMembers.has(id));
