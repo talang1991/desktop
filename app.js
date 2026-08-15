@@ -378,15 +378,93 @@
     });
   }
 
-  function renderGrid() {
+  // ---------- 多选 / 批量删除 ----------
+  let selectionMode = false;
+  const selectedIds = new Set();
+
+  function getFilteredApps() {
     const term = searchTerm.trim().toLowerCase();
-    const filtered = apps.filter((a) => {
+    return apps.filter((a) => {
       const matchCat = activeCategory === "全部" || (a.category || "未分类") === activeCategory;
       const matchTerm = !term ||
         a.name.toLowerCase().includes(term) ||
         a.url.toLowerCase().includes(term);
       return matchCat && matchTerm;
     });
+  }
+
+  function updateSelectionUI() {
+    const bar = $("#selectionBar");
+    if (!bar) return;
+    bar.hidden = !selectionMode;
+    document.body.classList.toggle("selection-mode", selectionMode);
+    const cnt = selectedIds.size;
+    i18nText($("#selCount"), "select.count", { n: cnt });
+    const visible = getFilteredApps();
+    const allSelected = visible.length > 0 && visible.every((a) => selectedIds.has(a.id));
+    $("#selAll").textContent = allSelected ? t("select.deselectAll") : t("select.selectAll");
+    grid.querySelectorAll(".card").forEach((c) => {
+      const id = Number(c.dataset.id);
+      c.classList.toggle("selected", selectedIds.has(id));
+    });
+  }
+
+  function enterSelection(id) {
+    if (!selectionMode) { selectionMode = true; selectedIds.clear(); }
+    selectedIds.add(id);
+    const card = grid.querySelector(`.card[data-id="${CSS.escape(String(id))}"]`);
+    if (card) card.classList.add("selected");
+    updateSelectionUI();
+  }
+
+  function toggleSelect(id) {
+    if (selectedIds.has(id)) selectedIds.delete(id);
+    else selectedIds.add(id);
+    const card = grid.querySelector(`.card[data-id="${CSS.escape(String(id))}"]`);
+    if (card) card.classList.toggle("selected", selectedIds.has(id));
+    if (selectedIds.size === 0) { exitSelection(); return; }
+    updateSelectionUI();
+  }
+
+  function exitSelection() {
+    selectionMode = false;
+    selectedIds.clear();
+    grid.querySelectorAll(".card.selected").forEach((c) => c.classList.remove("selected"));
+    updateSelectionUI();
+  }
+
+  function toggleSelectAll() {
+    if (!selectionMode) { selectionMode = true; }
+    const visible = getFilteredApps();
+    const allSelected = visible.length > 0 && visible.every((a) => selectedIds.has(a.id));
+    if (allSelected) visible.forEach((a) => selectedIds.delete(a.id));
+    else visible.forEach((a) => selectedIds.add(a.id));
+    if (selectedIds.size === 0) { exitSelection(); return; }
+    updateSelectionUI();
+  }
+
+  async function deleteSelected() {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    if (!confirm(t("select.deleteConfirm", { n: ids.length }))) return;
+    let done = 0, fail = 0;
+    await Promise.all(ids.map(async (id) => {
+      try {
+        await api("/api/links/" + id, { method: "DELETE" });
+        done++;
+      } catch (e) {
+        // 离线：留墓碑，联网后重试
+        try { await LinkDB.put({ id, userId: currentUserId, synced: false, op: "delete", _tombstone: true }); } catch {}
+        fail++;
+      }
+    }));
+    await syncLinks();
+    exitSelection();
+    toast(fail ? t("select.deletedPartial", { done, fail }) : t("select.deleted", { n: done }));
+  }
+
+  function renderGrid() {
+    const filtered = getFilteredApps();
 
     if (apps.length === filtered.length) {
       i18nText(appCount, "app.count", { n: apps.length });
@@ -409,6 +487,8 @@
       const card = document.createElement("a");
       card.className = "card";
       card.href = a.url;
+      card.dataset.id = a.id;
+      if (selectionMode && selectedIds.has(a.id)) card.classList.add("selected");
       const aMode = a.openMode || (a.openNew === false ? "self" : "new");
       // 内嵌模式：链接仍保留 href 以便中键/组合键在新标签打开，普通左键交给 openApp 处理
       card.target = aMode === "iframe" ? "_self" : (a.openNew === false ? "_self" : "_blank");
@@ -440,8 +520,33 @@
         <div class="url">${escapeHtml(hostnameOf(a.url))}</div>
       `;
 
+      // ---- 长按进入多选（触摸 / 鼠标长按 500ms）----
+      let longFired = false;
+      let lpTimer = null;
+      const startLP = () => {
+        longFired = false;
+        lpTimer = setTimeout(() => {
+          longFired = true;
+          enterSelection(a.id);
+          if (navigator.vibrate) { try { navigator.vibrate(30); } catch {} }
+        }, 500);
+      };
+      const cancelLP = () => { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } };
+      card.addEventListener("touchstart", startLP, { passive: true });
+      card.addEventListener("touchend", cancelLP);
+      card.addEventListener("touchmove", cancelLP);
+      card.addEventListener("touchcancel", cancelLP);
+      card.addEventListener("mousedown", (e) => { if (e.button === 0) startLP(); });
+      card.addEventListener("mouseup", cancelLP);
+      card.addEventListener("mouseleave", cancelLP);
+      card.addEventListener("dragstart", cancelLP);
+
       card.addEventListener("click", (e) => {
         if (e.target.closest(".card-menu")) { e.preventDefault(); return; }
+        // 长按已触发：吞掉随后的 click，避免误打开或误取消选中
+        if (longFired) { e.preventDefault(); longFired = false; return; }
+        // 多选模式下：点击卡片切换选中（不打开）
+        if (selectionMode) { e.preventDefault(); toggleSelect(a.id); return; }
         // 普通左键（非组合键）走 openApp，支持「内嵌窗口」等打开方式
         if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
           e.preventDefault();
@@ -451,6 +556,8 @@
       card.querySelector(".card-menu").addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
+        // 多选模式下：⋯ 也用于切换选中，而不弹菜单
+        if (selectionMode) { toggleSelect(a.id); return; }
         openContextMenu(a.id, e.clientX, e.clientY);
       });
 
@@ -1200,6 +1307,14 @@
       "app.empty.try": "试试更换分类或搜索关键词。",
       "app.count": "{n} 个应用",
       "app.count.showing": "{n} 个应用（显示 {m}）",
+      "select.count": "已选 {n} 项",
+      "select.cancel": "取消",
+      "select.selectAll": "全选",
+      "select.deselectAll": "取消全选",
+      "select.delete": "🗑️ 批量删除",
+      "select.deleteConfirm": "确定删除选中的 {n} 个应用？",
+      "select.deleted": "已删除 {n} 个应用",
+      "select.deletedPartial": "已删除 {done} 个，离线保留 {fail} 个",
       "app.category.uncategorized": "未分类",
       "profile.title": "个人资料",
       "profile.avatarLabel": "头像（Emoji 或图片链接）",
@@ -1447,6 +1562,14 @@
       "app.empty.try": "Try a different category or search keyword.",
       "app.count": "{n} apps",
       "app.count.showing": "{n} apps (showing {m})",
+      "select.count": "Selected {n}",
+      "select.cancel": "Cancel",
+      "select.selectAll": "Select all",
+      "select.deselectAll": "Clear",
+      "select.delete": "🗑️ Delete",
+      "select.deleteConfirm": "Delete {n} selected apps?",
+      "select.deleted": "Deleted {n} apps",
+      "select.deletedPartial": "Deleted {done}, kept {fail} offline",
       "app.category.uncategorized": "Uncategorized",
       "profile.title": "Profile",
       "profile.avatarLabel": "Avatar (Emoji or image URL)",
@@ -1761,6 +1884,10 @@
   $("#importFile").onchange = (e) => { if (e.target.files[0]) importJson(e.target.files[0]); e.target.value = ""; };
   $("#importChromeBtn").onclick = () => $("#importChromeFile").click();
   $("#importChromeFile").onchange = (e) => { if (e.target.files[0]) importChromeBookmarks(e.target.files[0]); e.target.value = ""; };
+  // 多选 / 批量删除
+  $("#selCancel").onclick = exitSelection;
+  $("#selAll").onclick = toggleSelectAll;
+  $("#selDelete").onclick = deleteSelected;
   $("#themeToggleBtn").onclick = () => {
     const cur = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light";
     applyTheme(cur === "dark" ? "light" : "dark");

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=74" />
+  <link rel="stylesheet" href="styles.css?v=75" />
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -85,6 +85,14 @@
         <button id="settingsBtn" class="btn ghost" title="设置" data-i18n="topbar.settings">⚙ 设置</button>
       </div>
     </header>
+
+    <div id="selectionBar" class="selection-bar" hidden>
+      <button id="selCancel" class="btn ghost" data-i18n="select.cancel">取消</button>
+      <span id="selCount" class="sel-count"></span>
+      <span class="sel-spacer"></span>
+      <button id="selAll" class="btn ghost"></button>
+      <button id="selDelete" class="btn danger" data-i18n="select.delete">🗑️ 批量删除</button>
+    </div>
 
     <nav class="filters" id="categoryFilters"></nav>
 
@@ -483,6 +491,6 @@
     <input id="importChromeFile" type="file" accept=".html,text/html" hidden />
   </div>
 
-  <script src="app.js?v=115"></script>
+  <script src="app.js?v=116"></script>
 </body>
 </html>
