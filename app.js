@@ -61,10 +61,13 @@
         throw lastErr;
       }
 
-      // 401 不重试：直接要求重新登录
-      if (res.status === 401 && path !== "/api/me") {
-        showAuth();
-        throw new Error("会话已失效，请重新登录");
+      // 401：登录态失效。
+      // 仅在「未登录态」时强制回到登录框（含刷新时 checkAuth 校验 /api/me 失效）；
+      // 已进入应用后（已登录态）的偶发 401 只提示，不误把正在浏览的用户踢回登录界面。
+      if (res.status === 401) {
+        if (!isAuthed) showAuth();
+        else toast(t("auth.sessionExpired"));
+        throw new Error(t("auth.sessionExpired"));
       }
 
       // 5xx 服务端临时错误（含 500）：自动重试
@@ -238,6 +241,7 @@
 
   // ---------- 登录态 ----------
   function showAuth() {
+    isAuthed = false;
     // 带着会议链接进入且未登录：展示访客入会页（输入昵称即可入会，无需注册）
     if (pendingMeetingId) {
       if ($("#appView")) $("#appView").hidden = true;
@@ -256,6 +260,7 @@
     clearAuthError();
   }
   async function enterApp(user) {
+    isAuthed = true;
     $("#authView").hidden = true;
     $("#appView").hidden = false;
     currentUsername = user.username;
@@ -377,6 +382,11 @@
       categoryList.appendChild(o);
     });
   }
+
+  // ---------- 登录态标志：已成功进入应用后置 true ----------
+  // 用于区分「未登录态的请求 401」与「已进入应用后偶发 401」，
+  // 避免后台任意请求偶发 401 就把正在浏览的用户误踢回登录框。
+  let isAuthed = false;
 
   // ---------- 多选 / 批量删除 ----------
   let selectionMode = false;
@@ -1247,6 +1257,7 @@
       "auth.logging": "登录中…",
       "auth.registering": "注册中…",
       "auth.verifying": "正在验证登录态…",
+      "auth.sessionExpired": "登录已失效，请重新登录",
       "update.text": "已更新到新版本 v",
       "update.reload": "刷新",
       "settings.title": "设置",
@@ -1502,6 +1513,7 @@
       "auth.logging": "Signing in…",
       "auth.registering": "Signing up…",
       "auth.verifying": "Verifying your session…",
+      "auth.sessionExpired": "Session expired, please log in again",
       "update.text": "Updated to version v",
       "update.reload": "Reload",
       "settings.title": "Settings",
