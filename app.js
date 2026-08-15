@@ -3118,6 +3118,34 @@
     console.log("[UNREAD-DEBUG] addUnread", { peerId, peerIdType: typeof peerId, unread: JSON.parse(JSON.stringify(unread)), friends: friends.map((f) => ({ id: f.id, t: typeof f.id, name: f.username })) });
     bumpUnread(peerId, 1);
   }
+  // ---- 已读游标（服务端持久化，跨端同步未读）----
+  // 打开会话即标记为已读：把「该会话已读到的最新 ts」上报服务端。
+  // 换了新客户端登录时，新端以服务端 lastRead 为基准计算未读，已读过的不再显示未读。
+  async function getLastRead(peerId) {
+    peerId = Number(peerId);
+    try {
+      const d = await api(`/api/messages/read?peer=${peerId}`);
+      return Number(d && d.lastRead) || 0;
+    } catch { return 0; }
+  }
+  async function markRead(peerId, ts) {
+    peerId = Number(peerId); ts = Number(ts) || 0;
+    if (!peerId || !ts) return;
+    try { await api(`/api/messages/read`, { method: "POST", body: JSON.stringify({ peer: peerId, ts }) }); } catch {}
+  }
+  async function getGroupLastRead(gid) {
+    gid = Number(gid);
+    try {
+      const d = await api(`/api/groups/${gid}/read`);
+      return Number(d && d.lastRead) || 0;
+    } catch { return 0; }
+  }
+  async function markGroupRead(gid, ts) {
+    gid = Number(gid); ts = Number(ts) || 0;
+    if (!gid || !ts) return;
+    try { await api(`/api/groups/${gid}/read`, { method: "POST", body: JSON.stringify({ ts }) }); } catch {}
+  }
+
   // 仅在「已拿到 myId 且好友列表已加载」两个前置都满足时才补算离线未读/拉离线消息。
   // 解决：onopen 时 myId 尚未就绪（welcome 是后续 onmessage）、loadFriends 时 myId 可能尚未就绪，
   // 二者任一先到都不应提前 return 而漏掉同步；二者齐备后必跑一次。
@@ -3139,7 +3167,12 @@
     try {
       for (const f of friends) {
         const conv = convKeyLocal(myId, f.id);
-        const since = await ChatDB.maxTs(conv);
+        const localMax = await ChatDB.maxTs(conv);
+        const lastRead = await getLastRead(f.id);
+        // 未读计算基准：取「本地最新 ts」与「服务端已读游标」的较大者。
+        // 换端时本地为空(localMax=0)但服务端已有 lastRead → 只拉未读部分，
+        // 已读过的消息不再算未读；同设备则 localMax 更大，行为与旧逻辑一致。
+        const since = Math.max(localMax, lastRead || 0);
         let msgs = [];
         let data = null;
         try {
@@ -3361,6 +3394,10 @@
     // 拉取并渲染完成后，当前会话已是「已读」状态：清掉该好友红点，
     // 避免后台离线补算（syncAllUnread）在打开会话期间 bump 后残留红点。
     clearUnread(f.id);
+    // 打开会话即上报「已读」到服务端（用会话最新 ts），供其它端计算未读基准，
+    // 实现「已读的消息切换新客户端不再显示未读」。
+    const convMax = await ChatDB.maxTs(convKeyLocal(myId, f.id));
+    if (convMax) markRead(f.id, convMax);
     // 打开会话：确保该会话出现在列表（首次发起聊天时创建），不改已有排序
     ensureConversation("peer", f.id);
     updateCallButtons();
@@ -5155,6 +5192,8 @@
         renderedIds.add(m.id);
         renderMessageRow(m.from === myId ? "me" : "peer", m.text, m.ts);
       }
+      // 正在看此会话收到新消息：已读游标跟随最新，避免换端后这些又算未读
+      markRead(m.from, m.ts);
       // 新消息把会话前置（更新预览与排序）
       upsertConversation("peer", m.from, m.ts, m.text, false);
     } else if (m.from !== myId) {
@@ -5348,6 +5387,9 @@
     await syncGroupConversation(g.id);
     if (myToken !== activeOpenToken) return;
     clearGroupUnread(g.id);
+    // 打开群会话即上报「已读」到服务端（用会话最新 ts），供其它端计算未读基准
+    const gMax = await ChatDB.maxTs(groupConvKey(g.id));
+    if (gMax) markGroupRead(g.id, gMax);
     // 打开群会话：确保该会话出现在列表（首次发起聊天时创建），不改已有排序
     ensureConversation("group", g.id);
   }
@@ -5822,7 +5864,9 @@
     if (myId == null || groups.length === 0) return;
     for (const g of groups) {
       const gid = g.id;
-      const since = await ChatDB.maxTs(groupConvKey(gid));
+      const localMax = await ChatDB.maxTs(groupConvKey(gid));
+      const lastRead = await getGroupLastRead(gid);
+      const since = Math.max(localMax, lastRead || 0);
       let msgs = [];
       try {
         const data = await api(`/api/groups/${gid}/messages?since=${since}`);

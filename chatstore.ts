@@ -120,3 +120,38 @@ export async function getGroupMessages(
     return [];
   }
 }
+
+// ---------------- 已读游标（跨端同步未读）----------------
+// 记录「某用户在某会话已读到的最新消息 ts」。换设备登录时，新客户端以该游标为基准
+// 计算未读，避免把已经在旧设备读过的消息重新算成未读。
+// 键：["read", kind, userId, convId] = { ts }；kind 为 "dm" 或 "group"。
+export async function saveReadCursor(
+  userId: number,
+  kind: "dm" | "group",
+  convId: number,
+  ts: number,
+): Promise<void> {
+  if (!kv) return;
+  try {
+    await kv.set(["read", kind, userId, convId], { ts: Number(ts) || 0 });
+  } catch (e) {
+    console.error("[chatstore] saveReadCursor failed:", (e as Error).message);
+  }
+}
+
+export async function getReadCursor(
+  userId: number,
+  kind: "dm" | "group",
+  convId: number,
+): Promise<number> {
+  if (!kv) return 0;
+  try {
+    const res = await kv.get(["read", kind, userId, convId]);
+    const v = res.value as { ts?: number } | null;
+    if (v && typeof v.ts === "number") return v.ts;
+    return 0;
+  } catch (e) {
+    console.error("[chatstore] getReadCursor failed:", (e as Error).message);
+    return 0;
+  }
+}

@@ -18,7 +18,7 @@ function normalizeDevice(d: unknown): string {
   return "desktop";
 }
 import { getWsPublicUrl, getIceServers, isOnline, pushToUser } from "./signaling.ts";
-import { saveMessage, getMessages, saveGroupMessage, getGroupMessages, chatKvReady } from "./chatstore.ts";
+import { saveMessage, getMessages, saveGroupMessage, getGroupMessages, chatKvReady, saveReadCursor, getReadCursor } from "./chatstore.ts";
 
 interface User { id: number; username: string; avatar: string; }
 
@@ -205,6 +205,28 @@ export async function handleApi(req: Request): Promise<Response> {
       return json({ messages, stored: chatKvReady() });
     }
 
+    // ---- 单聊：已读游标（记录 / 读取，用于跨端同步未读）----
+    if (path === "/api/messages/read" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const b = await req.json().catch(() => ({}));
+      const peer = Number(b.peer);
+      const ts = Number(b.ts) || 0;
+      if (!peer) return json({ error: "缺少好友参数" }, 400);
+      if (!(await areFriends(user.id, peer))) return json({ error: "只能与好友聊天" }, 403);
+      await saveReadCursor(user.id, "dm", peer, ts);
+      return json({ ok: true });
+    }
+    if (path === "/api/messages/read" && method === "GET") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const peer = Number(url.searchParams.get("peer"));
+      if (!peer) return json({ error: "缺少好友参数" }, 400);
+      if (!(await areFriends(user.id, peer))) return json({ error: "只能与好友聊天" }, 403);
+      const lastRead = await getReadCursor(user.id, "dm", peer);
+      return json({ lastRead });
+    }
+
     // ---- 好友：发送好友请求（按用户名）----
     if (path === "/api/friends" && method === "POST") {
       const user = await requireUser(req);
@@ -292,6 +314,25 @@ export async function handleApi(req: Request): Promise<Response> {
           count++;
         }
         return json({ ok: true, stored: chatKvReady(), count });
+      }
+    }
+
+    // ---- 群聊：已读游标（记录 / 读取，用于跨端同步未读）----
+    const gmr = path.match(/^\/api\/groups\/(\d+)\/read$/);
+    if (gmr) {
+      const gid = Number(gmr[1]);
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      if (!(await isGroupMember(gid, user.id))) return json({ error: "你不在该群聊中" }, 403);
+      if (method === "POST") {
+        const b = await req.json().catch(() => ({}));
+        const ts = Number(b.ts) || 0;
+        await saveReadCursor(user.id, "group", gid, ts);
+        return json({ ok: true });
+      }
+      if (method === "GET") {
+        const lastRead = await getReadCursor(user.id, "group", gid);
+        return json({ lastRead });
       }
     }
 
