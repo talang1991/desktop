@@ -217,7 +217,11 @@
       return;
     }
     $("#appView").hidden = true;
-    $("#authView").hidden = false;
+    if ($("#authView")) $("#authView").hidden = false;
+    // 回到账号/密码输入框（隐藏转圈）
+    hideAuthSpinner();
+    $("#loginForm").hidden = false;
+    $("#registerForm").hidden = true;
     apps = [];
     clearAuthError();
   }
@@ -247,6 +251,16 @@
     }
   }
   async function checkAuth() {
+    const tk = localStorage.getItem(TOKEN_KEY);
+    if (!tk) {
+      // 本端无登录态：直接展示账号/密码输入框
+      showAuth();
+      return;
+    }
+    // 本端存在登录态：先展示转圈等待服务端校验，并隐藏账号/密码输入框
+    if ($("#appView")) $("#appView").hidden = true;
+    if ($("#authView")) $("#authView").hidden = false;
+    showAuthSpinner(t("auth.verifying"));
     try {
       const { user } = await api("/api/me");
       if (user) await enterApp(user);
@@ -262,6 +276,21 @@
   }
   function clearAuthError() {
     $("#authError").hidden = true;
+  }
+  // 本端已有登录态：展示转圈等待服务端校验，同时隐藏账号/密码输入框
+  function showAuthSpinner(msg) {
+    const sp = $("#authSpinner");
+    if (!sp) return;
+    const txt = sp.querySelector(".auth-spinner-text");
+    if (txt && msg) txt.textContent = msg;
+    sp.hidden = false;
+    $("#loginForm").hidden = true;
+    $("#registerForm").hidden = true;
+    clearAuthError();
+  }
+  function hideAuthSpinner() {
+    const sp = $("#authSpinner");
+    if (sp) sp.hidden = true;
   }
 
   // ---------- Helpers ----------
@@ -1016,6 +1045,7 @@
       "auth.login.link": "去登录",
       "auth.logging": "登录中…",
       "auth.registering": "注册中…",
+      "auth.verifying": "正在验证登录态…",
       "settings.title": "设置",
       "settings.backup": "数据备份",
       "settings.import": "📥 从 JSON 文件导入",
@@ -1251,6 +1281,7 @@
       "auth.login.link": "Sign in",
       "auth.logging": "Signing in…",
       "auth.registering": "Signing up…",
+      "auth.verifying": "Verifying your session…",
       "settings.title": "Settings",
       "settings.backup": "Data Backup",
       "settings.import": "📥 Import from JSON",
@@ -1582,6 +1613,7 @@
   });
   $("#toRegister").onclick = (e) => {
     e.preventDefault();
+    hideAuthSpinner();
     $("#loginForm").hidden = true;
     $("#registerForm").hidden = false;
     $("#authSub").textContent = "创建账号以保存你的应用";
@@ -1589,6 +1621,7 @@
   };
   $("#toLogin").onclick = (e) => {
     e.preventDefault();
+    hideAuthSpinner();
     $("#registerForm").hidden = true;
     $("#loginForm").hidden = false;
     $("#authSub").textContent = "登录以同步你的应用";
