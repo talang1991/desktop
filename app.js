@@ -37,26 +37,52 @@
   const profileModal = $("#profileModal");
 
   // ---------- API ----------
+  // 请求失败时（5xx 含 500 / 服务端临时故障 / 网络抖动）自动重试，最多额外重试 3 次（共最多 4 次尝试）
+  const API_RETRY_MAX = 3;
+  const API_RETRY_BASE_DELAY = 300; // ms，指数退避基数
+
   async function api(path, opts = {}) {
     const headers = { "content-type": "application/json" };
     const tk = localStorage.getItem(TOKEN_KEY);
     if (tk) headers["authorization"] = "Bearer " + tk;
-    let res;
-    try {
-      res = await fetch(path, {
-        headers,
-        ...opts,
-      });
-    } catch {
-      throw new Error("网络请求失败，请确认服务已启动（本地应为 http://localhost:8000）");
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= API_RETRY_MAX; attempt++) {
+      let res;
+      try {
+        res = await fetch(path, { headers, ...opts });
+      } catch {
+        // 网络层失败（连接被拒 / 超时等临时故障）：可重试
+        lastErr = new Error("网络请求失败，请确认服务已启动（本地应为 http://localhost:8000）");
+        if (attempt < API_RETRY_MAX) {
+          await new Promise((r) => setTimeout(r, API_RETRY_BASE_DELAY * Math.pow(2, attempt)));
+          continue;
+        }
+        throw lastErr;
+      }
+
+      // 401 不重试：直接要求重新登录
+      if (res.status === 401 && path !== "/api/me") {
+        showAuth();
+        throw new Error("会话已失效，请重新登录");
+      }
+
+      // 5xx 服务端临时错误（含 500）：自动重试
+      if (res.status >= 500 && res.status <= 599) {
+        lastErr = new Error("服务器暂时不可用（" + res.status + "），正在重试…");
+        if (attempt < API_RETRY_MAX) {
+          await new Promise((r) => setTimeout(r, API_RETRY_BASE_DELAY * Math.pow(2, attempt)));
+          continue;
+        }
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || ("服务器错误（" + res.status + "）"));
+      }
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "请求失败");
+      return data;
     }
-    if (res.status === 401 && path !== "/api/me") {
-      showAuth();
-      throw new Error("会话已失效，请重新登录");
-    }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "请求失败");
-    return data;
+    throw lastErr || new Error("请求失败");
   }
 
   // ---------- 链接：本地缓存优先 + 服务端同步 ----------
