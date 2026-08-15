@@ -347,7 +347,8 @@
     return !!s && /^(https?:\/\/|\/|data:image\/)/i.test(String(s).trim());
   }
   function fallbackChar(url) {
-    return (hostnameOf(url).charAt(0) || "?").toUpperCase();
+    const h = hostnameOf(url);
+    return ((h && h.charAt(0)) || "?").toUpperCase();
   }
   // 渲染头像：emoji 文本 / 图片链接 / 兜底首字母
   function renderAvatar(val, fallback) {
@@ -494,6 +495,7 @@
     emptyState.hidden = true;
 
     filtered.forEach((a) => {
+     try {
       const card = document.createElement("a");
       card.className = "card";
       card.href = a.url;
@@ -572,6 +574,10 @@
       });
 
       grid.appendChild(card);
+     } catch (e) {
+      // 单条数据异常不应拖垮整页渲染（如缺 url 的脏数据）
+      console.warn("renderGrid skip card id=", a && a.id, e);
+     }
     });
   }
 
