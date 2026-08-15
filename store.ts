@@ -590,17 +590,28 @@ export async function bulkImportLinks(
   items: Array<{ name?: string; url?: string; category?: string; emoji?: string; color?: string; openNew?: boolean; openMode?: string }>,
 ): Promise<{ created: number; skipped: number; total: number }> {
   ensureDb();
+  // 严格校验：剔除空串、字面量 "undefined"/"null"/"NaN" 等明显脏数据，避免向 DB 灌入无法使用的"幽灵链接"
+  const isJunk = (v: unknown) => {
+    if (v == null) return true;
+    const s = String(v).trim().toLowerCase();
+    return !s || s === "undefined" || s === "null" || s === "nan";
+  };
   const valid = (items || [])
-    .filter((a) => a && a.url)
-    .map((a) => ({
-      name: String(a.name || "未命名").trim(),
-      url: String(a.url).trim(),
-      category: String(a.category || "未分类").trim(),
-      emoji: String(a.emoji || "").slice(0, ICON_MAX),
-      color: String(a.color || "#4f6ef7"),
-      openNew: a.openNew !== false,
-      openMode: a.openMode || "new",
-    }));
+    .filter((a) => a && !isJunk((a as any).url) && !isJunk((a as any).name))
+    .map((a) => {
+      let u = String(a.url).trim();
+      // 与 /api/links POST 一致：缺协议自动补 https://
+      if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+      return {
+        name: String(a.name || "未命名").trim(),
+        url: u,
+        category: String(a.category || "未分类").trim(),
+        emoji: String(a.emoji || "").slice(0, ICON_MAX),
+        color: String(a.color || "#4f6ef7"),
+        openNew: a.openNew !== false,
+        openMode: a.openMode || "new",
+      };
+    });
   if (valid.length === 0) return { created: 0, skipped: 0, total: 0 };
 
   return withClient(async (c: any) => {

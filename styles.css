@@ -186,6 +186,41 @@ html, body {
 .card:hover .card-menu { opacity: 1; }
 .card .card-menu:hover { background: var(--surface-2); color: var(--text); }
 
+/* ---------- 无效条目占位卡（name/url 缺失或明显脏数据）---------- */
+.card.card-broken {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  border-color: #fcc;
+  background: var(--surface);
+  cursor: default;
+  text-decoration: none;
+  color: inherit;
+}
+.card.card-broken .icon { color: #c33; font-weight: 700; font-size: 18px; }
+.card.card-broken .name, .card.card-broken .url {
+  flex: 1 1 100%;
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+.card.card-broken .url { font-size: 12px; }
+.card.card-broken .btn-delete-broken {
+  flex: 1 1 100%;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid #fcc;
+  border-radius: 6px;
+  background: #fff0f0;
+  color: #c33;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s, border 0.12s;
+}
+.card.card-broken .btn-delete-broken:hover {
+  background: #ffd6d6;
+  border-color: #f99;
+}
+
 /* ---------- 多选 / 批量删除 ---------- */
 .selection-bar {
   position: sticky;

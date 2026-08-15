@@ -397,9 +397,12 @@
     const term = searchTerm.trim().toLowerCase();
     return apps.filter((a) => {
       const matchCat = activeCategory === "全部" || (a.category || "未分类") === activeCategory;
+      // 坏数据也可能存在于被搜索项中，做空值兜底
+      const hayName = (a && a.name != null) ? String(a.name) : "";
+      const hayUrl = (a && a.url != null) ? String(a.url) : "";
       const matchTerm = !term ||
-        a.name.toLowerCase().includes(term) ||
-        a.url.toLowerCase().includes(term);
+        hayName.toLowerCase().includes(term) ||
+        hayUrl.toLowerCase().includes(term);
       return matchCat && matchTerm;
     });
   }
@@ -474,6 +477,57 @@
     toast(fail ? t("select.deletedPartial", { done, fail }) : t("select.deleted", { n: done }));
   }
 
+  // ---- "无效条目"判定：name 或 url 缺失/明显是脏数据
+  function isBrokenLink(a) {
+    if (!a || a.id == null) return true;
+    const junk = (v) => {
+      if (v == null) return true;
+      const s = String(v).trim().toLowerCase();
+      return !s || s === "undefined" || s === "null" || s === "nan";
+    };
+    if (junk(a.name) || junk(a.url)) return true;
+    return !/^https?:\/\/\S+/i.test(String(a.url));
+  }
+
+  // 渲染"无效条目"专用占位卡（角标 + 内嵌"立即删除"按钮），长按/点击/导航全部禁用
+  function renderBrokenCard(a) {
+    const card = document.createElement("div");
+    card.className = "card card-broken";
+    card.dataset.id = a.id;
+    card.setAttribute("role", "group");
+    card.setAttribute("aria-label", "无效链接条目");
+    card.innerHTML = `
+      <span class="cat-tag" style="background:#fee;border-color:#fcc;color:#c33;">无效条目</span>
+      <button class="card-menu" title="更多操作" data-menu="${a.id}">⋯</button>
+      <div class="icon" style="background:#fee;color:#c33;">!</div>
+      <div class="name" style="color:#c33;">${escapeHtml(a.name || "(空)")}</div>
+      <div class="url">${escapeHtml(a.url || "(空网址)")}</div>
+      <button class="btn-delete-broken" data-id="${a.id}" title="永久删除此无效条目">🗑 删除此条目</button>
+    `;
+    card.querySelector(".card-menu").addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (confirm("删除该无效条目？")) deleteLinkLocal(a.id).then(() => toast("已删除"));
+    });
+    card.querySelector(".btn-delete-broken").addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!confirm("永久删除该无效条目？")) return;
+      const id = a.id;
+      Promise.resolve(deleteLinkLocal(id))
+        .then(async () => {
+          try { await api("/api/links/" + id, { method: "DELETE" }); } catch (e) {}
+          await syncLinks();
+          toast("已清理 1 条无效条目");
+        })
+        .catch(() => toast("清理失败"));
+    });
+    // 阻止冒泡以免触发长按检测
+    card.addEventListener("mousedown", (e) => e.stopPropagation());
+    card.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
+    return card;
+  }
+
   function renderGrid() {
     const filtered = getFilteredApps();
 
@@ -496,6 +550,11 @@
 
     filtered.forEach((a) => {
      try {
+      // 坏数据：name/url 缺失或明显无效 → 渲染专用占位卡，避免整页崩+给用户醒目"删除"按钮
+      if (isBrokenLink(a)) {
+        grid.appendChild(renderBrokenCard(a));
+        return;
+      }
       const card = document.createElement("a");
       card.className = "card";
       card.href = a.url;
