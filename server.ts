@@ -64,13 +64,24 @@ async function serveStatic(req: Request): Promise<Response> {
       return new Response("403 Forbidden", { status: 403 });
     }
     const data = await Deno.readFile(abs);
-    return new Response(data, {
-      headers: {
-        "content-type": contentType(target),
-        "cache-control": "no-store",
-        "pragma": "no-cache",
-      },
-    });
+
+    // 缓存策略：
+    // ① 入口 HTML（含 ?meeting= 会议邀请链接）始终 no-cache，确保每次导航都能拿到引用最新资源版本的页面壳；
+    // ② 带版本号（?v=）的静态资源（app.js?v=107 / styles.css?v=73 等）内容随版本号变化而稳定，
+    //    可长期缓存（immutable），浏览器不再重复请求，版本号变更即换全新 URL 强制刷新；
+    // ③ 其余无版本资源保守缓存 1 小时。
+    const headers: Record<string, string> = {
+      "content-type": contentType(target),
+    };
+    if (target.endsWith(".html")) {
+      headers["cache-control"] = "no-cache";
+      headers["pragma"] = "no-cache";
+    } else if (url.searchParams.has("v")) {
+      headers["cache-control"] = "public, max-age=31536000, immutable";
+    } else {
+      headers["cache-control"] = "public, max-age=3600";
+    }
+    return new Response(data, { headers });
   } catch {
     return new Response("404 Not Found", { status: 404 });
   }
