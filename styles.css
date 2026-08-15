@@ -385,6 +385,22 @@ html, body {
 @keyframes auth-spin { to { transform: rotate(360deg); } }
 .auth-spinner-text { margin: 0; color: var(--text-soft); font-size: 14px; }
 
+/* 版本更新提示条 */
+.update-banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 300;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 16px; background: var(--primary); color: #fff;
+  font-size: 14px; box-shadow: var(--shadow);
+}
+.update-banner[hidden] { display: none; }
+.update-banner .update-icon { font-size: 16px; line-height: 1; }
+.update-banner .update-text { flex: 1 1 auto; }
+.update-banner .btn.small {
+  background: rgba(255, 255, 255, 0.22); color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.55); padding: 5px 12px;
+}
+.update-banner .btn.small:hover { background: rgba(255, 255, 255, 0.34); }
+
 .user-name {
   font-size: 13px;
   color: var(--text-soft);

@@ -1046,6 +1046,8 @@
       "auth.logging": "登录中…",
       "auth.registering": "注册中…",
       "auth.verifying": "正在验证登录态…",
+      "update.text": "已更新到新版本 v",
+      "update.reload": "刷新",
       "settings.title": "设置",
       "settings.backup": "数据备份",
       "settings.import": "📥 从 JSON 文件导入",
@@ -1282,6 +1284,8 @@
       "auth.logging": "Signing in…",
       "auth.registering": "Signing up…",
       "auth.verifying": "Verifying your session…",
+      "update.text": "Updated to version v",
+      "update.reload": "Reload",
       "settings.title": "Settings",
       "settings.backup": "Data Backup",
       "settings.import": "📥 Import from JSON",
@@ -5435,6 +5439,62 @@
     });
   }
 
+  // 从当前加载的 app.js 脚本 URL 中提取版本号（?v=），作为本次部署的“版本标识”
+  function getAppVersion() {
+    const s = document.querySelector('script[src*="app.js"]');
+    if (s) {
+      const m = /[?&]v=([^&"']+)/.exec(s.getAttribute("src") || s.src || "");
+      if (m) return m[1];
+    }
+    return "unknown";
+  }
+  // 检测到新版本：展示顶部提示条，并接入“刷新”按钮以应用最新资源
+  function showUpdateBanner(cur) {
+    const banner = $("#updateBanner");
+    const txt = $("#updateText");
+    if (txt) txt.textContent = t("update.text") + cur;
+    if (banner) banner.hidden = false;
+  }
+  function setupUpdateBanner() {
+    const btn = $("#updateReload");
+    if (btn) btn.onclick = () => location.reload();
+    // 对比本次运行的版本与上次记录的版本，不一致说明发生了版本更新
+    const cur = getAppVersion();
+    const last = localStorage.getItem("app-version");
+    if (last && last !== cur && cur !== "unknown") showUpdateBanner(cur);
+    localStorage.setItem("app-version", cur);
+  }
+  // 接收 Service Worker 的版本通知，并主动查询，确保本端优先（旧缓存）场景下更新“及时上报”。
+  // 两种来源：
+  //  ① SW_VERSION_UPDATE —— SW 后台拉到新 HTML 时主动推送（快速路径，可能因竞态早于本监听而丢失）；
+  //  ② HTML_VERSION / SW_READY.htmlVersion —— 页面监听就绪后主动查询 SW 缓存元数据得到的最新服务端版本
+  //     （竞态安全兜底，保证不漏报）。
+  function handleServerVersion(ver) {
+    if (!ver) return;
+    const cur = getAppVersion(); // 当前页（旧缓存）的版本
+    if (ver !== cur) {
+      showUpdateBanner(ver);
+      localStorage.setItem("app-version", ver);
+    }
+  }
+  function setupSWUpdateListener() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      const data = (event && event.data) || {};
+      if (data.type === "SW_VERSION_UPDATE" && data.version) handleServerVersion(data.version);
+      else if (data.type === "HTML_VERSION" && data.version) handleServerVersion(data.version);
+      else if (data.type === "SW_READY" && data.htmlVersion) handleServerVersion(data.htmlVersion);
+    });
+    // 监听就绪后主动问一次 SW：当前服务端最新 HTML 版本是多少（避免错过 SW 的主动推送）
+    const query = () => {
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: "QUERY_HTML_VERSION" });
+      }
+    };
+    if (navigator.serviceWorker.controller) query();
+    else navigator.serviceWorker.addEventListener("controllerchange", query);
+  }
+
   // ---------- Init ----------
   function init() {
     applyTheme(
@@ -5448,6 +5508,8 @@
       if (m) pendingMeetingId = m;
     } catch (e) {}
     registerServiceWorker();
+    setupSWUpdateListener();
+    setupUpdateBanner();
     checkAuth();
   }
   init();

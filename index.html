@@ -52,6 +52,13 @@
     </div>
   </div>
 
+  <!-- 版本更新提示条（检测到新版本时由 app.js 显示） -->
+  <div id="updateBanner" class="update-banner" hidden>
+    <span class="update-icon">🎉</span>
+    <span id="updateText" class="update-text">已更新到新版本</span>
+    <button id="updateReload" class="btn small" type="button" data-i18n="update.reload">刷新</button>
+  </div>
+
   <!-- 主应用 -->
   <div id="appView" hidden>
     <header class="topbar">
@@ -476,6 +483,6 @@
     <input id="importFile" type="file" accept="application/json" hidden />
   </div>
 
-  <script src="app.js?v=108"></script>
+  <script src="app.js?v=110"></script>
 </body>
 </html>
