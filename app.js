@@ -73,16 +73,24 @@
       // 5xx 服务端临时错误（含 500）：自动重试
       if (res.status >= 500 && res.status <= 599) {
         lastErr = new Error("服务器暂时不可用（" + res.status + "），正在重试…");
+        lastErr.status = res.status;
         if (attempt < API_RETRY_MAX) {
           await new Promise((r) => setTimeout(r, API_RETRY_BASE_DELAY * Math.pow(2, attempt)));
           continue;
         }
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || ("服务器错误（" + res.status + "）"));
+        const e = new Error(data.error || ("服务器错误（" + res.status + "）"));
+        e.status = res.status;
+        throw e;
       }
 
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "请求失败");
+      if (!res.ok) {
+        // 4xx：调用方可按 err.status 区分处理（如 DELETE 收到 404 视为「服务端已无此资源」）。
+        const e = new Error(data.error || ("请求失败（" + res.status + "）"));
+        e.status = res.status;
+        throw e;
+      }
       return data;
     }
     throw lastErr || new Error("请求失败");
@@ -158,7 +166,19 @@
     for (const l of pending) {
       try {
         if (l._tombstone || l.op === "delete") {
-          await api("/api/links/" + l.id, { method: "DELETE" });
+          try {
+            await api("/api/links/" + l.id, { method: "DELETE" });
+          } catch (eDel) {
+            // 服务端明确说「这条资源不存在」（404/410）：服务端要么早就删了，要么从来
+            // 不存在（脏 tmp_id / 服务端曾 503 时本地先落墓碑……）。视为已成功同步，
+            // 清掉本地墓碑，避免下次 syncLinks 又重复发 DELETE。
+            // 其它错误（5xx / 网络故障 / 401）：保留墓碑，让下次 syncLinks 重试。
+            if (eDel && (eDel.status === 404 || eDel.status === 410)) {
+              // fall through 到下方 LinkDB.delete(l.id)
+            } else {
+              throw eDel;
+            }
+          }
           await LinkDB.delete(l.id);
         } else if (String(l.id).startsWith("tmp_") || l.op === "create") {
           const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode };
