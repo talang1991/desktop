@@ -3113,6 +3113,17 @@
     updateUnreadTitle();
     patchConvUnread(peerId, unread[peerId]);
   }
+  // 覆盖式设置未读数（重算用）：n<=0 等同清红点。用于「其它端已读后本端对账」，
+  // 避免 unread 只增不减、旧红点永不消除。
+  function setUnread(peerId, n) {
+    peerId = Number(peerId); n = Number(n) || 0;
+    if (n <= 0) { clearUnread(peerId); return; }
+    unread[peerId] = n;
+    saveUnread();
+    updateUnreadTitle();
+    patchConvUnread(peerId, n);
+    renderFriends();
+  }
   function addUnread(peerId) {
     peerId = Number(peerId);
     console.log("[UNREAD-DEBUG] addUnread", { peerId, peerIdType: typeof peerId, unread: JSON.parse(JSON.stringify(unread)), friends: friends.map((f) => ({ id: f.id, t: typeof f.id, name: f.username })) });
@@ -3145,6 +3156,8 @@
     if (!gid || !ts) return;
     try { await api(`/api/groups/${gid}/read`, { method: "POST", body: JSON.stringify({ ts }) }); } catch {}
   }
+  // 各会话最近一次已知「已读游标」（来自服务端），供实时收到消息时判断是否为新未读。
+  const lastReadCache = {};
 
   // 仅在「已拿到 myId 且好友列表已加载」两个前置都满足时才补算离线未读/拉离线消息。
   // 解决：onopen 时 myId 尚未就绪（welcome 是后续 onmessage）、loadFriends 时 myId 可能尚未就绪，
@@ -3169,10 +3182,11 @@
         const conv = convKeyLocal(myId, f.id);
         const localMax = await ChatDB.maxTs(conv);
         const lastRead = await getLastRead(f.id);
+        lastReadCache[f.id] = Number(lastRead) || 0;   // 缓存游标，供实时收到消息时判断是否需要 bump
         // 未读计算基准：取「本地最新 ts」与「服务端已读游标」的较大者。
         // 换端时本地为空(localMax=0)但服务端已有 lastRead → 只拉未读部分，
         // 已读过的消息不再算未读；同设备则 localMax 更大，行为与旧逻辑一致。
-        const since = Math.max(localMax, lastRead || 0);
+        const since = Math.max(localMax, lastReadCache[f.id]);
         let msgs = [];
         let data = null;
         try {
@@ -3181,32 +3195,34 @@
         } catch (e) { console.log("[UNREAD-DEBUG] syncAllUnread GET fail", f.username, String(e && e.message || e)); continue; }
         console.log("[UNREAD-DEBUG] syncAllUnread pull", { peer: f.username, peerId: f.id, since, pulled: msgs.length, stored: (data && data.stored) });
         const newPeerMsgs = [];
-        let newCount = 0;
         for (const m of msgs) {
           if (m.from === myId) continue;            // 自己的消息不算未读
           if (await ChatDB.has(m.id)) continue;     // 本地已有，跳过（避免重复计）
           await ChatDB.put({ ...m, conv, synced: true }).catch(() => {});
-          newCount++;
           newPeerMsgs.push(m);
         }
-        if (newCount > 0) {
-          // 关键：无论聊天面板是否打开，只要该好友会话「当前没被打开查看」，就始终累计未读红点。
-          // 之前用 `!(chatVisible && currentPeer === f.id)` 作为 bump 的门槛，导致用户一打开该好友会话
-          // （currentPeer 已指向对方）时，离线补算被静默跳过 → 离线消息有、红点无。
-          const viewing = chatVisible && Number(currentPeer) === Number(f.id);
-          console.log("[UNREAD-DEBUG] syncAllUnread +unread", f.username, newCount, "viewing=", viewing);
-          if (viewing) {
-            // 该会话正打开：新消息立即渲染并标记为已读，不残留红点
-            for (const m of newPeerMsgs) {
-              if (!renderedIds.has(m.id)) {
-                renderedIds.add(m.id);
-                renderMessageRow("peer", m.text, m.ts);
-              }
+        const viewing = chatVisible && Number(currentPeer) === Number(f.id);
+        if (viewing) {
+          // 正在查看：新消息立即渲染为已读，并清红点
+          for (const m of newPeerMsgs) {
+            if (!renderedIds.has(m.id)) {
+              renderedIds.add(m.id);
+              renderMessageRow("peer", m.text, m.ts);
             }
-            clearUnread(f.id);
-          } else {
-            bumpUnread(f.id, newCount);   // 未打开该好友：累计未读红点（离线消息核心通知）
           }
+          clearUnread(f.id);
+        } else {
+          // 以「服务端已读游标」为基准重算真实未读（覆盖式，而非累加）。
+          // 解决：其它端已读后，本端刷新仍残留旧红点（旧逻辑只有 newCount>0 才动 unread，
+          // 而 since 已覆盖游标后 newCount 常为 0，导致已持久化的旧未读数永不清零）。
+          const all = await ChatDB.allForConv(conv).catch(() => []);
+          let trueUnread = 0;
+          for (const m of all) {
+            if (m.from === myId) continue;
+            if ((m.ts || 0) <= lastReadCache[f.id]) continue;
+            trueUnread++;
+          }
+          setUnread(f.id, trueUnread);
         }
       }
     } finally {
@@ -5197,8 +5213,11 @@
       // 新消息把会话前置（更新预览与排序）
       upsertConversation("peer", m.from, m.ts, m.text, false);
     } else if (m.from !== myId) {
-      // 未选中该好友：累加未读红点提醒（持久化），并把会话前置
-      addUnread(m.from);
+      // 未选中该好友：累加未读红点提醒（持久化），并把会话前置。
+      // 若该消息 ts 不晚于本端已知的最近已读游标（已在其它端读过），则不重复 bump。
+      if ((m.ts || 0) > (lastReadCache[m.from] || 0)) {
+        addUnread(m.from);
+      }
       upsertConversation("peer", m.from, m.ts, m.text, false);
     }
   }
@@ -5316,6 +5335,15 @@
       updateUnreadTitle();
       renderGroups();
     }
+  }
+  // 覆盖式设置群未读数（重算用）。
+  function setGroupUnread(gid, n) {
+    gid = Number(gid); n = Number(n) || 0;
+    if (n <= 0) { clearGroupUnread(gid); return; }
+    groupUnread[gid] = n;
+    saveGroupUnread();
+    updateUnreadTitle();
+    renderGroups();
   }
 
   // ---- 群列表加载 / 渲染 ----
@@ -5873,21 +5901,33 @@
         msgs = data.messages || [];
       } catch (e) { continue; }
       const viewing = chatMode === "group" && currentGroup === gid && chatVisible;
+      const newMsgs = [];
       for (const m of msgs) {
         if (m.from === myId) continue;
         if (await ChatDB.has(m.id)) continue;
         await ChatDB.put({ ...m, to: groupConvKey(gid), groupId: gid, conv: groupConvKey(gid), synced: true }).catch(() => {});
-        if (viewing) {
+        newMsgs.push(m);
+      }
+      if (viewing) {
+        for (const m of newMsgs) {
           if (!groupRenderedIds.has(m.id)) {
             groupRenderedIds.add(m.id);
             const sm = groupMemberName(gid, m.from);
             renderMessageRow(m.from === myId ? "me" : "peer", m.text, m.ts, sm.name, sm.avatar);
           }
-        } else {
-          bumpGroupUnread(gid);
         }
+        clearGroupUnread(gid);
+      } else {
+        // 覆盖式重算群未读，避免其它端已读后本端旧红点残留
+        const all = await ChatDB.allForConv(groupConvKey(gid)).catch(() => []);
+        let trueUnread = 0;
+        for (const m of all) {
+          if (m.from === myId) continue;
+          if ((m.ts || 0) <= (lastRead || 0)) continue;
+          trueUnread++;
+        }
+        setGroupUnread(gid, trueUnread);
       }
-      if (viewing) clearGroupUnread(gid);
     }
   }
 
