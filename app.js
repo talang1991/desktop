@@ -1361,8 +1361,8 @@
       "settings.theme.light": "🌓 主题：浅色",
       "settings.cache": "缓存",
       "settings.clearCache": "🧹 清空缓存",
-      "settings.clearCacheConfirm": "确定清空本地缓存？这会清除本机聊天记录与界面布局，但不会退出登录。",
-      "settings.cacheHint": "仅清除本机缓存（聊天记录与界面布局），保留登录状态、语言与主题。",
+      "settings.clearCacheConfirm": "确定清空本地缓存？这会清除本机界面布局，但不会退出登录。",
+      "settings.cacheHint": "仅清除本机缓存（界面布局），保留登录状态、语言与主题。",
       "settings.cacheCleared": "缓存已清空",
       "settings.devices": "登录设备",
       "settings.logoutOthers": "登出其他设备",
@@ -1617,8 +1617,8 @@
       "settings.theme.light": "🌓 Theme: Light",
       "settings.cache": "Cache",
       "settings.clearCache": "🧹 Clear Cache",
-      "settings.clearCacheConfirm": "Clear local cache? This wipes local chat history and layout, but won't log you out.",
-      "settings.cacheHint": "Only local cache (chat history & layout) is cleared; login, language and theme are kept.",
+      "settings.clearCacheConfirm": "Clear local cache? This wipes local layout, but won't log you out.",
+      "settings.cacheHint": "Only local cache (layout) is cleared; login, language and theme are kept.",
       "settings.cacheCleared": "Cache cleared",
       "settings.devices": "Devices",
       "settings.logoutOthers": "Log out other devices",
@@ -2648,7 +2648,7 @@
   const logoutBtn2 = $("#logoutBtn2");
   if (logoutBtn2) logoutBtn2.onclick = logout;
 
-  // 清空本地缓存：保留登录、语言、主题等偏好，清除聊天记录与界面布局等本地缓存
+  // 清空本地缓存：保留登录、语言、主题等偏好，清除界面布局等本地缓存
   const clearCacheBtn = $("#clearCacheBtn");
   if (clearCacheBtn) clearCacheBtn.onclick = () => {
     if (!confirm(t("settings.clearCacheConfirm"))) return;
