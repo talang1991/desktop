@@ -164,6 +164,17 @@ function routeTo(userId: number, obj: unknown): boolean {
   return true;
 }
 
+// 把消息路由给目标 userId 的全部连接（不含发起者自身的连接），用于「同一账号多端同步」：
+// 发送方在某台设备发出的消息，回显到其同账号的其它在线设备（PC 发的，手机也能实时看到）。
+function routeToSelf(userId: number, obj: unknown, exceptWs: WebSocket): void {
+  const s = onlineUsers.get(userId);
+  if (!s || s.size === 0) return;
+  for (const w of s) {
+    if (w === exceptWs) continue; // 排除发起这条消息的连接本身（它已在本地渲染）
+    send(w, obj);
+  }
+}
+
 // 向一组 userId 的每个连接广播（可排除某 userId，如消息发送者自己已本地渲染）
 function routeToEach(ids: number[], obj: unknown, exclude?: number): void {
   for (const id of ids) {
@@ -287,13 +298,18 @@ export function attachSignaling(server: Server): void {
           const id = String(msg.id || crypto.randomUUID());
           const ts = Number(msg.ts) || Date.now();
           const text = String(msg.text ?? "").slice(0, 4000);
-          routeTo(to, {
+          const payload = {
             type: "chat",
             from: user!.id,
+            to,
             id,
             ts,
             text,
-          });
+          };
+          routeTo(to, payload);
+          // 同一账号多端同步：把消息也回显给发送者本人的其它在线设备
+          // （排除发起连接的这台），否则 PC 发的私聊，手机端实时看不到。
+          routeToSelf(user!.id, payload, ws);
           // 服务端留存（本地优先，这里是兜底 + 换设备同步源），保留 3 个月由 KV 自动过期
           saveMessage({ id, from: user!.id, to, text, ts });
           return;
@@ -320,6 +336,16 @@ export function attachSignaling(server: Server): void {
             ts,
             text,
           });
+          // 同一账号多端同步：把群消息也回显给发送者本人的其它在线设备，
+          // 否则同账号在 PC 发的群消息，手机端实时看不到（历史可在重连后从服务端补全）。
+          routeToSelf(user!.id, {
+            type: "group-chat",
+            groupId,
+            from: user!.id,
+            id,
+            ts,
+            text,
+          }, ws);
           // 服务端留存（换设备同步源），保留 3 个月由 KV 自动过期
           saveGroupMessage({ id, groupId, from: user!.id, text, ts });
           return;

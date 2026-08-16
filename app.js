@@ -5280,8 +5280,11 @@
     m.synced = false;
     await ChatDB.put(m).catch(() => {});
     flushPending();
-    const viewing = chatVisible && currentPeer != null && Number(currentPeer) === Number(m.from);
-    console.log("[UNREAD-DEBUG] onChatReceived", { from: m.from, fromType: typeof m.from, myId, currentPeer, chatVisible, viewing, text: String(m.text || "").slice(0, 20) });
+    // 会话对方：自己发出的消息，会话对方是 m.to；收到他人消息，会话对方是 m.from。
+    // （服务端回显的「同账号其它设备发的消息」会带 to 字段，据此归到正确会话。）
+    const peerOfMsg = (Number(m.from) === Number(myId)) ? Number(m.to) : Number(m.from);
+    const viewing = chatVisible && currentPeer != null && Number(currentPeer) === Number(peerOfMsg);
+    console.log("[UNREAD-DEBUG] onChatReceived", { from: m.from, fromType: typeof m.from, myId, currentPeer, peerOfMsg, chatVisible, viewing, text: String(m.text || "").slice(0, 20) });
     if (viewing) {
       // 正在看这个好友的对话：直接渲染为已读
       if (!renderedIds.has(m.id)) {
@@ -5289,9 +5292,9 @@
         renderMessageRow(m.from === myId ? "me" : "peer", m.text, m.ts);
       }
       // 正在看此会话收到新消息：已读游标跟随最新，避免换端后这些又算未读
-      markRead(m.from, m.ts);
+      markRead(peerOfMsg, m.ts);
       // 新消息把会话前置（更新预览与排序）
-      upsertConversation("peer", m.from, m.ts, m.text, false);
+      upsertConversation("peer", peerOfMsg, m.ts, m.text, false);
     } else if (m.from !== myId) {
       // 未选中该好友：累加未读红点提醒（持久化），并把会话前置。
       // 若该消息 ts 不晚于本端已知的最近已读游标（已在其它端读过），则不重复 bump。
@@ -5299,7 +5302,11 @@
       if (!existed && (m.ts || 0) > (lastReadCache[m.from] || 0)) {
         addUnread(m.from);
       }
-      upsertConversation("peer", m.from, m.ts, m.text, false);
+      upsertConversation("peer", peerOfMsg, m.ts, m.text, false);
+    } else {
+      // 同一账号其它设备发来的消息（跨端同步）：不弹未读、不通知，
+      // 但照样把会话前置并刷新预览，让本端会话列表实时反映「我在另一台设备发了消息」。
+      upsertConversation("peer", peerOfMsg, m.ts, m.text, false);
     }
     // 页面隐藏时（最小化 / 切到其它标签）：弹系统通知提醒新私聊消息
     if (document.hidden && m.from !== myId) {
@@ -5945,6 +5952,9 @@
       upsertConversation("group", gid, m.ts, m.text, false);
     } else if (m.from !== myId) {
       bumpGroupUnread(gid);
+      upsertConversation("group", gid, m.ts, m.text, false);
+    } else {
+      // 同一账号其它设备发来的群消息（跨端同步）：不弹未读/通知，但前置会话刷新预览
       upsertConversation("group", gid, m.ts, m.text, false);
     }
     // 页面隐藏时：弹系统通知提醒新群消息（标题群名，正文「发送者：文本」）
