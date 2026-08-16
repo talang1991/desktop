@@ -854,7 +854,7 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 
 /* 顶栏 💬 按钮上的未读总数徽标（抽屉关闭时仍始终可见） */
-#chatBtn { position: relative; }
+#chatBtn { position: relative; overflow: visible; }
 .nav-badge {
   position: absolute;
   top: -7px;
