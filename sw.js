@@ -4,7 +4,7 @@
 // 注册地址固定为 /sw.js（不加 ?v=），由浏览器按字节差异自动检测更新。
 const CACHE = "static-v1";
 // SW 自身版本标记（仅用于前端探测“新 SW 是否已生效”，与页面部署版本无关）
-const SW_SELF_VERSION = 2;
+const SW_SELF_VERSION = 3;
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
@@ -187,3 +187,31 @@ async function pruneStaleAssets(cache) {
     }
   }));
 }
+
+// ---------- 系统通知：点击处理 ----------
+// 页面（隐藏态）通过 registration.showNotification 弹出来电 / 新消息提醒；
+// 用户点击通知主体或通知上的「接听 / 拒绝」按钮时，在这里聚焦回应用，并把来电动作回传页面。
+self.addEventListener("notificationclick", (event) => {
+  const data = (event.notification && event.notification.data) || {};
+  event.notification.close();
+  const action = event.action || ""; // ""（点击主体）| "accept" | "reject"
+  event.waitUntil((async () => {
+    const cls = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    // 优先聚焦已存在的窗口；否则打开应用首页
+    let client = null;
+    for (const c of cls) { if (c.focused) { client = c; break; } }
+    if (!client && cls.length) client = cls[0];
+    if (client) {
+      await client.focus();
+      if (action === "accept" || action === "reject") {
+        // 来电「接听 / 拒绝」按钮：转交页面通话模块处理
+        try { client.postMessage({ type: "NOTIFY_CALL_ACTION", action }); } catch (e) {}
+      } else if (data.kind === "call") {
+        // 点击来电通知主体：仅聚焦回应用，不自动接听（避免误接）
+        try { client.postMessage({ type: "NOTIFY_CALL_FOCUS", kind: "call" }); } catch (e) {}
+      }
+    } else {
+      await self.clients.openWindow("/");
+    }
+  })());
+});

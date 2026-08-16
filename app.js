@@ -1486,6 +1486,9 @@
       "call.incoming.voice": "语音通话邀请",
       "call.incoming.video": "视频通话邀请",
       "call.incoming.chat": "聊天请求",
+      "call.incoming.prefix": "来电：",
+      "call.notify.accept": "接听",
+      "call.notify.reject": "拒绝",
       "call.state.calling": "呼叫中…",
       "call.state.ringing": "等待对方接听…",
       "call.state.connected": "通话中",
@@ -1745,6 +1748,9 @@
       "call.incoming.voice": "Incoming voice call",
       "call.incoming.video": "Incoming video call",
       "call.incoming.chat": "Chat request",
+      "call.incoming.prefix": "Incoming call: ",
+      "call.notify.accept": "Accept",
+      "call.notify.reject": "Decline",
       "call.state.calling": "Calling…",
       "call.state.ringing": "Waiting for answer…",
       "call.state.connected": "On call",
@@ -2386,7 +2392,7 @@
   }
 
   // ---------- 事件 ----------
-  $("#chatBtn").onclick = openChat;
+  $("#chatBtn").onclick = () => { ensureNotifyPermission(); openChat(); };
   chatClose.onclick = closeChat;
   chatSendBtn.onclick = sendChat;
   friendAddBtn.onclick = addFriend;
@@ -3899,6 +3905,21 @@
     if (incomingAvatar) renderAvatarInto(incomingAvatar, f && f.avatar, ((f && f.username) || "?").charAt(0).toUpperCase());
     callIncoming.hidden = false;
     try { playRingtone(); } catch {}
+    // 页面隐藏时，来电必须靠系统通知才能被注意到（页面内接听界面不可见）
+    if (document.hidden) {
+      ensureNotifyPermission();
+      showSystemNotification(t("call.incoming.prefix") + ((f && f.username) || String(from)), {
+        body: t(type === "video" ? "call.incoming.videoMsg" : "call.incoming.voiceMsg"),
+        tag: "incoming-call",
+        requireInteraction: true,
+        renotify: true,
+        data: { kind: "call", from, type },
+        actions: [
+          { action: "accept", title: t("call.notify.accept") },
+          { action: "reject", title: t("call.notify.reject") },
+        ],
+      });
+    }
   }
 
   function hideIncomingCall() {
@@ -5084,21 +5105,60 @@
     }
   }
 
-  // 用 WebAudio 生成短促提示音，避免依赖外部音频文件
-  function playRingtone() {
+  // ---------- 提示音（Web Audio 合成，无需外部音频文件，离线可用）----------
+  // 复用单一 AudioContext：避免每次事件都重建/关闭；浏览器要求在用户手势后才可 resume 解锁。
+  let _audioCtx = null;
+  function getAudioCtx() {
     try {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return;
-      const ctx = new Ctx();
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.connect(g); g.connect(ctx.destination);
-      o.frequency.value = 660;
-      g.gain.value = 0.05;
-      o.start();
-      setTimeout(() => { try { o.stop(); ctx.close(); } catch {} }, 600);
+      if (!_audioCtx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return null;
+        _audioCtx = new Ctx();
+      }
+      if (_audioCtx.state === "suspended") _audioCtx.resume().catch(() => {});
+      return _audioCtx;
+    } catch { return null; }
+  }
+  // 单个柔和音符：sine + 快速起音 + 指数衰减，听感不刺耳
+  function playTone(ctx, freq, startAt, dur, peak) {
+    try {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, startAt);
+      gain.gain.setValueAtTime(0.0001, startAt);
+      gain.gain.exponentialRampToValueAtTime(peak, startAt + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + dur);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(startAt);
+      osc.stop(startAt + dur + 0.02);
     } catch {}
   }
+  // 新消息提示音：温馨「叮—咚」两声（B5 → E6），比来电更轻，避免打扰
+  function playMessageChime() {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const t0 = ctx.currentTime;
+    playTone(ctx, 988, t0, 0.15, 0.14);
+    playTone(ctx, 1319, t0 + 0.12, 0.22, 0.14);
+  }
+  // 来电铃声：三声上行「叮叮叮」（A5 → C#6 → E6），辨识度高、节奏轻快
+  function playCallRing() {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const t0 = ctx.currentTime;
+    const seq = [880, 1109, 1319];
+    for (let i = 0; i < seq.length; i++) playTone(ctx, seq[i], t0 + i * 0.2, 0.16, 0.16);
+  }
+  // 兼容旧调用点（showIncomingCall 仍调用 playRingtone）
+  function playRingtone() { playCallRing(); }
+  // 首个用户手势后解锁 AudioContext（满足浏览器 autoplay 策略），确保隐藏态也能出声
+  function unlockAudioOnce() {
+    const ctx = getAudioCtx();
+    if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
+  }
+  window.addEventListener("pointerdown", unlockAudioOnce, { once: true });
+  window.addEventListener("keydown", unlockAudioOnce, { once: true });
 
   function sendChat() {
     const text = chatInput.value.trim();
@@ -5225,6 +5285,16 @@
         addUnread(m.from);
       }
       upsertConversation("peer", m.from, m.ts, m.text, false);
+    }
+    // 页面隐藏时（最小化 / 切到其它标签）：弹系统通知提醒新私聊消息
+    if (document.hidden && m.from !== myId) {
+      const f = friends.find((x) => x.id === m.from);
+      showSystemNotification((f && f.username) || String(m.from), {
+        body: String(m.text || ""),
+        tag: "msg-" + m.from,
+        data: { kind: "message", from: m.from },
+      });
+      playMessageChime();
     }
   }
   // 打开会话时：先渲染本地缓存（即时、离线可用），再增量同步服务端
@@ -5859,6 +5929,18 @@
       bumpGroupUnread(gid);
       upsertConversation("group", gid, m.ts, m.text, false);
     }
+    // 页面隐藏时：弹系统通知提醒新群消息（标题群名，正文「发送者：文本」）
+    if (document.hidden && m.from !== myId) {
+      const g = groups.find((x) => x.id === m.groupId);
+      const gname = (g && g.name) || ("群 " + m.groupId);
+      const sm = groupMemberName(m.groupId, m.from);
+      showSystemNotification(gname, {
+        body: sm.name + "：" + String(m.text || ""),
+        tag: "grp-" + m.groupId,
+        data: { kind: "group", groupId: m.groupId },
+      });
+      playMessageChime();
+    }
   }
 
   // ---- 群消息：本地缓存渲染 ----
@@ -6029,6 +6111,50 @@
       localStorage.setItem("app-version", ver);
     }
   }
+  // ---- 系统通知（页面隐藏时提醒新消息 / 来电）----
+  // 仅当 Notification 权限已授予且页面处于隐藏态（document.hidden）时，由 JS 主动通过 Service
+  // Worker 弹出系统通知。注意：这是「页面存活时主动弹通知」，并非依赖 Push API 的服务端推送，
+  // 因此不依赖 Google FCM —— 国内 Android / iOS / 桌面浏览器全平台可用（这正是 Web Push 在国内最大的坑）。
+  function notificationsSupported() { return typeof Notification !== "undefined"; }
+
+  async function ensureNotifyPermission() {
+    if (!notificationsSupported()) return "unsupported";
+    const cur = Notification.permission;
+    if (cur === "granted" || cur === "denied") return cur;
+    // 仅在用户手势上下文调用（点击聊天 / 通话），否则浏览器会忽略请求
+    try { return await Notification.requestPermission(); } catch (e) { return Notification.permission; }
+  }
+
+  // 统一走 SW.showNotification：支持 notificationclick 聚焦回应用 + 来电「接听 / 拒绝」按钮；
+  // 失败回退到页面内 new Notification（点击聚焦能力受限，但提醒仍有效）。
+  async function showSystemNotification(title, options) {
+    if (!notificationsSupported() || Notification.permission !== "granted") return false;
+    options = options || {};
+    if (!options.icon) options.icon = "/icon-192.png";
+    try {
+      if ("serviceWorker" in navigator) {
+        const reg = await navigator.serviceWorker.ready;
+        await reg.showNotification(title, options);
+        return true;
+      }
+    } catch (e) { /* 回退到页面内通知 */ }
+    try { new Notification(title, options); return true; } catch (e) {}
+    return false;
+  }
+
+  // 调试 / 测试钩子（无害，便于排查通知权限与触发）
+  if (typeof window !== "undefined") {
+    window.__notify = {
+      show: showSystemNotification,
+      ensure: ensureNotifyPermission,
+      supported: notificationsSupported,
+      permission: () => (notificationsSupported() ? Notification.permission : "none"),
+      chime: () => { playMessageChime(); return true; },
+      ring: () => { playCallRing(); return true; },
+      audioState: () => (_audioCtx ? _audioCtx.state : "none"),
+    };
+  }
+
   function setupSWUpdateListener() {
     if (!("serviceWorker" in navigator)) return;
     navigator.serviceWorker.addEventListener("message", (event) => {
@@ -6036,6 +6162,11 @@
       if (data.type === "SW_VERSION_UPDATE" && data.version) handleServerVersion(data.version);
       else if (data.type === "HTML_VERSION" && data.version) handleServerVersion(data.version);
       else if (data.type === "SW_READY" && data.htmlVersion) handleServerVersion(data.htmlVersion);
+      // 来电通知的「接听 / 拒绝」按钮：由 SW notificationclick 回传，这里转交给通话模块
+      else if (data.type === "NOTIFY_CALL_ACTION") {
+        if (data.action === "accept") { try { acceptCall(); } catch (e) {} }
+        else if (data.action === "reject") { try { declineCall(); } catch (e) {} }
+      }
     });
     // 向已激活的 SW 查询“服务端最新 HTML 版本”。SW 会直接问服务端（绕过本端缓存），
     // 因此无论 SW 本端优先返回的是否为旧缓存、后台 revalidation 是否已完成，都能拿到真实最新版本。
