@@ -2949,7 +2949,11 @@
         onChatReceived({
           id: m.id || crypto.randomUUID(),
           from: m.from,
-          to: myId,
+          // 服务端回显（同账号多端同步）的「to」就是真实收件人（好友 ID），
+          // 不要被强制写成 myId，否则 self-echo 会落到「自己↔自己」会话——
+          // 表现为列表里出现一个标题为「好友」、预览恰为消息文案的鬼会话。
+          // 仅当服务端没传 to（极旧版本）才退回 myId，保证向后兼容。
+          to: (m.to != null ? m.to : myId),
           text: m.text,
           ts: m.ts || Date.now(),
         });
