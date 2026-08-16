@@ -81,21 +81,70 @@
     mo.observe(toastEl, { attributes: true, attributeFilter: ["hidden"] });
   }
 
-  /* ---------- 4. 卡片入场错峰 ---------- */
+  /* ---------- 4. 卡片入场：登录后只播一次 ---------- */
+  // 修复：原本 .card 永久挂着 cardIn 动画，而加载时 renderGrid 会被连续调用多次
+  // （本地渲染 → 服务端同步渲染 → 可能的离线补推渲染），每次重建都重播入场动画；
+  // 叠加「插入后再改 --i 导致 animation-delay 变化重启动画」，于是加载后出现两次/多次动画。
+  // 现改为：仅当 appView 显示后首次出现卡片时，由脚本一次性设好 --i 并加 .enter 触发，
+  // entrancePlayed 置位后后续所有 re-render（同步/筛选/搜索）都不再播，保证只出现一次。
   var grid = document.getElementById("appGrid");
-  if (grid) {
-    var rafId = null;
-    function reindex() {
-      rafId = null;
-      var cards = grid.querySelectorAll(".card:not(.card-broken)");
-      for (var i = 0; i < cards.length; i++) {
-        cards[i].style.setProperty("--i", String(i % 16));
-      }
+  var appView = document.getElementById("appView");
+  var entrancePlayed = false; // 本次登录会话是否已播过
+  var entranceArmed = false;  // appView 已显示，允许播
+
+  function applyStagger() {
+    if (!grid) return;
+    var cards = grid.querySelectorAll(".card:not(.card-broken)");
+    for (var i = 0; i < cards.length; i++) {
+      cards[i].style.setProperty("--i", String(i % 16));
     }
+  }
+
+  function playEntrance() {
+    if (reduceMotion || !grid || entrancePlayed) return;
+    var cards = grid.querySelectorAll(".card:not(.card-broken)");
+    if (cards.length === 0) return;
+    applyStagger();                       // 先设好 --i，再加 .enter，避免 delay 变化重启
+    for (var i = 0; i < cards.length; i++) cards[i].classList.add("enter");
+    entrancePlayed = true;
+    var total = 520 + (cards.length % 16) * 38;  // 末张入场结束后再移除类
+    setTimeout(function () {
+      var cur = grid.querySelectorAll(".card.enter");
+      for (var j = 0; j < cur.length; j++) cur[j].classList.remove("enter");
+    }, total);
+  }
+
+  if (grid) {
+    var pending = false;
     var mo2 = new MutationObserver(function () {
-      if (rafId == null) rafId = requestAnimationFrame(reindex);
+      if (entranceArmed && !entrancePlayed) {
+        // 等当前批次卡片插完再播（childList 可能分批触发）
+        if (!pending) {
+          pending = true;
+          requestAnimationFrame(function () { pending = false; playEntrance(); });
+        }
+      }
     });
     mo2.observe(grid, { childList: true });
+  }
+
+  function armIfVisible() {
+    if (!appView) return;
+    if (!appView.hasAttribute("hidden")) {
+      // 已可见（含会话恢复时已展示的情况）→ 武装并在有卡片时立即播
+      entranceArmed = true;
+      if (grid && grid.children.length && !entrancePlayed) playEntrance();
+    } else {
+      // 隐藏（登出）→ 复位，下次登录重新播一次
+      entranceArmed = false;
+      entrancePlayed = false;
+    }
+  }
+
+  if (appView) {
+    armIfVisible(); // 初始：处理会话恢复时 appView 已可见的情况
+    var appMo = new MutationObserver(armIfVisible);
+    appMo.observe(appView, { attributes: true, attributeFilter: ["hidden"] });
   }
 
   // 暴露给其它脚本在关键节点手动庆祝（如首条应用添加）

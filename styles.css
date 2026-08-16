@@ -2393,6 +2393,9 @@ input, select, textarea, .friend-row, .conv-row, .member-picker, .group-list, .f
   border-radius: var(--radius);
   padding: 20px 14px 16px;
   box-shadow: var(--shadow-sm);
+}
+/* 入场动画仅由 JS 在「登录后首次渲染」时添加 .enter 触发，避免每次 renderGrid 重建都重播 */
+.card.enter {
   animation: cardIn .5s var(--ease) both;
   animation-delay: calc((var(--i, 0)) * 38ms);
 }
