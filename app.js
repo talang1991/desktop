@@ -1349,6 +1349,9 @@
       "auth.sessionExpired": "登录已失效，请重新登录",
       "update.text": "已更新到新版本 v",
       "update.reload": "刷新",
+      "install.text": "安装到桌面，随时一键打开",
+      "install.now": "安装",
+      "install.later": "稍后",
       "settings.title": "设置",
       "settings.backup": "数据备份",
       "settings.import": "📥 从 JSON 文件导入",
@@ -1605,6 +1608,9 @@
       "auth.sessionExpired": "Session expired, please log in again",
       "update.text": "Updated to version v",
       "update.reload": "Reload",
+      "install.text": "Install to desktop for one-tap access",
+      "install.now": "Install",
+      "install.later": "Later",
       "settings.title": "Settings",
       "settings.backup": "Data Backup",
       "settings.import": "📥 Import from JSON",
@@ -5976,6 +5982,40 @@
     if (last && last !== cur && cur !== "unknown") showUpdateBanner(cur);
     localStorage.setItem("app-version", cur);
   }
+
+  // ---------- 安装到桌面（PWA）：捕获 beforeinstallprompt，展示轻量提示条 ----------
+  function setupInstallPrompt() {
+    const banner = $("#installBanner");
+    const btn = $("#installBtn");
+    const dismiss = $("#installDismiss");
+    // 已安装或曾主动忽略则不再打扰；不支持捕获安装事件的环境（如 iOS Safari）走系统“添加到主屏幕”
+    if (localStorage.getItem("app-installed") === "1") return;
+    const canPrompt = "BeforeInstallPromptEvent" in window || "onbeforeinstallprompt" in window;
+    if (!canPrompt) return;
+
+    let deferred = null;
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();              // 阻止浏览器默认迷你信息条，改用我们自己的提示条
+      deferred = e;
+      if (localStorage.getItem("app-install-dismissed") !== "1" && banner) banner.hidden = false;
+    });
+
+    if (btn) btn.addEventListener("click", async () => {
+      if (!deferred) return;
+      deferred.prompt();
+      try { await deferred.userChoice; } catch (e) {}
+      deferred = null;
+      if (banner) banner.hidden = true;
+    });
+    if (dismiss) dismiss.addEventListener("click", () => {
+      if (banner) banner.hidden = true;
+      localStorage.setItem("app-install-dismissed", "1");
+    });
+    window.addEventListener("appinstalled", () => {
+      if (banner) banner.hidden = true;
+      localStorage.setItem("app-installed", "1");
+    });
+  }
   // 接收 Service Worker 的版本通知，并主动查询，确保本端优先（旧缓存）场景下更新“及时上报”。
   // 两种来源：
   //  ① SW_VERSION_UPDATE —— SW 后台拉到新 HTML 时主动推送（快速路径，可能因竞态早于本监听而丢失）；
@@ -6030,6 +6070,7 @@
     registerServiceWorker();
     setupSWUpdateListener();
     setupUpdateBanner();
+    setupInstallPrompt();
     checkAuth();
   }
   init();

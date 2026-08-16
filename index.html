@@ -6,7 +6,14 @@
   <title>Web 应用导航面板</title>
   <link rel="icon" type="image/x-icon" href="favicon.ico?v=1" />
   <link rel="shortcut icon" href="favicon.ico?v=1" />
-  <link rel="stylesheet" href="styles.css?v=80" />
+  <link rel="manifest" href="manifest.webmanifest?v=1" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=1" />
+  <meta name="theme-color" content="#4f6ef7" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="应用导航" />
+  <link rel="stylesheet" href="styles.css?v=81" />
 </head>
 <body>
   <!-- 内联 SVG 图标雪碧图：品牌/访客用极光渐变填充，其余 UI 图标用 currentColor 描边随主题色变化 -->
@@ -123,6 +130,14 @@
     <span class="update-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-sparkle"/></svg></span>
     <span id="updateText" class="update-text">已更新到新版本</span>
     <button id="updateReload" class="btn small" type="button" data-i18n="update.reload">刷新</button>
+  </div>
+
+  <!-- 安装到桌面提示条（浏览器允许安装且未安装/未忽略时由 app.js 显示） -->
+  <div id="installBanner" class="install-banner" hidden>
+    <span class="install-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><use href="#sym-brand"/></svg></span>
+    <span id="installText" class="install-text" data-i18n="install.text">安装到桌面，随时一键打开</span>
+    <button id="installBtn" class="btn primary small" type="button" data-i18n="install.now">安装</button>
+    <button id="installDismiss" class="btn ghost small" type="button" data-i18n="install.later">稍后</button>
   </div>
 
   <!-- 主应用 -->
@@ -557,7 +572,7 @@
     <input id="importChromeFile" type="file" accept=".html,text/html" hidden />
   </div>
 
-  <script src="app.js?v=127"></script>
+  <script src="app.js?v=128"></script>
   <script src="delight.js?v=4"></script>
 </body>
 </html>

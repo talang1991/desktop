@@ -2513,6 +2513,39 @@ input, select, textarea, .friend-row, .conv-row, .member-picker, .group-list, .f
   100% { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+/* ---------- 安装到桌面提示条：底部居中玻璃卡 ---------- */
+.install-banner {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  z-index: 320;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px 12px 12px;
+  max-width: calc(100vw - 32px);
+  background: var(--surface-glass);
+  backdrop-filter: saturate(160%) blur(16px);
+  -webkit-backdrop-filter: saturate(160%) blur(16px);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: 16px;
+  box-shadow: 0 14px 44px rgba(31, 38, 135, 0.18);
+  color: var(--text);
+  animation: installIn .5s var(--ease) both;
+}
+.install-banner[hidden] { display: none; }
+.install-banner .install-icon { display: inline-flex; flex: 0 0 auto; }
+.install-banner .install-icon svg {
+  width: 34px; height: 34px; display: block;
+  filter: drop-shadow(0 4px 10px rgba(79, 110, 247, .35));
+}
+.install-banner .install-text { font-size: 13.5px; line-height: 1.35; flex: 1 1 auto; color: var(--text); }
+.install-banner .btn.small { flex: 0 0 auto; }
+@keyframes installIn {
+  0% { opacity: 0; transform: translate(-50%, 24px) scale(.92); }
+  70% { transform: translate(-50%, -4px) scale(1.01); }
+  100% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .install-banner { animation: none; }
+}
+
 /* ---------- 登录卡：极光背景 + 漂浮 ---------- */
 .auth-view {
   background:
