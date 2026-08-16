@@ -4763,7 +4763,11 @@
     if (!meetingActive || meetingRoomId == null) return;
     // 记录新加入者昵称（服务端 room-join 已携带），供瓦片/聊天显示
     if (name) roomPeers.set(from, { name, avatar: "" });
-    teardownPeer(from);
+    // 注意：不要无条件 teardownPeer(from)。room-join 可能被服务端重复下发（同一成员多次到达），
+    // 每次 teardown 都会拆掉正在协商的连接并重建，产生多个 offer；本端最后一代 pc 只持有最后一次
+    // 的 offer，对方回的其余 answer 全部落在 stable 窗口，被“过期 answer”守卫忽略 → 协商错乱、
+    // 对端流 ontrack 不触发、视频流无法渲染。连接建立/重连交由 connectMeetingPeer 幂等处理：
+    // 已连接/连接中直接返回，失败或关闭才重建。
     connectMeetingPeer(from);
     if (isSharingScreen && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       emitSignal({ type: "room-screen", roomId: meetingRoomId, to: from });
