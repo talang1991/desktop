@@ -81,16 +81,18 @@
     mo.observe(toastEl, { attributes: true, attributeFilter: ["hidden"] });
   }
 
-  /* ---------- 4. 卡片入场：登录后只播一次 ---------- */
+  /* ---------- 4. 卡片入场：登录后自动播一次；切换分类时手动重播 ---------- */
   // 修复：原本 .card 永久挂着 cardIn 动画，而加载时 renderGrid 会被连续调用多次
   // （本地渲染 → 服务端同步渲染 → 可能的离线补推渲染），每次重建都重播入场动画；
   // 叠加「插入后再改 --i 导致 animation-delay 变化重启动画」，于是加载后出现两次/多次动画。
   // 现改为：仅当 appView 显示后首次出现卡片时，由脚本一次性设好 --i 并加 .enter 触发，
-  // entrancePlayed 置位后后续所有 re-render（同步/筛选/搜索）都不再播，保证只出现一次。
+  // entrancePlayed 置位后不再自动重播（保证初始加载只出现一次）。
+  // 但「切换分类 tab」属于用户主动操作，应重新播一次入场动画——由 app.js 在切换分类后
+  // 调用 window.__delightEntrance() 触发 replayEntrance()，不受 entrancePlayed 限制。
   var grid = document.getElementById("appGrid");
   var appView = document.getElementById("appView");
-  var entrancePlayed = false; // 本次登录会话是否已播过
-  var entranceArmed = false;  // appView 已显示，允许播
+  var entrancePlayed = false; // 本次登录会话初始自动播放是否已播过
+  var entranceArmed = false;  // appView 已显示，允许自动播
 
   function applyStagger() {
     if (!grid) return;
@@ -100,19 +102,35 @@
     }
   }
 
-  function playEntrance() {
-    if (reduceMotion || !grid || entrancePlayed) return;
+  // 对当前网格里的卡片播一次入场动画（重播安全：先清 .enter 并强制 reflow 以重启动画）
+  function playEntranceCards() {
+    if (reduceMotion || !grid) return;
     var cards = grid.querySelectorAll(".card:not(.card-broken)");
     if (cards.length === 0) return;
+    for (var k = 0; k < cards.length; k++) cards[k].classList.remove("enter");
     applyStagger();                       // 先设好 --i，再加 .enter，避免 delay 变化重启
+    void grid.offsetWidth;                // 强制回流，确保重播时动画重新从 0% 开始
     for (var i = 0; i < cards.length; i++) cards[i].classList.add("enter");
-    entrancePlayed = true;
     var total = 520 + (cards.length % 16) * 38;  // 末张入场结束后再移除类
     setTimeout(function () {
       var cur = grid.querySelectorAll(".card.enter");
       for (var j = 0; j < cur.length; j++) cur[j].classList.remove("enter");
     }, total);
   }
+
+  // 初始自动播：登录后仅一次（由 MutationObserver 触发）
+  function playEntrance() {
+    if (entrancePlayed || !grid) return;
+    playEntranceCards();
+    entrancePlayed = true;
+  }
+
+  // 暴露给 app.js：用户切换分类 tab 后，对当前卡片重新播一次（仅在初始动画已播过之后才生效）
+  function replayEntrance() {
+    if (!entrancePlayed) return; // 还没播过初始动画，交给自动播，避免抢占/错位
+    playEntranceCards();
+  }
+  window.__delightEntrance = replayEntrance;
 
   if (grid) {
     var pending = false;

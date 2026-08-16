@@ -397,7 +397,7 @@
       const b = document.createElement("button");
       b.className = "chip" + (cat === activeCategory ? " active" : "");
       b.textContent = cat;
-      b.onclick = () => { activeCategory = cat; renderCategories(); renderGrid(); };
+      b.onclick = () => { activeCategory = cat; renderCategories(); renderGrid(); if (window.__delightEntrance) window.__delightEntrance(); };
       filtersEl.appendChild(b);
     });
 
