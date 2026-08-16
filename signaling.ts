@@ -274,11 +274,13 @@ export function attachSignaling(server: Server): void {
 
         // A 呼叫好友 B（按 userId 定向）。media 字段（"audio"|"video"）用于区分
         // 普通文字握手呼叫与音视频通话呼叫，让被叫方弹出接听界面。
+        // connId 用于多设备同账号场景下区分「PC 连」与「手机连」两条独立 P2P 连接。
         case "call": {
           const to = Number(msg.to);
           if (!to) return;
           const media = typeof msg.media === "string" ? msg.media : undefined;
-          const ok = routeTo(to, { type: "incoming-call", from: user!.id, media });
+          const connId = typeof msg.connId === "string" ? msg.connId : undefined;
+          const ok = routeTo(to, { type: "incoming-call", from: user!.id, media, connId });
           if (!ok) send(ws, { type: "call-offline", to });
           return;
         }

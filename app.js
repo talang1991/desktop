@@ -2932,7 +2932,7 @@
         try { loadFriends(); } catch (e) { console.error("[SIG-CLIENT] loadFriends 失败:", e); }
         break;
       case "incoming-call":
-        handleIncomingCall(m.from, m.media);
+        handleIncomingCall(m.from, m.media, m.connId);
         break;
       case "call-offline":
         if (currentPeer === m.to) {
@@ -3407,7 +3407,7 @@
     delete chatPeerName.dataset.i18nKey;
     renderAvatarInto($("#chatPeerAvatar"), f.avatar, f.username.charAt(0).toUpperCase());
     // 重置顶栏状态，避免从群聊切换过来时仍残留“群聊·X人”
-    const p = peers.get(Number(f.id));
+    const p = getPeerConn(f.id);
     if (p && (p.p2pReady || (p.pc && p.pc.connectionState === "connected"))) {
       setChatStatus("P2P 已直连 🔗", "ok");
     } else if (p && p.pc && p.pc.connectionState === "connecting") {
@@ -3447,32 +3447,54 @@
 
   // ---------- 每好友一条独立连接（网状）：A 可与 B 直连，同时后台与 C 建连 ----------
   // currentPeer 仅表示“当前显示的是哪个会话”，来电绝不再改动它（避免抢界面）。
-  function getPeerConn(id) { return peers.get(Number(id)); }
-  function ensurePeerConn(id) {
+  // 多设备同账号：每条 P2P 连接带一个连接级 connId，key 形如 `userId:connId`。
+  // 这样好友 A 可以同时持有「PC 连 A」和「手机连 A」两条独立连接，互不覆盖，
+  // 解决「同账号多设备同时与同一好友直连时协商卡死 / 互相撞掉」的问题。
+  // （媒体通话/会议仍按 userId 单键复用，不受影响；聊天连接用 connId 区分。）
+  function peerUserIdOf(key) { return Number(String(key).split(":")[0]); }
+  function peerConnKey(userId, connId) {
+    userId = Number(userId);
+    return connId ? (userId + ":" + connId) : String(userId);
+  }
+  function getPeerConn(id) {
     id = Number(id);
-    let p = peers.get(id);
-    if (!p) { p = { pc: null, dc: null, p2pReady: false, status: "new" }; peers.set(id, p); }
+    for (const [k, p] of peers) { if (peerUserIdOf(k) === id) return p; }
+    return undefined;
+  }
+  function getPeerConns(id) {
+    id = Number(id);
+    const out = [];
+    for (const [k, p] of peers) { if (peerUserIdOf(k) === id) out.push(p); }
+    return out;
+  }
+  // 入参可为数字(userId，媒体/会议复用)或字符串(userId:connId，聊天多设备)
+  function ensurePeerConn(key) {
+    let p = peers.get(key);
+    if (!p) { p = { pc: null, dc: null, p2pReady: false, status: "new", connId: null }; peers.set(key, p); }
     return p;
   }
-  // 关闭并移除某好友的连接（不影响其它好友）
+  // 关闭并移除某好友的全部连接（按 userId 匹配，含多设备 connId 键）
   function dropPeerConn(id) {
     id = Number(id);
-    const p = peers.get(id);
-    if (!p) return;
-    try { if (p.dc) p.dc.close(); } catch {}
-    try { if (p.pc) p.pc.close(); } catch {}
-    peers.delete(id);
-    peerStreams.delete(id); // 一并清理缓存的远端流，避免会议网格残留旧流
+    for (const [k, p] of [...peers]) {
+      if (peerUserIdOf(k) === id) {
+        try { if (p.dc) p.dc.close(); } catch {}
+        try { if (p.pc) p.pc.close(); } catch {}
+        peers.delete(k);
+        peerStreams.delete(id); // 一并清理缓存的远端流，避免会议网格残留旧流
+      }
+    }
   }
   // 仅清理某好友旧 pc/dc（用于重协商），保留 map 条目
   function teardownPeer(id) {
     id = Number(id);
-    const p = peers.get(id);
-    if (!p) return;
-    p.p2pReady = false;
-    try { if (p.dc) p.dc.close(); } catch {}
-    try { if (p.pc) p.pc.close(); } catch {}
-    p.pc = null; p.dc = null;
+    for (const [k, p] of [...peers]) {
+      if (peerUserIdOf(k) !== id) continue;
+      p.p2pReady = false;
+      try { if (p.dc) p.dc.close(); } catch {}
+      try { if (p.pc) p.pc.close(); } catch {}
+      p.pc = null; p.dc = null;
+    }
   }
   // 仅当该好友是当前显示会话时，才更新聊天状态栏（C 来电不得改动 B 的界面）
   function setPeerStatus(id, text, cls) {
@@ -3523,12 +3545,15 @@
   function startCall(to, name, mediaType) {
     to = Number(to);
     enableChatInput();
-    const p = ensurePeerConn(to);
+    // 每条连接一个 connId：让好友端能把「PC 连」与「手机连」区分开，互不覆盖
+    const connId = "c_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const key = peerConnKey(to, connId);
+    const p = ensurePeerConn(key);
     const st = p.pc ? p.pc.connectionState : null;
     const hasLive = p.pc && (st === "connected" || st === "connecting" || st === "new");
     // 媒体呼叫：始终通知对方（即便已有连接），用于弹出接听界面
     if (mediaType && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
-      sigSocket.send(JSON.stringify({ type: "call", to, media: mediaType }));
+      sigSocket.send(JSON.stringify({ type: "call", to, media: mediaType, connId }));
     }
     if (hasLive) return; // 已有可用连接：不重复建连、不降级状态
     // 只有该好友是当前显示会话时，才显示“正在连接”
@@ -3538,35 +3563,37 @@
     }
     enableRelay(to);
     if (!mediaType && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
-      sigSocket.send(JSON.stringify({ type: "call", to }));
+      sigSocket.send(JSON.stringify({ type: "call", to, connId }));
     }
-    startOffer(to, name);
+    startOffer(to, name, connId);
   }
 
-  function handleIncomingCall(from, media) {
+  function handleIncomingCall(from, media, connId) {
     from = Number(from);
     const f = friends.find((x) => x.id === from) || { id: from, username: String(from), online: true, avatar: "" };
     const viewingThis = currentPeer != null && Number(currentPeer) === from && chatVisible;
     // 仅当正在查看该好友时才清未读；否则保留红点，由后续消息 onChatReceived 累加
     if (viewingThis) clearUnread(from);
+    const key = peerConnKey(from, connId);
     // 音视频来电：弹出接听界面（绝不改动 currentPeer，绝不抢当前显示的会话）
     if (media) {
       showIncomingCall(from, media, f);
       // 仍确保该好友 pc 就绪（应答方），便于后续协商媒体轨道
-      const p = ensurePeerConn(from);
-      if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); p.mediaAdded = false; }
+      const p = ensurePeerConn(key);
+      if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); p.mediaAdded = false; p.connId = connId || null; }
       enableRelay(from);
       return;
     }
-    const p = ensurePeerConn(from);
+    const p = ensurePeerConn(key);
     // 若本端已有 offer（我方也曾主动呼叫该好友），回退为应答方，避免双向 offer 死锁
-    if (p.pc && p.pc.signalingState === "have-local-offer") teardownPeer(from);
+    if (p.pc && p.pc.signalingState === "have-local-offer") { try { p.pc.close(); } catch {} p.pc = null; p.dc = null; p.p2pReady = false; }
     // 准备该好友的连接（应答方）；绝不改动 currentPeer，绝不抢界面
     if (!p.pc) {
       p.pc = new RTCPeerConnection(rtcConfig());
       p.pc._peerId = from;
       setupPc(p);
       p.mediaAdded = false;
+      p.connId = connId || null;
       if (viewingThis) {
         setChatStatus("", "warn", { key: "chat.status.chatReq", params: { name: f.username } });
         clearEntering();
@@ -3593,11 +3620,13 @@
   }
 
   // ---------- WebRTC（每好友独立 pc/dc）----------
-  function startOffer(to, name) {
+  function startOffer(to, name, connId) {
     to = Number(to);
-    const p = ensurePeerConn(to);
-    teardownPeer(to); // 清理该好友旧连接
+    const key = peerConnKey(to, connId);
+    const p = ensurePeerConn(key);
+    teardownPeer(to); // 清理该好友本机旧连接（按 userId 匹配，含旧 connId 键）
     try {
+      p.connId = connId || null;
       p.pc = new RTCPeerConnection(rtcConfig());
       p.pc._peerId = to;
       setupPc(p);
@@ -3616,13 +3645,13 @@
     p.ignoreOffer = false;
     // 由双方 userId 大小决定“礼貌方”，结果两端一致，可预判冲突归属
     p.polite = (myId != null) ? (myId < id) : true;
-    p.pc.onicecandidate = (e) => { if (e.candidate) sendSignal(id, { candidate: e.candidate }); };
+    p.pc.onicecandidate = (e) => { if (e.candidate) sendSignal(id, { candidate: e.candidate, connId: p.connId || null }); };
     // 新增/移除媒体轨道（addTrack）会自动触发本事件 → 生成新 offer（含媒体），无需另建连接
     p.pc.onnegotiationneeded = async () => {
       try {
         p.makingOffer = true;
         await p.pc.setLocalDescription();
-        sendSignal(id, { sdp: p.pc.localDescription });
+        sendSignal(id, { sdp: p.pc.localDescription, connId: p.connId || null });
       } catch (err) {
         console.error("[WEBRTC] negotiationneeded error:", (err && err.message) || err);
       } finally {
@@ -3693,7 +3722,16 @@
       if (remoteVideo) remoteVideo.classList.toggle("screen", remoteIsSharingScreen);
       return;
     }
-    const p = ensurePeerConn(from);
+    // 多设备同账号：每条连接带 connId，按 (userId:connId) 区分，避免 PC/手机共用 userId 时互相撞连接。
+    // 仅对「收到的 offer」或「本机已存在对应连接」的答案/候选进行处理；其余
+    // （同账号其它设备间的连接答案被广播到本机）直接忽略，避免产生互不相关的垃圾连接。
+    const connId = data.connId || null;
+    const key = peerConnKey(from, connId);
+    const isOffer = !!(data.sdp && data.sdp.type === "offer");
+    let p;
+    if (isOffer || peers.has(key)) p = ensurePeerConn(key);
+    else { p = peers.get(key); if (!p) return; }
+    p.connId = connId || p.connId;
     if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); }
     try {
       if (data.sdp) {
@@ -3702,7 +3740,7 @@
         const offerCollision = (desc.type === "offer") && (p.makingOffer || p.pc.signalingState !== "stable");
         p.ignoreOffer = !p.polite && offerCollision;
         if (p.ignoreOffer) {
-          console.log("[WEBRTC] 忽略冲突 offer（impolite 方）", from);
+          console.log("[WEBRTC] 忽略冲突 offer（impolite 方）", from, connId);
           return;
         }
         try {
@@ -3720,7 +3758,8 @@
             // 被叫侧此时 localStream 尚为 null（未接听），因此不会在此误加。
             if (localStream && !p.mediaAdded) addLocalMediaTracks(p);
             await p.pc.setLocalDescription(); // 自动生成 answer（含本端媒体）
-            sendSignal(from, { sdp: p.pc.localDescription });
+            // 回带 connId：答案只被发起的那台设备消费，同账号其它设备忽略（避免撞连接）
+            sendSignal(from, { sdp: p.pc.localDescription, connId: p.connId || null });
           }
         } catch (err) {
           console.error("[WEBRTC] setRemoteDescription error:", (err && err.message) || err);
@@ -3738,7 +3777,7 @@
 
   function setupDataChannel(ch) {
     const id = ch._peerId;
-    const p = peers.get(Number(id));
+    const p = getPeerConn(id);
     ch.onopen = () => {
       if (p) p.p2pReady = true;
       clearEntering();
@@ -3770,7 +3809,7 @@
   function enableRelay(to) {
     relayActive = true;
     if (to != null) {
-      const p = peers.get(Number(to));
+      const p = getPeerConn(Number(to));
       if (p) p.p2pReady = false;
       setPeerStatus(to, "中继模式（服务器转发）", "warn");
     } else {
@@ -5198,8 +5237,12 @@
       sigSocket.send(JSON.stringify({ type: "chat", to: currentPeer, id, ts, text }));
       delivered = true;
     }
-    if (p && p.p2pReady && p.dc && p.dc.readyState === "open") {
-      p.dc.send(JSON.stringify({ type: "chat", id, ts, text }));
+    // P2P 快速通道：发给该好友本机已就绪的全部设备连接（多设备同账号时可能有多条），
+    // 接收端按消息 id 去重，不会重复渲染/计未读。中继仍照常 fan-out，保证可达。
+    for (const [k, p] of peers) {
+      if (peerUserIdOf(k) === Number(currentPeer) && p.p2pReady && p.dc && p.dc.readyState === "open") {
+        try { p.dc.send(JSON.stringify({ type: "chat", id, ts, text })); } catch {}
+      }
     }
     // 在线则实时已送达；离线（通道不可用）则消息已存服务端，对方上线后接收
     if (delivered) {
