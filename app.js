@@ -3648,6 +3648,12 @@
     p.pc.onicecandidate = (e) => { if (e.candidate) sendSignal(id, { candidate: e.candidate, connId: p.connId || null }); };
     // 新增/移除媒体轨道（addTrack）会自动触发本事件 → 生成新 offer（含媒体），无需另建连接
     p.pc.onnegotiationneeded = async () => {
+      // 守卫：仅在本端处于 stable 时才发起 offer。若上一次协商仍在进行
+      // （have-local-offer / have-remote-offer），本次为冗余触发（glare 后或重协商竞态），
+      // 直接丢弃——否则会产生第二个 offer → 第二个 answer，旧 answer 在 stable 状态到达时
+      // 抛 “Called in wrong state: stable” 并中断连接。正常初始建连（stable）与
+      // 屏幕共享等重协商（连接已建立后为 stable）均不受影响。
+      if (p.pc.signalingState !== "stable") return;
       try {
         p.makingOffer = true;
         await p.pc.setLocalDescription();
@@ -3736,21 +3742,21 @@
     try {
       if (data.sdp) {
         const desc = new RTCSessionDescription(data.sdp);
-        // 完美协商：检测 offer 冲突（本端正在发 offer 或连接非稳定态）
-        const offerCollision = (desc.type === "offer") && (p.makingOffer || p.pc.signalingState !== "stable");
-        p.ignoreOffer = !p.polite && offerCollision;
-        if (p.ignoreOffer) {
-          console.log("[WEBRTC] 忽略冲突 offer（impolite 方）", from, connId);
-          return;
-        }
-        try {
-          // polite 方遇到冲突时，必须先回滚本地 offer 再接受对方 offer；
-          // 否则 setRemoteDescription 在 have-local-offer 状态抛错，最终协商只保留一方媒体轨道（单向流）。
-          if (offerCollision) {
-            await p.pc.setLocalDescription({ type: "rollback" });
+        if (desc.type === "offer") {
+          // 完美协商：检测 offer 冲突（本端正在发 offer 或连接非稳定态）
+          const offerCollision = (p.makingOffer || p.pc.signalingState !== "stable");
+          p.ignoreOffer = !p.polite && offerCollision;
+          if (p.ignoreOffer) {
+            console.log("[WEBRTC] 忽略冲突 offer（impolite 方）", from, connId);
+            return;
           }
-          await p.pc.setRemoteDescription(desc);
-          if (desc.type === "offer") {
+          try {
+            // polite 方遇到冲突时，必须先回滚本地 offer 再接受对方 offer；
+            // 否则 setRemoteDescription 在 have-local-offer 状态抛错，最终协商只保留一方媒体轨道（单向流）。
+            if (offerCollision) {
+              await p.pc.setLocalDescription({ type: "rollback" });
+            }
+            await p.pc.setRemoteDescription(desc);
             // 关键：主叫在收到“被叫已接听并 addTrack”的 offer 时，才补加本端媒体，
             // 使本次 answer 即携带主叫音视频。双方媒体在“单次协商(OFFER_B)”内完成，
             // 避免主叫先发 OFFER_A 含媒体、被叫接听又 OFFER_B 重复协商，导致主叫媒体流
@@ -3760,12 +3766,30 @@
             await p.pc.setLocalDescription(); // 自动生成 answer（含本端媒体）
             // 回带 connId：答案只被发起的那台设备消费，同账号其它设备忽略（避免撞连接）
             sendSignal(from, { sdp: p.pc.localDescription, connId: p.connId || null });
+          } catch (err) {
+            console.error("[WEBRTC] setRemoteDescription(offer) error:", (err && err.message) || err);
+            if (!p.ignoreOffer) enableRelay(from);
           }
-        } catch (err) {
-          console.error("[WEBRTC] setRemoteDescription error:", (err && err.message) || err);
-          if (!p.ignoreOffer) enableRelay(from);
+        } else if (desc.type === "answer") {
+          // 仅当本端确有挂起 offer 时才应用 answer；否则为过期/重复 answer
+          // （glare 后旧 answer 迟到、或服务端重复投递），直接忽略——
+          // 否则会在 stable 状态下抛 “Called in wrong state: stable”，使本次协商中断、
+          // ontrack 永不触发、对端视频流无法渲染。
+          if (p.pc.signalingState !== "have-local-offer") {
+            console.warn("[WEBRTC] 收到过期/重复 answer（状态=" + p.pc.signalingState + "），忽略", { from, connId });
+            return;
+          }
+          try {
+            await p.pc.setRemoteDescription(desc);
+          } catch (err) {
+            console.error("[WEBRTC] setRemoteDescription(answer) error:", (err && err.message) || err);
+            if (!p.ignoreOffer) enableRelay(from);
+          }
         }
       } else if (data.candidate) {
+        // 候选可能在 answer 之前到达：连接尚未进入 stable 时 addIceCandidate 是合法的，
+        // 但若 pc 已关闭或处于异常态则忽略，避免噪声报错。
+        if (p.pc.signalingState === "closed") return;
         p.pc.addIceCandidate(data.candidate).catch((err) => {
           if (!p.ignoreOffer) console.warn("[WEBRTC] addIceCandidate failed:", (err && err.message) || err);
         });
