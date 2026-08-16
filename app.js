@@ -3535,6 +3535,10 @@
   let meetingMode = "group";        // "group" | "room"
   let meetingRoomId = null;         // 房间模式下的会议 id（来自链接）
   let roomPeers = new Map();        // room 模式下 id -> { name, avatar }（用于瓦片/聊天昵称）
+  // 会议发起方为每个成员维护的“本次会话连接级 connId”（按 memberId 存），用于幂等：
+  // 同一成员重复触发 connectMeetingPeer 时复用同一 connId，避免每次新建 connId 导致
+  // 旧连接被反复 drop 重建、产生多个 offer，进而 answer 落在 stable 被忽略、视频出不来。
+  let meetingConnIds = new Map();
   let pendingSignals = [];          // 信令未连通时缓存的发送（如自动入会时房间 join）
   let pendingMeetingId = null;      // 启动/登录时从 URL ?meeting= 解析出的待加入会议 id
   let isGuest = false;              // 访客（未登录，通过 ?meeting= 链接 + 昵称入会）
@@ -3717,6 +3721,20 @@
     };
   }
 
+  // 把“远端描述尚未设置前到达”的 ICE 候选先排队，等 setRemoteDescription 之后 flush，
+  // 否则 localhost/LAN 下候选可能先于 SDP 到达，addIceCandidate 抛 “remote description not
+  // set” 被静默丢弃，导致 ICE 永远无法连通、对端视频流不渲染。
+  function flushCandidates(p) {
+    if (!p || !p.pendingCandidates || !p.pendingCandidates.length) return;
+    const list = p.pendingCandidates;
+    p.pendingCandidates = [];
+    for (const c of list) {
+      p.pc.addIceCandidate(c).catch((err) => {
+        if (!p.ignoreOffer) console.warn("[WEBRTC] addIceCandidate failed:", (err && err.message) || err);
+      });
+    }
+  }
+
   async function handleSignal(data, from) {
     from = Number(from);
     if (!data) return;
@@ -3757,6 +3775,7 @@
               await p.pc.setLocalDescription({ type: "rollback" });
             }
             await p.pc.setRemoteDescription(desc);
+            flushCandidates(p); // 远端描述已设置，补投递此前排队到的 ICE 候选
             // 关键：主叫在收到“被叫已接听并 addTrack”的 offer 时，才补加本端媒体，
             // 使本次 answer 即携带主叫音视频。双方媒体在“单次协商(OFFER_B)”内完成，
             // 避免主叫先发 OFFER_A 含媒体、被叫接听又 OFFER_B 重复协商，导致主叫媒体流
@@ -3781,15 +3800,22 @@
           }
           try {
             await p.pc.setRemoteDescription(desc);
+            flushCandidates(p); // 远端描述已设置，补投递此前排队到的 ICE 候选
           } catch (err) {
             console.error("[WEBRTC] setRemoteDescription(answer) error:", (err && err.message) || err);
             if (!p.ignoreOffer) enableRelay(from);
           }
         }
       } else if (data.candidate) {
-        // 候选可能在 answer 之前到达：连接尚未进入 stable 时 addIceCandidate 是合法的，
-        // 但若 pc 已关闭或处于异常态则忽略，避免噪声报错。
+        // 候选可能在 offer/answer 之前到达：远端描述尚未设置时 addIceCandidate 会抛
+        // “remote description not set” 被静默丢弃，导致 ICE 永远无法连通。
+        // 因此先排队，等 setRemoteDescription 之后 flushCandidates 统一补投递。
         if (p.pc.signalingState === "closed") return;
+        if (!p.pc.remoteDescription) {
+          p.pendingCandidates = p.pendingCandidates || [];
+          p.pendingCandidates.push(data.candidate);
+          return;
+        }
         p.pc.addIceCandidate(data.candidate).catch((err) => {
           if (!p.ignoreOffer) console.warn("[WEBRTC] addIceCandidate failed:", (err && err.message) || err);
         });
@@ -3953,6 +3979,8 @@
       remoteVideo.hidden = false;
       if (callRemoteAvatar) callRemoteAvatar.hidden = true;
     }
+    // 显式触发播放，避免自动播放策略拦截导致黑屏（拦截时静默忽略）
+    remoteVideo.play().catch(() => {});
     if (callState !== "active") {
       callState = "active";
       setCallStateLabel("通话中");
@@ -4217,6 +4245,7 @@
     meetingGroupId = groupId;
     meetingType = type;
     meetingMembers = new Set([myId]);
+    meetingConnIds = new Map(); // 新会议：重置连接级 connId
     micMuted = false; camOff = false;
     bindMeetingLocal();
     showMeetingPanel(g);
@@ -4280,41 +4309,59 @@
   async function connectMeetingPeer(memberId) {
     memberId = Number(memberId);
     if (memberId === myId || !meetingActive) return;
-    const p = ensurePeerConn(memberId);
-    const st = p.pc ? p.pc.connectionState : null;
-    // 已连接 / 连接中：无需重建，仅兼容“迟到补加媒体”，并补渲染已缓存的远端流
-    if (p.pc && (st === "connected" || st === "connecting" || st === "new")) {
-      if (localStream && !p.mediaAdded) addLocalMediaTracks(p);
-      maybeApplyScreenShare(p); // 共享中：迟到成员也立即发送屏幕轨道
-      // 已存在的连接也要登记为会议成员（如会议前已存在 1:1 pc，早期返回没加过），
-      // 否则该成员流到达时因不在 meetingMembers 而不渲染，造成瓦片缺失。
-      meetingMembers.add(memberId);
-      if (meetingActive) ensureMeetingTile(memberId);
+    // 登记会议成员 + 瓦片占位（发起方/应答方都需要，便于“已加入”可见与流到达即渲染）
+    meetingMembers.add(memberId);
+    if (meetingActive) ensureMeetingTile(memberId);
+    // 确定性发起方：userId 较小者发起 offer，较大者仅应答。彻底消除双向同时发 offer 的 glare
+    // （glare 会导致 answer 与 offer 错配、协商被搅乱、视频流 ontrack 不触发）；同账号多设备共用
+    // userId 时，每条连接用独立 connId 区分，避免 PC/手机在对方单一 pc 上撞连接、answer 被错投。
+    const iAmOfferer = (myId != null) ? (Number(myId) < memberId) : true;
+    if (!iAmOfferer) {
+      // 应答方：本函数不建连、不发 offer，等对方（较小 id）的 offer 到达后由 handleSignal
+      // 用其中的 connId 建连并应答；本端已有缓存流则直接补渲染到网格。
       if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
       return;
     }
-    teardownPeer(memberId);
+    // 发起方：复用“本次会话”已生成的 connId（按 memberId 持久化），保证幂等 + 与对方上一次
+    // offer 对应；仅在无 connId 或旧连接已死时才生成新 connId 并重建，避免反复 drop 重建。
+    let connId = meetingConnIds.get(memberId);
+    const key = peerConnKey(memberId, connId);
+    const existing = connId ? peers.get(key) : undefined;
+    if (existing && existing.pc) {
+      const st = existing.pc.connectionState;
+      if (st === "connected" || st === "connecting" || st === "new") {
+        // 已连/连中：不重建、不重发 offer；仅迟到补加媒体与渲染已缓存流
+        if (localStream && !existing.mediaAdded) addLocalMediaTracks(existing);
+        maybeApplyScreenShare(existing);
+        if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
+        return;
+      }
+      // 旧连接已失败/关闭：清掉旧键，下面用新 connId 重建
+      dropPeerConn(memberId);
+    }
+    // 真正需要新建：生成并持久化新 connId（同会话内复用）
+    connId = crypto.randomUUID();
+    meetingConnIds.set(memberId, connId);
     try {
+      const p = ensurePeerConn(peerConnKey(memberId, connId));
+      p.connId = connId;
       p.pc = new RTCPeerConnection(rtcConfig());
       p.pc._peerId = memberId;
       setupPc(p);
       p.mediaAdded = false;
-      meetingMembers.add(memberId);
-      if (meetingActive) ensureMeetingTile(memberId); // 立即出现头像占位，确保“已加入”可见
-      // 群会议：立即携带本端媒体（mesh 每人各自带媒体，无需等对方先发 offer），触发协商
+      // 群会议：立即携带本端媒体（mesh 每人各自带媒体），触发 onnegotiationneeded 发带 connId 的 offer；
+      // 无本地媒体时仍发送“空 offer”以建立连接（确定性模型下由应答方在 answer 中补媒体），避免双方互等。
       if (localStream) {
         addLocalMediaTracks(p);
       } else {
-        // 无本地媒体（无摄像头 / insecure context）：【不要】发“空协商（空 offer）”。
-        // 空 offer 不含任何媒体 m-line，会使本次协商中对方即便有摄像头也无法下行视频（最终黑屏）。
-        // 这里仅建立 RTCPeerConnection，等待有媒体的一方发起 offer；对方 answer 后视频正常下行。
-        // （若双方都无媒体则不建立连接，但头像占位瓦片已显示，符合预期。）
+        await p.pc.setLocalDescription();
+        sendSignal(memberId, { sdp: p.pc.localDescription, connId });
       }
       maybeApplyScreenShare(p); // 共享中：新连接也立即发送屏幕轨道
-      // 若该成员此前已发来流（先于本端加入会议到达），补渲染到网格
       if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
     } catch (e) {
       console.error("[MEETING] connectMeetingPeer 失败", memberId, e);
+      meetingConnIds.delete(memberId); // 建连失败：清掉 connId，下次重试可新建
     }
   }
 
@@ -4456,6 +4503,9 @@
     }
     const v = tile.querySelector("video");
     if (v.srcObject !== stream) v.srcObject = stream;
+    // 显式触发播放：部分浏览器对动态设置 srcObject 的自动播放策略较严，
+    // 若不显式 play()，视频可能停在首帧（黑屏）。拦截时静默忽略（用户首次交互后会恢复）。
+    v.play().catch(() => {});
     updateTileVideoState(id); // 同步头像占位显示（摄像头关 / 未共享时）
   }
 
@@ -4609,6 +4659,7 @@
     meetingActive = true;
     meetingType = type;
     meetingMembers = new Set([myId]);
+    meetingConnIds = new Map(); // 新会议：重置连接级 connId
     meetingLeft = false;
     meetingJoinPending = false;
     roomPeers = new Map();
@@ -4658,6 +4709,7 @@
       meetingLeft = true; showMeetingLeft();
     } else {
       meetingLeft = false; meetingRoomId = null; meetingMembers = new Set();
+      meetingConnIds = new Map(); // 清掉陈旧 connId，下次入会重新协商
       meetingJoinPending = false;
       hideMeetingLeft();
       if (meetingPanel) meetingPanel.hidden = true;
@@ -4788,6 +4840,7 @@
     if (!meetingActive || String(meetingRoomId) !== roomId) return;
     roomPeers = new Map();
     meetingMembers = new Set([myId]);
+    meetingConnIds = new Map(); // 名册重建：清陈旧 connId，避免复用已失效的连接键
     (members || []).forEach((m) => {
       const id = Number(m.id);
       roomPeers.set(id, { name: m.name || String(id), avatar: m.avatar || "" });
