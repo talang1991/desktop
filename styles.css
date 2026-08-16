@@ -2546,6 +2546,43 @@ input, select, textarea, .friend-row, .conv-row, .member-picker, .group-list, .f
   .install-banner { animation: none; }
 }
 
+/* ---------- 桌面通知引导条 ---------- */
+.notify-banner {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  z-index: 330;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px 12px 12px;
+  max-width: calc(100vw - 32px);
+  background: var(--surface-glass);
+  backdrop-filter: saturate(160%) blur(16px);
+  -webkit-backdrop-filter: saturate(160%) blur(16px);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-left: 3px solid var(--primary);
+  border-radius: 16px;
+  box-shadow: 0 14px 44px rgba(31, 38, 135, 0.18);
+  color: var(--text);
+  animation: notifyIn .5s var(--ease) both;
+}
+.notify-banner[hidden] { display: none; }
+.notify-banner .notify-ico { display: inline-flex; flex: 0 0 auto; color: var(--primary); }
+.notify-banner .notify-ico svg { width: 26px; height: 26px; display: block; }
+.notify-banner .notify-text { font-size: 13.5px; line-height: 1.35; flex: 1 1 auto; color: var(--text); }
+.notify-banner .btn.small { flex: 0 0 auto; }
+.notify-banner .notify-close {
+  flex: 0 0 auto; border: 0; background: transparent; cursor: pointer;
+  width: 26px; height: 26px; border-radius: 8px; color: var(--text-soft);
+  font-size: 14px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+}
+.notify-banner .notify-close:hover { background: color-mix(in srgb, var(--text-soft) 16%, transparent); color: var(--text); }
+@keyframes notifyIn {
+  0% { opacity: 0; transform: translate(-50%, 24px) scale(.92); }
+  70% { transform: translate(-50%, -4px) scale(1.01); }
+  100% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .notify-banner { animation: none; }
+}
+
 /* ---------- 登录卡：极光背景 + 漂浮 ---------- */
 .auth-view {
   background:

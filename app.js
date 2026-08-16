@@ -1489,6 +1489,9 @@
       "call.incoming.prefix": "来电：",
       "call.notify.accept": "接听",
       "call.notify.reject": "拒绝",
+      "notify.banner": "开启桌面通知，收到新消息与来电时及时提醒",
+      "notify.open": "开启",
+      "notify.denied": "通知已被浏览器拦截。点击地址栏左侧的 🔔 图标，将通知设为「允许」即可收到提醒",
       "call.state.calling": "呼叫中…",
       "call.state.ringing": "等待对方接听…",
       "call.state.connected": "通话中",
@@ -1751,6 +1754,9 @@
       "call.incoming.prefix": "Incoming call: ",
       "call.notify.accept": "Accept",
       "call.notify.reject": "Decline",
+      "notify.banner": "Enable desktop notifications to get alerted on new messages and calls",
+      "notify.open": "Enable",
+      "notify.denied": "Notifications are blocked. Click the 🔔 icon at the left of the address bar and set notifications to “Allow”",
       "call.state.calling": "Calling…",
       "call.state.ringing": "Waiting for answer…",
       "call.state.connected": "On call",
@@ -3918,7 +3924,7 @@
           { action: "accept", title: t("call.notify.accept") },
           { action: "reject", title: t("call.notify.reject") },
         ],
-      });
+      }).then(function (ok) { if (!ok) handleNotifyBlocked(); });
     }
   }
 
@@ -5289,12 +5295,15 @@
     // 页面隐藏时（最小化 / 切到其它标签）：弹系统通知提醒新私聊消息
     if (document.hidden && m.from !== myId) {
       const f = friends.find((x) => x.id === m.from);
+      // 仅在通知真正弹出时才响提示音；权限不足时不响铃（避免「响铃却没卡片」的误导），改为引导开启
       showSystemNotification((f && f.username) || String(m.from), {
         body: String(m.text || ""),
         tag: "msg-" + m.from,
         data: { kind: "message", from: m.from },
+      }).then(function (ok) {
+        if (ok) { try { playMessageChime(); } catch {} }
+        else handleNotifyBlocked();
       });
-      playMessageChime();
     }
   }
   // 打开会话时：先渲染本地缓存（即时、离线可用），再增量同步服务端
@@ -5938,8 +5947,10 @@
         body: sm.name + "：" + String(m.text || ""),
         tag: "grp-" + m.groupId,
         data: { kind: "group", groupId: m.groupId },
+      }).then(function (ok) {
+        if (ok) { try { playMessageChime(); } catch {} }
+        else handleNotifyBlocked();
       });
-      playMessageChime();
     }
   }
 
@@ -6140,6 +6151,54 @@
     } catch (e) { /* 回退到页面内通知 */ }
     try { new Notification(title, options); return true; } catch (e) {}
     return false;
+  }
+
+  // 通知因权限不足未能弹出：显示「开启桌面通知」引导条。
+  // 仅当权限非 granted 时显示；granted 却没卡片通常是系统勿扰/专注模式，不再打扰，仅记录。
+  function handleNotifyBlocked() {
+    if (!notificationsSupported()) return;
+    if (Notification.permission === "granted") return;
+    showNotifyPermBanner();
+  }
+
+  function showNotifyPermBanner() {
+    const b = document.getElementById("notifyPermBanner");
+    if (!b) return;
+    // 本次会话内用户主动关闭过 → 不再自动打扰
+    try { if (sessionStorage.getItem("notify-banner-dismissed") === "1") { b.hidden = true; return; } } catch {}
+    const perm = notificationsSupported() ? Notification.permission : "unsupported";
+    if (perm === "granted") { b.hidden = true; return; }
+    const txt = b.querySelector("[data-role=txt]");
+    const btn = b.querySelector("[data-role=btn]");
+    const closeBtn = b.querySelector("[data-role=close]");
+    if (closeBtn) closeBtn.onclick = function () {
+      b.hidden = true;
+      try { sessionStorage.setItem("notify-banner-dismissed", "1"); } catch {}
+    };
+    if (perm === "denied" || perm === "unsupported") {
+      // 已拒绝 / 浏览器不支持：提示去系统或浏览器设置开启（Mac 在地址栏左侧 🔔 处）
+      if (txt) txt.textContent = t("notify.denied");
+      if (btn) btn.hidden = true;
+    } else {
+      // default：温和引导一键开启
+      if (txt) txt.textContent = t("notify.banner");
+      if (btn) { btn.hidden = false; btn.textContent = t("notify.open"); btn.onclick = onEnableNotify; }
+    }
+    b.hidden = false;
+  }
+
+  async function onEnableNotify() {
+    const r = await ensureNotifyPermission();
+    const b = document.getElementById("notifyPermBanner");
+    if (r === "granted") { if (b) b.hidden = true; }
+    else showNotifyPermBanner(); // denied → 切到「去设置开启」文案
+  }
+
+  // 页面重新可见时，若通知权限仍未开启，温和提示一次（隐藏态没收到的卡片，回来补个引导）
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) showNotifyPermBanner();
+    });
   }
 
   // 调试 / 测试钩子（无害，便于排查通知权限与触发）
