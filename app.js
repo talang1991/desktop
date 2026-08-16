@@ -2380,7 +2380,7 @@
   }
 
   // ---------- 事件 ----------
-  // $("#chatBtn").onclick = openChat;
+  $("#chatBtn").onclick = openChat;
   chatClose.onclick = closeChat;
   chatSendBtn.onclick = sendChat;
   friendAddBtn.onclick = addFriend;
