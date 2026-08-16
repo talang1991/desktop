@@ -73,7 +73,6 @@
         toastEl.classList.remove("toast-ok", "toast-err");
         if (OK_RE.test(txt)) {
           toastEl.classList.add("toast-ok");
-          celebrate();
         } else if (ERR_RE.test(txt)) {
           toastEl.classList.add("toast-err");
         }
@@ -97,7 +96,6 @@
       if (rafId == null) rafId = requestAnimationFrame(reindex);
     });
     mo2.observe(grid, { childList: true });
-    reindex();
   }
 
   // 暴露给其它脚本在关键节点手动庆祝（如首条应用添加）
