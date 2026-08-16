@@ -5185,12 +5185,17 @@
     const peer = friends.find((f) => f.id === currentPeer);
     let delivered = false;
     const p = getPeerConn(currentPeer);
-    if (p && p.p2pReady && p.dc && p.dc.readyState === "open") {
-      p.dc.send(JSON.stringify({ type: "chat", id, ts, text }));
-      delivered = true;
-    } else if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+    // 实时通道：优先经服务端中继转发 —— routeTo 会把消息 fan-out 给接收方的全部设备
+    // （含后登录的手机端），保证同一账号多设备都能收到。已与本端建立 P2P 直连的设备
+    // 仍额外走 DataChannel 作为快速通道；接收端按消息 id 去重，不会重复渲染/计未读。
+    // 修复：原来一旦 DataChannel 可用就「只走 P2P、绕过中继」，导致接收方后登录的设备
+    // （没有 DataChannel）收不到消息。
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "chat", to: currentPeer, id, ts, text }));
       delivered = true;
+    }
+    if (p && p.p2pReady && p.dc && p.dc.readyState === "open") {
+      p.dc.send(JSON.stringify({ type: "chat", id, ts, text }));
     }
     // 在线则实时已送达；离线（通道不可用）则消息已存服务端，对方上线后接收
     if (delivered) {
@@ -5269,6 +5274,9 @@
   // ---------- 本地缓存 + 与服务端同步 ----------
   // 收到一条消息（中继或 P2P）：写本地 IndexedDB，必要时渲染，并补推到服务端
   async function onChatReceived(m) {
+    // 先于落库判断本条消息是否已存在：当消息经 DataChannel + 服务端中继双通道到达时，
+    // 仅首次（existed=false）计入未读，避免未读红点被重复 +1。
+    const existed = await ChatDB.has(m.id).catch(() => false);
     m.synced = false;
     await ChatDB.put(m).catch(() => {});
     flushPending();
@@ -5287,7 +5295,8 @@
     } else if (m.from !== myId) {
       // 未选中该好友：累加未读红点提醒（持久化），并把会话前置。
       // 若该消息 ts 不晚于本端已知的最近已读游标（已在其它端读过），则不重复 bump。
-      if ((m.ts || 0) > (lastReadCache[m.from] || 0)) {
+      // existed 防止「DataChannel + 中继」双通道重复计未读。
+      if (!existed && (m.ts || 0) > (lastReadCache[m.from] || 0)) {
         addUnread(m.from);
       }
       upsertConversation("peer", m.from, m.ts, m.text, false);
