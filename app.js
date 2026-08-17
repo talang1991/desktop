@@ -384,6 +384,19 @@
     try { return new URL(url).origin + "/favicon.ico"; }
     catch (e) { return ""; }
   }
+  // 缓存优先：所有远程网站图标统一经同源代理 /favicon-proxy 走 Service Worker 缓存优先策略。
+  // 默认 favicon：取站点 origin 拼 /favicon.ico；自定义图标链接：原样透传完整 URL（代理会按给定路径取）。
+  function defaultFaviconProxy(siteUrl) {
+    try { return "/favicon-proxy?url=" + encodeURIComponent(new URL(siteUrl).origin + "/favicon.ico"); }
+    catch (e) { return ""; }
+  }
+  function remoteIconProxy(iconUrl) {
+    try {
+      const u = new URL(iconUrl);
+      if (/^https?:$/i.test(u.protocol)) return "/favicon-proxy?url=" + encodeURIComponent(u.href);
+    } catch (e) {}
+    return iconUrl; // data: 或相对路径 -> 原样（相对路径同源，SW 已按静态资源缓存）
+  }
   // 图标字段可存 emoji，也可存 favicon 链接（http(s)/相对路径/data:image）
   function isIconUrl(s) {
     return !!s && /^(https?:\/\/|\/|data:image\/)/i.test(String(s).trim());
@@ -396,7 +409,7 @@
   function renderAvatar(val, fallback) {
     const v = val || "";
     if (isIconUrl(v)) {
-      return `<img src="${escapeHtml(v)}" alt="" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml((fallback || "?").toString().charAt(0).toUpperCase())}'"/>`;
+      return `<img src="${escapeHtml(v)}" alt="" draggable="false" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml((fallback || "?").toString().charAt(0).toUpperCase())}'"/>`;
     }
     if (v) return escapeHtml(v);
     return escapeHtml((fallback || "?").toString().charAt(0).toUpperCase());
@@ -540,6 +553,8 @@
     const card = e.target.closest(".card");
     if (!card || card.classList.contains("card-broken")) return; // 坏卡不可拖
     if (e.target.closest(".card-menu")) return; // 菜单按钮不触发拖拽
+    // 命中 favicon 图片时阻止默认行为，避免触发浏览器原生图片拖拽（原生拖拽会抢走指针、与 pointer 拖拽冲突）
+    if (e.target.closest("img")) { try { e.preventDefault(); } catch {} }
     dragCtx = {
       id: card.dataset.id,
       card,
@@ -783,17 +798,19 @@
       const iconVal = a.emoji || "";
       let iconHtml;
       if (isIconUrl(iconVal)) {
-        // 自定义 favicon 链接
+        // 自定义 favicon 链接（http(s) 走缓存优先代理；data: 原样）
+        const src = remoteIconProxy(iconVal);
         iconHtml =
-          `<div class="icon" style="background:${a.color}22"><img src="${escapeHtml(iconVal)}" alt="" ` +
+          `<div class="icon" style="background:${a.color}22"><img src="${escapeHtml(src)}" alt="" draggable="false" ` +
           `onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar(a.url))}'"/></div>`;
       } else if (iconVal) {
         // emoji 文本
         iconHtml = `<div class="icon" style="background:${a.color}22">${escapeHtml(iconVal)}</div>`;
       } else {
-        // 未设置 -> 用网站默认 favicon
+        // 未设置 -> 用网站默认 favicon（缓存优先）
+        const src = defaultFaviconProxy(a.url);
         iconHtml =
-          `<div class="icon" style="background:${a.color}22"><img src="${escapeHtml(faviconUrl(a.url))}" alt="" ` +
+          `<div class="icon" style="background:${a.color}22"><img src="${escapeHtml(src)}" alt="" draggable="false" ` +
           `onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar(a.url))}'"/></div>`;
       }
 
@@ -825,7 +842,8 @@
       card.addEventListener("mousedown", (e) => { if (e.button === 0) startLP(); });
       card.addEventListener("mouseup", cancelLP);
       card.addEventListener("mouseleave", cancelLP);
-      card.addEventListener("dragstart", cancelLP);
+      // 阻止卡片内图片（favicon）的原生拖拽：避免排序拖动时浏览器抢走指针、弹出图片幽灵
+      card.addEventListener("dragstart", (e) => { e.preventDefault(); cancelLP(); });
 
       card.addEventListener("click", (e) => {
         if (e.target.closest(".card-menu")) { e.preventDefault(); return; }
@@ -1277,12 +1295,12 @@
     const color = selectedColor || COLORS[0];
     let inner = "";
     if (isIconUrl(val)) {
-      inner = `<img src="${escapeHtml(val)}" alt="" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar($("#fUrl").value))}'"/>`;
+      inner = `<img src="${escapeHtml(remoteIconProxy(val))}" alt="" draggable="false" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar($("#fUrl").value))}'"/>`;
     } else if (val) {
       inner = escapeHtml(val);
     } else if ($("#fUrl").value.trim()) {
-      const fv = faviconUrl($("#fUrl").value.trim());
-      inner = `<img src="${escapeHtml(fv)}" alt="" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar($("#fUrl").value))}'"/>`;
+      const fv = defaultFaviconProxy($("#fUrl").value.trim());
+      inner = `<img src="${escapeHtml(fv)}" alt="" draggable="false" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar($("#fUrl").value))}'"/>`;
     } else {
       inner = "🌐";
     }

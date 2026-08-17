@@ -87,12 +87,14 @@ self.addEventListener("fetch", (event) => {
 
   const pathname = url.pathname;
   const isHtmlShell = req.mode === "navigate" || pathname === "/" || pathname.endsWith("/index.html");
-  // 本端优先（cache-first / stale-while-revalidate）：版本化静态资源 + HTML 页面壳
-  const cacheFirst = url.searchParams.has("v") || isHtmlShell;
+  // favicon 代理：前端所有网站图标经同源 /favicon-proxy 走缓存优先（独立缓存命名空间，避免与静态资源混用）
+  const isFavicon = pathname === "/favicon-proxy";
+  // 本端优先（cache-first / stale-while-revalidate）：版本化静态资源 + HTML 页面壳 + favicon 代理
+  const cacheFirst = url.searchParams.has("v") || isHtmlShell || isFavicon;
 
   if (cacheFirst) {
     event.respondWith((async () => {
-      const cache = await caches.open(CACHE);
+      const cache = await caches.open(isFavicon ? "favicons-v1" : CACHE);
       const cached = await cache.match(req);
       // 后台静默更新缓存；仅 2xx 才写缓存（500 / 网络错误保留旧值）。
       // HTML 页面壳后台更新时，若发现版本号（app.js?v=）变化，立即通知已打开的页面弹出

@@ -148,7 +148,16 @@ html, body {
   overflow: hidden;
   background: var(--surface-2);
 }
-.card .icon img { width: 100%; height: 100%; object-fit: contain; }
+.card .icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  /* favicon 不可拖动：禁用浏览器原生图片拖拽与选中，指针事件交给卡片处理排序拖拽 */
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+}
 .card .name {
   font-size: 14px;
   font-weight: 600;

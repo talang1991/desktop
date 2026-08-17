@@ -118,11 +118,57 @@ async function writeWeb(res: ServerResponse, response: Response): Promise<void> 
   res.end(buf);
 }
 
+// 同源 favicon 代理：前端所有网站图标统一经此路径走 Service Worker「缓存优先」策略。
+// 由服务端 fetch 目标站 /favicon.ico（规避跨域 CORS 与污染问题），仅 2xx 且为图片时返回字节并设置缓存头；
+// 失败（网络错误 / 404 / 非图片）返回 4xx/5xx，SW 层据此不写缓存，下次仍会重新探测。
+async function serveFaviconProxy(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const target = url.searchParams.get("url");
+  if (!target) return new Response("Bad Request", { status: 400 });
+  let favUrl: string;
+  try {
+    // 允许传入完整 URL 或纯 origin；仅当路径为空或仅为「/」时才补 /favicon.ico
+    // （注意：bare origin 的 pathname 是「/」，不能直接用 u.href，否则会取到主页 HTML 而非图标）
+    const u = new URL(target);
+    if (!/^https?:$/i.test(u.protocol)) return new Response("Bad Request", { status: 400 });
+    const isRoot = !u.pathname || u.pathname === "/";
+    favUrl = isRoot ? u.origin + "/favicon.ico" : u.href;
+  } catch {
+    return new Response("Bad Request", { status: 400 });
+  }
+
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 5000);
+  try {
+    const r = await fetch(favUrl, { signal: ac.signal, redirect: "follow" });
+    if (!r.ok) return new Response("Not Found", { status: 404 });
+    const ct = r.headers.get("content-type") || "";
+    if (!/^image\//i.test(ct)) return new Response("Not Found", { status: 404 });
+    const buf = new Uint8Array(await r.arrayBuffer());
+    if (buf.length > 256 * 1024) return new Response("Payload Too Large", { status: 413 });
+    return new Response(buf, {
+      status: 200,
+      headers: {
+        "content-type": ct || "image/x-icon",
+        "cache-control": "public, max-age=86400",
+        "access-control-allow-origin": "*",
+      },
+    });
+  } catch {
+    return new Response("Bad Gateway", { status: 502 });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const server = createServer(async (req, res) => {
   try {
     const webReq = await toWebRequest(req);
     const url = new URL(webReq.url);
-    const webRes = url.pathname.startsWith("/api/") ? await handleApi(webReq) : await serveStatic(webReq);
+    let webRes: Response;
+    if (url.pathname === "/favicon-proxy") webRes = await serveFaviconProxy(webReq);
+    else if (url.pathname.startsWith("/api/")) webRes = await handleApi(webReq);
+    else webRes = await serveStatic(webReq);
     await writeWeb(res, webRes);
   } catch (e) {
     console.error("request error:", (e as Error).message);
