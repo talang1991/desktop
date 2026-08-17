@@ -18,6 +18,7 @@
   let activeCategory = "全部";
   let searchTerm = "";
   let reorderMode = false;   // 拖动排序模式：开启后卡片可拖拽重排并持久化顺序
+  let reorderDirty = false;  // 本次排序会话中是否发生过拖拽重排（退出时据此决定是否同步后端）
   let editingId = null;
   let selectedColor = COLORS[0];
   let currentUsername = "";
@@ -582,16 +583,17 @@
     if (dragCtx.dragging) {
       if (dragCtx.ghost) dragCtx.ghost.remove();
       dragCtx.card.classList.remove("dragging");
-      // 按当前网格 DOM 顺序重排 apps 的 order 并持久化
+      // 拖拽结束：仅更新本地顺序（内存 + IndexedDB），不立刻调接口；
+      // 真正的后端同步推迟到点击「完成」退出排序时统一进行（减少请求次数）
       const orderedIds = [...grid.querySelectorAll(".card")].map((c) => c.dataset.id);
-      persistOrder(orderedIds);
+      applyReorderLocal(orderedIds);
     }
     dragCtx = null;
   }
 
-  // 按新顺序重排内存并批量同步到后端（每个变更链接走现有 op=update 通道 PUT）
-  async function persistOrder(orderedIds) {
-    if (!orderedIds.length) return;
+  // 拖拽过程中：按当前网格 DOM 顺序重排内存顺序并写入本地 IndexedDB（不调后端接口）
+  function applyReorderLocal(orderedIds) {
+    if (!orderedIds || !orderedIds.length) return;
     orderedIds.forEach((id, idx) => {
       const a = apps.find((x) => String(x.id) === String(id));
       if (a) {
@@ -602,6 +604,13 @@
       }
     });
     renderAll(); // 同步 apps 顺序与 order（DOM 已由拖拽排好，这里确保内存与界面一致）
+    reorderDirty = true; // 标记本次会话改动过，退出时再同步后端
+  }
+
+  // 退出排序（点「完成」）时调用：若本次会话拖拽过，则统一把改动同步到后端
+  async function syncReorderToServer() {
+    if (!reorderDirty) return;
+    reorderDirty = false;
     try {
       await flushPendingLinks();
       toast(t("reorder.saved") || "已保存排序");
@@ -611,8 +620,11 @@
   }
 
   function toggleReorderMode() {
+    const wasReorder = reorderMode;
     reorderMode = !reorderMode;
     if (reorderMode && selectionMode) exitSelection(); // 排序与多选互斥；exitSelection 内 updateSelectionUI 会因 reorderMode=true 保留横栏
+    // 退出排序（点「完成」）：若本次会话拖拽过，统一同步后端（拖动过程中不逐个调接口）
+    if (wasReorder && reorderDirty) syncReorderToServer();
     updateSelectionUI();
     renderAll();
   }
