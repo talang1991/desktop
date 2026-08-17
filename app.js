@@ -2916,6 +2916,7 @@
     switch (m.type) {
       case "welcome":
         myId = m.userId;
+        myDeviceId = m.deviceId || null;
         trySyncAll(); // 拿到 myId 后补算离线未读（好友列表可能尚未就绪，trySyncAll 内部会再判）
         break;
       case "presence":
@@ -2942,7 +2943,7 @@
         }
         break;
       case "signal":
-        handleSignal(m.data, m.from);
+        handleSignal(m.data, m.from, m.fromDeviceId);
         break;
       case "chat":
         clearEntering();
@@ -3032,22 +3033,22 @@
         break;
       // ---- 独立会议房间信令（与群会议对称，key 为 roomId）----
       case "room-join":
-        onRoomJoin(m.from, m.name);
+        onRoomJoin(m.from, m.name, m.deviceId);
         break;
       case "room-leave":
-        onRoomLeave(m.from);
+        onRoomLeave(m.from, m.deviceId);
         break;
       case "room-roster":
         onRoomRoster(m.roomId, m.members);
         break;
       case "room-screen":
-        onRoomScreen(m.from, true);
+        onRoomScreen(m.from, true, m.deviceId);
         break;
       case "room-screen-stop":
-        onRoomScreen(m.from, false);
+        onRoomScreen(m.from, false, m.deviceId);
         break;
       case "room-cam":
-        onRoomCam(m.from, m.on);
+        onRoomCam(m.from, m.on, m.deviceId);
         break;
       case "room-chat":
         onRoomChat(m);
@@ -3456,6 +3457,38 @@
     userId = Number(userId);
     return connId ? (userId + ":" + connId) : String(userId);
   }
+  // 会议对等体键：不同账号用 userId（与历史行为一致，避免回归）；同账号多设备用
+  // "selfdev:<deviceId>" 区分，使 PC 与手机各自成为独立会议成员、互不覆盖、能互相建连。
+  function meetingMemberKey(fromUserId, fromDeviceId) {
+    fromUserId = Number(fromUserId);
+    if (fromUserId === myId && fromDeviceId) return "selfdev:" + fromDeviceId;
+    return fromUserId;
+  }
+  // 确定性发起方：不同账号用 userId 比较；同账号用 deviceId 比较（userId 相同无法区分，否则双方都不发起）。
+  function meetingIAmOfferer(fromUserId, fromDeviceId) {
+    if (Number(fromUserId) === myId && fromDeviceId) return myDeviceId < fromDeviceId;
+    return (myId != null) ? (Number(myId) < Number(fromUserId)) : true;
+  }
+  // 判断一条收到的信令是否属于“会议中的某个对等体”，并返回其成员键（非会议则返回 null，按 1:1 处理）。
+  function meetingSignalKey(from, fromDeviceId) {
+    if (fromDeviceId == null) return meetingMembers.has(Number(from)) ? Number(from) : null;
+    if (fromDeviceId === myDeviceId) return null; // 自己的其它设备不会给自己发信令
+    if (meetingMembers.has("selfdev:" + fromDeviceId)) return "selfdev:" + fromDeviceId;
+    if (meetingMembers.has(Number(from))) return Number(from);
+    return null;
+  }
+  // 仅关闭某会议成员的全部 pc（按成员键精确匹配，不影响其它好友/通话连接）
+  function dropMeetingPeer(key) {
+    const prefix = String(key) + ":";
+    for (const [k, p] of [...peers]) {
+      if (k === String(key) || k.startsWith(prefix)) {
+        try { if (p.dc) p.dc.close(); } catch {}
+        try { if (p.pc) p.pc.close(); } catch {}
+        peers.delete(k);
+      }
+    }
+    peerStreams.delete(key);
+  }
   function getPeerConn(id) {
     id = Number(id);
     for (const [k, p] of peers) { if (peerUserIdOf(k) === id) return p; }
@@ -3545,6 +3578,7 @@
   let guestName = "";               // 访客昵称
   let guestRoomId = null;           // 访客 WS 鉴权用的 room（拼到 ws url）
   let meetingJoinPending = false;   // 通过链接入会但尚在“点击加入”闸门（未取媒体）
+  let myDeviceId = null;           // 本连接的唯一设备标识（服务端 welcome 下发），用于同账号多设备会议区分设备
 
   function startCall(to, name, mediaType) {
     to = Number(to);
@@ -3735,7 +3769,7 @@
     }
   }
 
-  async function handleSignal(data, from) {
+  async function handleSignal(data, from, fromDeviceId) {
     from = Number(from);
     if (!data) return;
     // 媒体控制信令（接听 / 拒绝 / 挂断）走独立通道，不参与 SDP/ICE 协商
@@ -3750,13 +3784,24 @@
     // 仅对「收到的 offer」或「本机已存在对应连接」的答案/候选进行处理；其余
     // （同账号其它设备间的连接答案被广播到本机）直接忽略，避免产生互不相关的垃圾连接。
     const connId = data.connId || null;
-    const key = peerConnKey(from, connId);
+    // 该信令若属于会议中的某个对等体（含同账号另一台设备），则按设备键处理；否则按 1:1 好友连接处理。
+    const mtKey = (meetingActive && fromDeviceId != null) ? meetingSignalKey(from, fromDeviceId) : null;
+    const isMeeting = mtKey != null;
+    const key = isMeeting ? peerConnKey(mtKey, connId) : peerConnKey(from, connId);
     const isOffer = !!(data.sdp && data.sdp.type === "offer");
     let p;
     if (isOffer || peers.has(key)) p = ensurePeerConn(key);
     else { p = peers.get(key); if (!p) return; }
     p.connId = connId || p.connId;
-    if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); }
+    if (!p.pc) {
+      p.pc = new RTCPeerConnection(rtcConfig());
+      // 会议连接：用成员键（同账号为 selfdev:<deviceId>）作为 _peerId，保证 ontrack/信令投递一致；
+      // 1:1 连接：沿用 userId（与历史一致）。
+      p.pc._peerId = isMeeting ? mtKey : from;
+      setupPc(p);
+      // 同账号多设备：用 deviceId 决定 polite（应答方 polite），避免重协商 glare 无法解冲突
+      if (isMeeting && from === myId && fromDeviceId) p.polite = (myDeviceId > fromDeviceId);
+    }
     try {
       if (data.sdp) {
         const desc = new RTCSessionDescription(data.sdp);
@@ -3784,7 +3829,8 @@
             if (localStream && !p.mediaAdded) addLocalMediaTracks(p);
             await p.pc.setLocalDescription(); // 自动生成 answer（含本端媒体）
             // 回带 connId：答案只被发起的那台设备消费，同账号其它设备忽略（避免撞连接）
-            sendSignal(from, { sdp: p.pc.localDescription, connId: p.connId || null });
+            // 会议连接用成员键投递（同账号为 selfdev:<deviceId>），避免回环到本端所有同账号设备
+            sendSignal(isMeeting ? mtKey : from, { sdp: p.pc.localDescription, connId: p.connId || null });
           } catch (err) {
             console.error("[WEBRTC] setRemoteDescription(offer) error:", (err && err.message) || err);
             if (!p.ignoreOffer) enableRelay(from);
@@ -3850,9 +3896,13 @@
   }
 
   function sendSignal(to, data) {
-    to = Number(to);
-    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
-      sigSocket.send(JSON.stringify({ type: "signal", to, data }));
+    if (!sigSocket || sigSocket.readyState !== WebSocket.OPEN) return;
+    // 同账号多设备会议：目标为 "selfdev:<deviceId>"，按设备精准投递，避免回环到本端所有同账号设备
+    if (typeof to === "string" && to.indexOf("selfdev:") === 0) {
+      const deviceId = to.slice("selfdev:".length);
+      sigSocket.send(JSON.stringify({ type: "signal", toDeviceId: deviceId, data }));
+    } else {
+      sigSocket.send(JSON.stringify({ type: "signal", to: Number(to), data }));
     }
   }
 
@@ -4306,48 +4356,51 @@
     attachMeetingStream(id, null);
   }
 
-  async function connectMeetingPeer(memberId) {
-    memberId = Number(memberId);
-    if (memberId === myId || !meetingActive) return;
+  async function connectMeetingPeer(fromUserId, fromDeviceId) {
+    const key = meetingMemberKey(fromUserId, fromDeviceId);
+    // 同账号且恰为本机设备：跳过（服务端已排除发起者自身设备，这里兜底）
+    if (Number(fromUserId) === myId && (fromDeviceId || null) === myDeviceId) return;
+    if (!meetingActive) return;
     // 登记会议成员 + 瓦片占位（发起方/应答方都需要，便于“已加入”可见与流到达即渲染）
-    meetingMembers.add(memberId);
-    if (meetingActive) ensureMeetingTile(memberId);
-    // 确定性发起方：userId 较小者发起 offer，较大者仅应答。彻底消除双向同时发 offer 的 glare
-    // （glare 会导致 answer 与 offer 错配、协商被搅乱、视频流 ontrack 不触发）；同账号多设备共用
-    // userId 时，每条连接用独立 connId 区分，避免 PC/手机在对方单一 pc 上撞连接、answer 被错投。
-    const iAmOfferer = (myId != null) ? (Number(myId) < memberId) : true;
+    meetingMembers.add(key);
+    if (meetingActive) ensureMeetingTile(key);
+    // 确定性发起方：不同账号用 userId 比较；同账号（共用 userId）用 deviceId 比较，
+    // 否则双方 userId 相等、都不发起 → 永远建不了连接。deviceId 全局唯一，恰好一方为发起方。
+    const iAmOfferer = meetingIAmOfferer(fromUserId, fromDeviceId);
     if (!iAmOfferer) {
-      // 应答方：本函数不建连、不发 offer，等对方（较小 id）的 offer 到达后由 handleSignal
+      // 应答方：本函数不建连、不发 offer，等对方（较小 id/deviceId）的 offer 到达后由 handleSignal
       // 用其中的 connId 建连并应答；本端已有缓存流则直接补渲染到网格。
-      if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
+      if (peerStreams.has(key)) attachMeetingStream(key, peerStreams.get(key));
       return;
     }
-    // 发起方：复用“本次会话”已生成的 connId（按 memberId 持久化），保证幂等 + 与对方上一次
+    // 发起方：复用“本次会话”已生成的 connId（按成员键持久化），保证幂等 + 与对方上一次
     // offer 对应；仅在无 connId 或旧连接已死时才生成新 connId 并重建，避免反复 drop 重建。
-    let connId = meetingConnIds.get(memberId);
-    const key = peerConnKey(memberId, connId);
-    const existing = connId ? peers.get(key) : undefined;
+    let connId = meetingConnIds.get(key);
+    const pcKey = peerConnKey(key, connId);
+    const existing = connId ? peers.get(pcKey) : undefined;
     if (existing && existing.pc) {
       const st = existing.pc.connectionState;
       if (st === "connected" || st === "connecting" || st === "new") {
         // 已连/连中：不重建、不重发 offer；仅迟到补加媒体与渲染已缓存流
         if (localStream && !existing.mediaAdded) addLocalMediaTracks(existing);
         maybeApplyScreenShare(existing);
-        if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
+        if (peerStreams.has(key)) attachMeetingStream(key, peerStreams.get(key));
         return;
       }
       // 旧连接已失败/关闭：清掉旧键，下面用新 connId 重建
-      dropPeerConn(memberId);
+      dropMeetingPeer(key);
     }
     // 真正需要新建：生成并持久化新 connId（同会话内复用）
     connId = crypto.randomUUID();
-    meetingConnIds.set(memberId, connId);
+    meetingConnIds.set(key, connId);
     try {
-      const p = ensurePeerConn(peerConnKey(memberId, connId));
+      const p = ensurePeerConn(peerConnKey(key, connId));
       p.connId = connId;
       p.pc = new RTCPeerConnection(rtcConfig());
-      p.pc._peerId = memberId;
+      p.pc._peerId = key; // 成员键（同账号为 selfdev:<deviceId>），保证 ontrack/信令一致
       setupPc(p);
+      // 同账号多设备：用 deviceId 决定 polite（应答方 polite），避免重协商 glare 无法解冲突
+      if (Number(fromUserId) === myId && fromDeviceId) p.polite = (myDeviceId > fromDeviceId);
       p.mediaAdded = false;
       // 群会议：立即携带本端媒体（mesh 每人各自带媒体），触发 onnegotiationneeded 发带 connId 的 offer；
       // 无本地媒体时仍发送“空 offer”以建立连接（确定性模型下由应答方在 answer 中补媒体），避免双方互等。
@@ -4355,13 +4408,13 @@
         addLocalMediaTracks(p);
       } else {
         await p.pc.setLocalDescription();
-        sendSignal(memberId, { sdp: p.pc.localDescription, connId });
+        sendSignal(key, { sdp: p.pc.localDescription, connId });
       }
       maybeApplyScreenShare(p); // 共享中：新连接也立即发送屏幕轨道
-      if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
+      if (peerStreams.has(key)) attachMeetingStream(key, peerStreams.get(key));
     } catch (e) {
-      console.error("[MEETING] connectMeetingPeer 失败", memberId, e);
-      meetingConnIds.delete(memberId); // 建连失败：清掉 connId，下次重试可新建
+      console.error("[MEETING] connectMeetingPeer 失败", key, e);
+      meetingConnIds.delete(key); // 建连失败：清掉 connId，下次重试可新建
     }
   }
 
@@ -4491,7 +4544,7 @@
       const init = (info.name || String(id)).trim().charAt(0).toUpperCase();
       tile.dataset.initial = init || "?";
       // 若该成员正在共享屏幕，直接标记为 contain 显示（避免后续才收到广播导致先被裁切）
-      if (screenSharingMembers.has(Number(id))) tile.classList.add("screen");
+      if (screenSharingMembers.has(id)) tile.classList.add("screen");
       // 聚焦模式且不是被聚焦者 → 进胶片条；否则进主网格
       const intoStrip = spotlightUid != null && String(spotlightUid) !== String(id);
       const container = (intoStrip && meetingFilmstrip) ? meetingFilmstrip : meetingGrid;
@@ -4692,7 +4745,7 @@
     if (meetingActive && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "room-leave", roomId: meetingRoomId }));
     }
-    for (const id of meetingMembers) { if (id !== myId) dropPeerConn(id); }
+    for (const id of meetingMembers) { if (id !== myId) dropMeetingPeer(id); }
     clearMeetingTiles();
     spotlightUid = null; screenSharingMembers = new Set();
     if (meetingPanel) meetingPanel.classList.remove("spotlight");
@@ -4810,30 +4863,35 @@
   }
 
   // ---- 房间信令处理（与群会议对称，仅 key 为 roomId）----
-  function onRoomJoin(from, name) {
+  function onRoomJoin(from, name, deviceId) {
     from = Number(from);
     if (!meetingActive || meetingRoomId == null) return;
+    const key = meetingMemberKey(from, deviceId);
+    // 同账号且恰为本机设备：跳过（兜底，服务端已排除发起者自身设备）
+    if (key === myId) return;
     // 记录新加入者昵称（服务端 room-join 已携带），供瓦片/聊天显示
-    if (name) roomPeers.set(from, { name, avatar: "" });
+    if (name) roomPeers.set(key, { name, avatar: "", userId: from, deviceId: deviceId || null });
     // 注意：不要无条件 teardownPeer(from)。room-join 可能被服务端重复下发（同一成员多次到达），
     // 每次 teardown 都会拆掉正在协商的连接并重建，产生多个 offer；本端最后一代 pc 只持有最后一次
     // 的 offer，对方回的其余 answer 全部落在 stable 窗口，被“过期 answer”守卫忽略 → 协商错乱、
     // 对端流 ontrack 不触发、视频流无法渲染。连接建立/重连交由 connectMeetingPeer 幂等处理：
     // 已连接/连接中直接返回，失败或关闭才重建。
-    connectMeetingPeer(from);
+    connectMeetingPeer(from, deviceId);
+    // 我正在共享屏幕/关摄像头时，晚加入的成员没收到过广播，主动定向补发一次（按设备精准投递）。
     if (isSharingScreen && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
-      emitSignal({ type: "room-screen", roomId: meetingRoomId, to: from });
+      emitSignal({ type: "room-screen", roomId: meetingRoomId, toDeviceId: deviceId });
     }
     if (camOff && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
-      emitSignal({ type: "room-cam", roomId: meetingRoomId, on: false, to: from });
+      emitSignal({ type: "room-cam", roomId: meetingRoomId, on: false, toDeviceId: deviceId });
     }
   }
-  function onRoomLeave(from) {
+  function onRoomLeave(from, deviceId) {
     from = Number(from);
     if (!meetingActive) return;
-    meetingMembers.delete(from); roomPeers.delete(from);
-    screenSharingMembers.delete(from); camOffMembers.delete(from);
-    removeMeetingTile(from); dropPeerConn(from); updateMeetingCount();
+    const key = meetingMemberKey(from, deviceId);
+    meetingMembers.delete(key); roomPeers.delete(key);
+    screenSharingMembers.delete(key); camOffMembers.delete(key);
+    removeMeetingTile(key); dropMeetingPeer(key); updateMeetingCount();
   }
   function onRoomRoster(roomId, members) {
     roomId = String(roomId);
@@ -4843,24 +4901,28 @@
     meetingConnIds = new Map(); // 名册重建：清陈旧 connId，避免复用已失效的连接键
     (members || []).forEach((m) => {
       const id = Number(m.id);
-      roomPeers.set(id, { name: m.name || String(id), avatar: m.avatar || "" });
-      if (id === myId) return;
-      meetingMembers.add(id);
-      connectMeetingPeer(id);
+      const key = meetingMemberKey(id, m.deviceId);
+      // 跳过本机自己的设备（同账号多设备时名册会含本机设备，但无需与它自身建连）
+      if (id === myId && (m.deviceId || null) === myDeviceId) return;
+      roomPeers.set(key, { name: m.name || String(id), avatar: m.avatar || "", userId: id, deviceId: m.deviceId || null });
+      meetingMembers.add(key);
+      connectMeetingPeer(id, m.deviceId);
     });
     updateMeetingCount();
   }
-  function onRoomScreen(from, on) {
+  function onRoomScreen(from, on, deviceId) {
     from = Number(from);
     if (!meetingActive) return;
-    if (on) { screenSharingMembers.add(from); setTileScreenFlag(from, true); }
-    else { screenSharingMembers.delete(from); setTileScreenFlag(from, false); updateTileVideoState(from); }
+    const key = meetingMemberKey(from, deviceId);
+    if (on) { screenSharingMembers.add(key); setTileScreenFlag(key, true); }
+    else { screenSharingMembers.delete(key); setTileScreenFlag(key, false); updateTileVideoState(key); }
   }
-  function onRoomCam(from, on) {
+  function onRoomCam(from, on, deviceId) {
     from = Number(from);
     if (!meetingActive) return;
-    if (on) camOffMembers.delete(from); else camOffMembers.add(from);
-    updateTileVideoState(from);
+    const key = meetingMemberKey(from, deviceId);
+    if (on) camOffMembers.delete(key); else camOffMembers.add(key);
+    updateTileVideoState(key);
   }
   function onRoomChat(m) {
     if (!meetingActive && !meetingLeft) return;
@@ -5083,7 +5145,7 @@
       noVideo = meetingType === "audio" ? true : (camOff && !isSharingScreen);
       if (!localStream) noVideo = true;
     } else {
-      const id = Number(uid);
+      const id = uid; // 成员键可能是数字（不同账号）或 "selfdev:<deviceId>"（同账号多设备）
       noVideo = meetingType === "audio" ? true : (camOffMembers.has(id) && !screenSharingMembers.has(id));
     }
     tile.classList.toggle("no-video", !!noVideo);

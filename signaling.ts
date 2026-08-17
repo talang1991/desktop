@@ -72,24 +72,32 @@ const userIdByWs = new Map<WebSocket, number>();
 // userId -> 用户基本信息（用于会议房间名单回执），含访客
 const usersById = new Map<number, { id: number; username: string; avatar?: string }>();
 // 会议房间：roomId -> (userId -> 连接计数)。按连接计数而非按 userId 去重，
-// 以支持同一账号在多台设备（手机/电脑）同时入会：一台设备离开不会把同账号的另一台设备“踢出”。
-const rooms = new Map<string, Map<number, number>>();
+// 会议房间成员按「设备」(deviceId) 登记，而非按 userId。这样同一账号在 PC 与手机同时入会时，
+// 两台设备被视为独立成员、互不覆盖；一台离开也不会把同账号的另一台设备“踢出”。
+const rooms = new Map<string, Map<string, number>>(); // roomId -> (deviceId -> userId)
+// 每个 WebSocket 连接的唯一设备标识（连接建立时生成），用于按设备精准投递会议信令
+const deviceIdByWs = new Map<WebSocket, string>();
+const wsByDeviceId = new Map<string, WebSocket>();
+const deviceUserById = new Map<string, number>();
 
-// 房间增加一名参与者（按 userId 计数，支持同账号多连接）
-function roomAdd(roomId: string, userId: number): void {
+// 房间增加一名参与者（按设备，支持同账号多连接）
+function roomAdd(roomId: string, deviceId: string, userId: number): void {
   let m = rooms.get(roomId);
   if (!m) { m = new Map(); rooms.set(roomId, m); }
-  m.set(userId, (m.get(userId) || 0) + 1);
+  m.set(deviceId, userId);
 }
-// 房间移除一名参与者；返回该 userId 是否仍在房间（计数 > 0 说明同账号还有其它设备）
-function roomRemove(roomId: string, userId: number): boolean {
+// 房间移除一名参与者（按设备）；返回该 userId 是否仍有其它设备留在房间
+function roomRemove(roomId: string, deviceId: string): boolean {
   const m = rooms.get(roomId);
   if (!m) return false;
-  const c = (m.get(userId) || 0) - 1;
-  if (c <= 0) m.delete(userId);
-  else m.set(userId, c);
-  if (m.size === 0) rooms.delete(roomId);
-  return m.has(userId);
+  m.delete(deviceId);
+  if (m.size === 0) { rooms.delete(roomId); return false; }
+  const userId = deviceUserById.get(deviceId);
+  let stillIn = false;
+  if (userId != null) {
+    for (const u of m.values()) { if (u === userId) { stillIn = true; break; } }
+  }
+  return stillIn;
 }
 // 访客 id 自增计数器（从 -1 递减，避免与真实正 id 冲突）
 let guestSeq = 0;
@@ -137,22 +145,26 @@ function removeOnline(ws: WebSocket): void {
   }
   userIdByWs.delete(ws);
   friendsByWs.delete(ws);
-  // 断开时自动退出其所在的会议房间（若有），并通知其它成员。
-  // 按连接计数移除：同账号其它设备仍在房间时，不误发 room-leave（避免把同账号其它设备“踢出”）。
+  // 断开时自动退出其所在的会议房间（若有），并通知房间内其它「设备」（按设备投递，
+  // 支持同账号多设备：一台设备掉线只通知同账号的其它设备，不误伤）。
   const roomId = roomsByWs.get(ws);
+  const devId = deviceIdByWs.get(ws);
   if (roomId) {
     roomsByWs.delete(ws);
     const m = rooms.get(roomId);
-    if (m) {
-      const stillIn = roomRemove(roomId, userId);
+    if (m && devId) {
+      const stillIn = roomRemove(roomId, devId);
       if (!stillIn) {
-        for (const id of m.keys()) {
-          if (id === userId) continue;
-          routeTo(id, { type: "room-leave", roomId, from: userId });
+        for (const [otherDev, otherUserId] of m.entries()) {
+          if (otherDev === devId) continue;
+          const w = wsByDeviceId.get(otherDev);
+          if (w) send(w, { type: "room-leave", roomId, from: userId, deviceId: devId });
         }
       }
     }
   }
+  // 清理本连接的设备标识
+  if (devId) { deviceIdByWs.delete(ws); wsByDeviceId.delete(devId); deviceUserById.delete(devId); }
   notifyPresence(userId, false);
 }
 
@@ -183,31 +195,32 @@ function routeToEach(ids: number[], obj: unknown, exclude?: number): void {
   }
 }
 
-// 向会议房间内除 exclude(userId) 外的成员广播
-function roomBroadcast(roomId: string, exclude: number, obj: unknown): void {
+// 向会议房间内除 excludeDeviceId（发起者设备）外的「每台设备」广播（按设备投递，支持同账号多设备）
+function roomBroadcast(roomId: string, excludeDeviceId: string, obj: unknown): void {
   const m = rooms.get(roomId);
   if (!m) return;
-  for (const id of m.keys()) {
-    if (id === exclude) continue;
-    routeTo(id, obj);
+  for (const devId of m.keys()) {
+    if (devId === excludeDeviceId) continue;
+    const w = wsByDeviceId.get(devId);
+    if (w) send(w, obj);
   }
 }
 
-// 生成房间权威成员名单（含昵称/头像，供前端渲染瓦片与聊天昵称）
-async function roomRoster(roomId: string): Promise<Array<{ id: number; name: string; avatar: string }>> {
+// 生成房间权威成员名单（含昵称/头像/设备 id，供前端渲染瓦片与聊天昵称）
+async function roomRoster(roomId: string): Promise<Array<{ id: number; deviceId: string; name: string; avatar: string }>> {
   const m = rooms.get(roomId);
   if (!m) return [];
-  const out: Array<{ id: number; name: string; avatar: string }> = [];
-  for (const id of m.keys()) {
+  const out: Array<{ id: number; deviceId: string; name: string; avatar: string }> = [];
+  for (const [devId, id] of m.entries()) {
     const u = usersById.get(id);
-    if (u) { out.push({ id, name: u.username, avatar: u.avatar || "" }); continue; }
+    if (u) { out.push({ id, deviceId: devId, name: u.username, avatar: u.avatar || "" }); continue; }
     if (id > 0) {
       try {
         const db = await getUserById(id);
-        if (db) { out.push({ id, name: db.username, avatar: db.avatar || "" }); usersById.set(id, db); continue; }
+        if (db) { out.push({ id, deviceId: devId, name: db.username, avatar: db.avatar || "" }); usersById.set(id, db); continue; }
       } catch { /* ignore */ }
     }
-    out.push({ id, name: String(id), avatar: "" });
+    out.push({ id, deviceId: devId, name: String(id), avatar: "" });
   }
   return out;
 }
@@ -285,11 +298,18 @@ export function attachSignaling(server: Server): void {
           return;
         }
 
-        // WebRTC 信令（offer/answer/ICE），按目标 userId 转发
+        // WebRTC 信令（offer/answer/ICE），按目标 userId 转发；同账号多设备时按设备 id 精准投递
         case "signal": {
           const to = Number(msg.to);
-          if (!to) return;
-          routeTo(to, { type: "signal", from: user!.id, data: msg.data });
+          const toDeviceId = typeof msg.toDeviceId === "string" ? String(msg.toDeviceId) : undefined;
+          const devId = deviceIdByWs.get(ws)!;
+          // fromDeviceId 让前端在「同账号多设备」场景下把会议信令精确对应到对应设备
+          if (toDeviceId) {
+            const w = wsByDeviceId.get(toDeviceId);
+            if (w) send(w, { type: "signal", from: user!.id, fromDeviceId: devId, data: msg.data });
+          } else if (to) {
+            routeTo(to, { type: "signal", from: user!.id, fromDeviceId: devId, data: msg.data });
+          }
           return;
         }
 
@@ -475,15 +495,18 @@ export function attachSignaling(server: Server): void {
         case "room-join": {
           const roomId = String(msg.roomId || "");
           if (!roomId) return;
-          roomAdd(roomId, user!.id);
+          const devId = deviceIdByWs.get(ws)!;
+          roomAdd(roomId, devId, user!.id);
           roomsByWs.set(ws, roomId);
           const m = rooms.get(roomId)!;
-          // 通知房间内其它「账号」有新加入者（让其主动建连）；同账号其它设备本就在房间内，无需重复通知
-          for (const id of m.keys()) {
-            if (id === user!.id) continue;
-            routeTo(id, { type: "room-join", roomId, from: user!.id, name: user!.username });
+          // 通知房间内其它「设备」（含同账号的其它设备）：新设备加入，让其主动建连。
+          // 旧逻辑按 userId 排除发起者，会漏掉同账号的另一台设备 → 它永远收不到入会信号。
+          for (const [otherDev, otherUserId] of m.entries()) {
+            if (otherDev === devId) continue;
+            const w = wsByDeviceId.get(otherDev);
+            if (w) send(w, { type: "room-join", roomId, from: user!.id, deviceId: devId, name: user!.username });
           }
-          // 回执发起者权威名单（含名称，供前端渲染瓦片/聊天昵称）
+          // 回执发起者权威名单（含设备 id，供前端渲染瓦片/聊天昵称）
           const members = await roomRoster(roomId);
           send(ws, { type: "room-roster", roomId, members });
           return;
@@ -492,14 +515,16 @@ export function attachSignaling(server: Server): void {
           const roomId = String(msg.roomId || "");
           if (!roomId) return;
           roomsByWs.delete(ws);
+          const devId = deviceIdByWs.get(ws);
           const m = rooms.get(roomId);
-          if (m) {
-            const stillIn = roomRemove(roomId, user!.id);
-            // 仅当该账号已完全离开房间才通知其它成员（否则同账号还有其它设备，不应误发离开）
+          if (m && devId) {
+            const stillIn = roomRemove(roomId, devId);
+            // 仅当该账号已完全离开房间（无其它设备）才通知其它「设备」
             if (!stillIn) {
-              for (const id of m.keys()) {
-                if (id === user!.id) continue;
-                routeTo(id, { type: "room-leave", roomId, from: user!.id });
+              for (const [otherDev, otherUserId] of m.entries()) {
+                if (otherDev === devId) continue;
+                const w = wsByDeviceId.get(otherDev);
+                if (w) send(w, { type: "room-leave", roomId, from: user!.id, deviceId: devId });
               }
             }
           }
@@ -508,35 +533,39 @@ export function attachSignaling(server: Server): void {
         case "room-screen": {
           const roomId = String(msg.roomId || "");
           if (!roomId) return;
-          const payload = { type: "room-screen", roomId, from: user!.id };
-          if (msg.to) routeTo(Number(msg.to), payload);
-          else roomBroadcast(roomId, user!.id, payload);
+          const devId = deviceIdByWs.get(ws)!;
+          const payload = { type: "room-screen", roomId, from: user!.id, deviceId: devId };
+          if (msg.toDeviceId) { const w = wsByDeviceId.get(String(msg.toDeviceId)); if (w) send(w, payload); }
+          else roomBroadcast(roomId, devId, payload);
           return;
         }
         case "room-screen-stop": {
           const roomId = String(msg.roomId || "");
           if (!roomId) return;
-          const payload = { type: "room-screen-stop", roomId, from: user!.id };
-          if (msg.to) routeTo(Number(msg.to), payload);
-          else roomBroadcast(roomId, user!.id, payload);
+          const devId = deviceIdByWs.get(ws)!;
+          const payload = { type: "room-screen-stop", roomId, from: user!.id, deviceId: devId };
+          if (msg.toDeviceId) { const w = wsByDeviceId.get(String(msg.toDeviceId)); if (w) send(w, payload); }
+          else roomBroadcast(roomId, devId, payload);
           return;
         }
         case "room-cam": {
           const roomId = String(msg.roomId || "");
           if (!roomId) return;
-          const payload = { type: "room-cam", roomId, from: user!.id, on: !!msg.on };
-          if (msg.to) routeTo(Number(msg.to), payload);
-          else roomBroadcast(roomId, user!.id, payload);
+          const devId = deviceIdByWs.get(ws)!;
+          const payload = { type: "room-cam", roomId, from: user!.id, deviceId: devId, on: !!msg.on };
+          if (msg.toDeviceId) { const w = wsByDeviceId.get(String(msg.toDeviceId)); if (w) send(w, payload); }
+          else roomBroadcast(roomId, devId, payload);
           return;
         }
         case "room-chat": {
           const roomId = String(msg.roomId || "");
           if (!roomId) return;
+          const devId = deviceIdByWs.get(ws)!;
           const id = String(msg.id || crypto.randomUUID());
           const ts = Number(msg.ts) || Date.now();
           const text = String(msg.text ?? "").slice(0, 4000);
           if (!text) return;
-          roomBroadcast(roomId, user!.id, { type: "room-chat", roomId, from: user!.id, id, ts, text });
+          roomBroadcast(roomId, devId, { type: "room-chat", roomId, from: user!.id, deviceId: devId, id, ts, text });
           return;
         }
 
@@ -593,10 +622,15 @@ export function attachSignaling(server: Server): void {
     }
 
     authed = true;
+    // 为本次连接分配唯一设备标识，供会议按设备精准投递（同账号多设备互不覆盖、不互踢）
+    const deviceId = crypto.randomUUID();
+    deviceIdByWs.set(ws, deviceId);
+    wsByDeviceId.set(deviceId, ws);
+    deviceUserById.set(deviceId, user.id);
     addOnline(user.id, ws);
     // 记录用户基本信息，供会议房间名单回执（含访客）
     usersById.set(user.id, { id: user.id, username: user.username, avatar: (user as { avatar?: string }).avatar || "" });
-    send(ws, { type: "welcome", userId: user.id, username: user.username });
+    send(ws, { type: "welcome", userId: user.id, username: user.username, deviceId });
     // 处理鉴权期间缓存的消息（如客户端 onopen 即发的 presence 订阅 / call）
     for (const m of pending.splice(0)) {
       try { await handleMessage(m); } catch (err) {
