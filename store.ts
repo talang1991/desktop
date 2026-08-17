@@ -35,6 +35,7 @@ interface LinkRow {
   color: string;
   open_new: boolean;
   open_mode: string;
+  sort_order: number;
   created_at: string;
 }
 
@@ -500,6 +501,7 @@ function toLinkShape(l: LinkRow) {
     color: l.color,
     openNew: l.open_new,
     openMode: l.open_mode,
+    sortOrder: l.sort_order,
     createdAt: new Date(l.created_at).getTime(),
   };
 }
@@ -507,8 +509,8 @@ function toLinkShape(l: LinkRow) {
 export async function listLinks(userId: number): Promise<unknown[]> {
   ensureDb();
   const rows = await query<LinkRow>(
-    `SELECT id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, created_at
-     FROM links WHERE user_id = $1 ORDER BY created_at DESC`,
+    `SELECT id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, sort_order, created_at
+     FROM links WHERE user_id = $1 ORDER BY sort_order ASC, created_at DESC`,
     [userId],
   );
   return rows.map(toLinkShape);
@@ -518,18 +520,18 @@ const ICON_MAX = 2048; // 图标字段可存 emoji 或 favicon 链接，限制�
 
 export async function createLink(
   userId: number,
-  data: { name: string; url: string; category: string; emoji: string; color: string; openNew: boolean; openMode?: string },
+  data: { name: string; url: string; category: string; emoji: string; color: string; openNew: boolean; openMode?: string; sortOrder?: number },
 ): Promise<unknown> {
   ensureDb();
   const icon = String(data.emoji || "").slice(0, ICON_MAX);
   const rows = await query<LinkRow>(
     `INSERT INTO links (user_id, title, url, category, icon, color, open_new, open_mode, sort_order)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-     RETURNING id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, created_at`,
+     RETURNING id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, sort_order, created_at`,
     [
       userId, data.name, data.url,
       data.category || "未分类", icon, data.color || "#4f6ef7",
-      data.openNew !== false, data.openMode || "new", 0,
+      data.openNew !== false, data.openMode || "new", Number(data.sortOrder) || 0,
     ],
   );
   return toLinkShape(rows[0]);
@@ -550,6 +552,7 @@ export async function updateLink(
     color: ["color", fields.color],
     openNew: ["open_new", fields.openNew],
     openMode: ["open_mode", fields.openMode],
+    sortOrder: ["sort_order", fields.sortOrder == null ? undefined : Number(fields.sortOrder)],
   };
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -610,6 +613,7 @@ export async function bulkImportLinks(
         color: String(a.color || "#4f6ef7"),
         openNew: a.openNew !== false,
         openMode: a.openMode || "new",
+        sortOrder: typeof a.sortOrder === "number" ? a.sortOrder : 0,
       };
     });
   if (valid.length === 0) return { created: 0, skipped: 0, total: 0 };
@@ -629,7 +633,7 @@ export async function bulkImportLinks(
         await c.queryObject(
           `INSERT INTO links (user_id, title, url, category, icon, color, open_new, open_mode, sort_order)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [userId, it.name, it.url, it.category, it.emoji, it.color, it.openNew, it.openMode, 0],
+          [userId, it.name, it.url, it.category, it.emoji, it.color, it.openNew, it.openMode, it.sortOrder || 0],
         );
         created++;
       }

@@ -2741,4 +2741,26 @@ input, select, textarea, .friend-row, .conv-row, .member-picker, .group-list, .f
   .card, .modal-card, .empty-emoji, .brand-logo, .auth-logo { animation: none !important; }
 }
 
+/* ---------- 拖动排序 ---------- */
+/* 排序模式下：卡片禁用触摸滚动（避免与拖拽冲突），并显示抓取光标 */
+.grid.reordering { background: rgba(79,110,247,.05); border-radius: 16px; }
+.grid.reordering .card { touch-action: none; cursor: grab; }
+.grid.reordering .card:active { cursor: grabbing; }
+/* 源卡在拖拽中：半透明占位（位置随插入实时移动） */
+.card.dragging { opacity: .35; }
+/* 跟随指针的镜像 */
+.reorder-ghost {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  margin: 0;
+  opacity: .95;
+  box-shadow: 0 18px 40px rgba(0,0,0,.28);
+  transform: scale(1.04);
+  border-radius: var(--radius, 14px);
+}
+/* 排序按钮激活态 */
+#reorderBtn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+#reorderBtn.active .ico { color: #fff; }
+
 

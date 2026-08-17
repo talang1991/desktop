@@ -13,10 +13,11 @@
     "#9b5de5", "#f15bb5", "#00bbf9", "#8ac926",
   ];
 
-  /** @type {Array<{id:number,name:string,url:string,category?:string,emoji?:string,color:string,openNew:boolean,openMode?:'new'|'self'|'iframe',createdAt:number}>} */
+  /** @type {Array<{id:number,name:string,url:string,category?:string,emoji?:string,color:string,openNew:boolean,openMode?:'new'|'self'|'iframe',order?:number,createdAt:number}>} */
   let apps = [];
   let activeCategory = "全部";
   let searchTerm = "";
+  let reorderMode = false;   // 拖动排序模式：开启后卡片可拖拽重排并持久化顺序
   let editingId = null;
   let selectedColor = COLORS[0];
   let currentUsername = "";
@@ -181,12 +182,12 @@
           }
           await LinkDB.delete(l.id);
         } else if (String(l.id).startsWith("tmp_") || l.op === "create") {
-          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode };
+          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode, sortOrder: l.order };
           const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
           await LinkDB.delete(l.id);
           await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
         } else if (l.op === "update") {
-          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode };
+          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode, sortOrder: l.order };
           const data = await api("/api/links/" + l.id, { method: "PUT", body: JSON.stringify(obj) });
           await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
         }
@@ -202,6 +203,8 @@
 
   // 新建（离线友好）：先落本地，再尝试推服务端；失败则作为离线待同步保留
   async function createLinkLocal(payload) {
+    // 初始顺序：比当前最小 order 再小 1，保证新链接默认排在最前（与旧数据 createdAt DESC 行为一致）
+    const baseOrder = apps.length ? Math.min.apply(null, apps.map((a) => Number(a.order) || 0)) : 0;
     const rec = {
       id: genTempId(), userId: currentUserId, synced: false, op: "create",
       name: payload.name, url: payload.url,
@@ -209,12 +212,13 @@
       emoji: payload.emoji || "", color: payload.color,
       openNew: payload.openNew !== false,
       openMode: payload.openMode || "new",
+      order: baseOrder - 1,
       createdAt: Date.now(),
     };
     await LinkDB.put(rec);
     await refreshApps();
     try {
-      const obj = { name: rec.name, url: rec.url, category: rec.category, emoji: rec.emoji, color: rec.color, openNew: rec.openNew, openMode: rec.openMode };
+      const obj = { name: rec.name, url: rec.url, category: rec.category, emoji: rec.emoji, color: rec.color, openNew: rec.openNew, openMode: rec.openMode, sortOrder: rec.order };
       const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
       await LinkDB.delete(rec.id);
       await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
@@ -233,7 +237,7 @@
     await LinkDB.put(merged);
     await refreshApps();
     try {
-      const obj = { name: merged.name, url: merged.url, category: merged.category, emoji: merged.emoji, color: merged.color, openNew: merged.openNew, openMode: merged.openMode };
+      const obj = { name: merged.name, url: merged.url, category: merged.category, emoji: merged.emoji, color: merged.color, openNew: merged.openNew, openMode: merged.openMode, sortOrder: merged.order };
       if (isTemp) {
         const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
         await LinkDB.delete(id);
@@ -418,6 +422,15 @@
   let selectionMode = false;
   const selectedIds = new Set();
 
+  // 排序比较：order 升序（越小越靠前）；order 相同时维持"新在前"（createdAt 降序），
+  // 保证老数据（order 全为 0）视觉与旧版 createdAt DESC 一致，拖拽后才真正按 order 排列。
+  function sortByOrder(a, b) {
+    const oa = Number(a && a.order) || 0;
+    const ob = Number(b && b.order) || 0;
+    if (oa !== ob) return oa - ob;
+    return (Number(b && b.createdAt) || 0) - (Number(a && a.createdAt) || 0);
+  }
+
   function getFilteredApps() {
     const term = searchTerm.trim().toLowerCase();
     return apps.filter((a) => {
@@ -430,19 +443,49 @@
         hayName.toLowerCase().includes(term) ||
         hayUrl.toLowerCase().includes(term);
       return matchCat && matchTerm;
-    });
+    }).sort(sortByOrder);
   }
 
   function updateSelectionUI() {
     const bar = $("#selectionBar");
     if (!bar) return;
-    bar.hidden = !selectionMode;
+    // 横栏在「多选」或「排序」模式下都显示：长按卡片进入多选，排序按钮也放在这里
+    const show = selectionMode || reorderMode;
+    bar.hidden = !show;
     document.body.classList.toggle("selection-mode", selectionMode);
-    const cnt = selectedIds.size;
-    i18nText($("#selCount"), "select.count", { n: cnt });
-    const visible = getFilteredApps();
-    const allSelected = visible.length > 0 && visible.every((a) => selectedIds.has(a.id));
-    $("#selAll").textContent = allSelected ? t("select.deselectAll") : t("select.selectAll");
+    document.body.classList.toggle("reorder-mode", reorderMode);
+    // 排序按钮（始终在横栏中）：状态随 reorderMode 联动
+    const rb = $("#reorderBtn");
+    if (rb) {
+      rb.classList.toggle("active", reorderMode);
+      rb.setAttribute("aria-pressed", String(reorderMode));
+    }
+    const selCount = $("#selCount");
+    const selAll = $("#selAll");
+    const selDelete = $("#selDelete");
+    const selCancel = $("#selCancel");
+    const selSpacer = bar.querySelector(".sel-spacer");
+    if (selectionMode) {
+      // 多选模式：显示计数 / 全选 / 删除
+      const cnt = selectedIds.size;
+      i18nText(selCount, "select.count", { n: cnt });
+      selCount.hidden = false;
+      const visible = getFilteredApps();
+      const allSelected = visible.length > 0 && visible.every((a) => selectedIds.has(a.id));
+      selAll.textContent = allSelected ? t("select.deselectAll") : t("select.selectAll");
+      selAll.hidden = false;
+      selDelete.hidden = false;
+      if (selSpacer) selSpacer.hidden = false;
+      selCancel.textContent = t("select.cancel");
+    } else {
+      // 排序模式（或空闲）：隐藏删除控件，改为提示「拖动卡片排序」+「完成」
+      selCount.hidden = false;
+      selCount.textContent = t("reorder.hint");
+      selAll.hidden = true;
+      selDelete.hidden = true;
+      if (selSpacer) selSpacer.hidden = true;
+      selCancel.textContent = t("reorder.done");
+    }
     grid.querySelectorAll(".card").forEach((c) => {
       const id = Number(c.dataset.id);
       c.classList.toggle("selected", selectedIds.has(id));
@@ -472,6 +515,119 @@
     grid.querySelectorAll(".card.selected").forEach((c) => c.classList.remove("selected"));
     updateSelectionUI();
   }
+
+  // ---------- 拖动排序（基于 Pointer Events，桌面 / 移动统一）----------
+  let dragCtx = null; // { id, card, startX, startY, pointerId, dragging, ghost, offsetX, offsetY }
+  const REORDER_THRESHOLD = 8; // 位移超过该阈值才视为拖拽，否则当作点击
+
+  function onReorderDown(e) {
+    if (!reorderMode) return;
+    if (e.button != null && e.button !== 0) return; // 仅响应左键 / 触摸
+    const card = e.target.closest(".card");
+    if (!card || card.classList.contains("card-broken")) return; // 坏卡不可拖
+    if (e.target.closest(".card-menu")) return; // 菜单按钮不触发拖拽
+    dragCtx = {
+      id: card.dataset.id,
+      card,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+      dragging: false,
+      ghost: null,
+      offsetX: 0,
+      offsetY: 0,
+    };
+    try { grid.setPointerCapture(e.pointerId); } catch {}
+  }
+
+  function onReorderMove(e) {
+    if (!dragCtx) return;
+    const dx = e.clientX - dragCtx.startX;
+    const dy = e.clientY - dragCtx.startY;
+    if (!dragCtx.dragging) {
+      if (Math.hypot(dx, dy) < REORDER_THRESHOLD) return;
+      // 进入拖拽：克隆镜像 ghost 跟随指针，源卡半透明占位并随插入实时移动
+      dragCtx.dragging = true;
+      dragCtx.card.classList.add("dragging");
+      const rect = dragCtx.card.getBoundingClientRect();
+      dragCtx.offsetX = dragCtx.startX - rect.left;
+      dragCtx.offsetY = dragCtx.startY - rect.top;
+      const ghost = dragCtx.card.cloneNode(true);
+      ghost.classList.add("reorder-ghost");
+      ghost.style.width = rect.width + "px";
+      ghost.style.height = rect.height + "px";
+      ghost.style.left = (e.clientX - dragCtx.offsetX) + "px";
+      ghost.style.top = (e.clientY - dragCtx.offsetY) + "px";
+      document.body.appendChild(ghost);
+      dragCtx.ghost = ghost;
+    }
+    if (dragCtx.ghost) {
+      dragCtx.ghost.style.left = (e.clientX - dragCtx.offsetX) + "px";
+      dragCtx.ghost.style.top = (e.clientY - dragCtx.offsetY) + "px";
+    }
+    // 命中测试：找到指针下的目标卡，按指针在卡片中线上下决定插前 / 插后
+    const overEl = document.elementFromPoint(e.clientX, e.clientY);
+    const tgt = overEl && overEl.closest && overEl.closest(".card");
+    if (tgt && tgt !== dragCtx.card) {
+      const tRect = tgt.getBoundingClientRect();
+      const before = (e.clientY - tRect.top) < tRect.height / 2;
+      if (before) grid.insertBefore(dragCtx.card, tgt);
+      else grid.insertBefore(dragCtx.card, tgt.nextSibling);
+    }
+  }
+
+  function onReorderUp() {
+    if (!dragCtx) return;
+    try { grid.releasePointerCapture(dragCtx.pointerId); } catch {}
+    if (dragCtx.dragging) {
+      if (dragCtx.ghost) dragCtx.ghost.remove();
+      dragCtx.card.classList.remove("dragging");
+      // 按当前网格 DOM 顺序重排 apps 的 order 并持久化
+      const orderedIds = [...grid.querySelectorAll(".card")].map((c) => c.dataset.id);
+      persistOrder(orderedIds);
+    }
+    dragCtx = null;
+  }
+
+  // 按新顺序重排内存并批量同步到后端（每个变更链接走现有 op=update 通道 PUT）
+  async function persistOrder(orderedIds) {
+    if (!orderedIds.length) return;
+    orderedIds.forEach((id, idx) => {
+      const a = apps.find((x) => String(x.id) === String(id));
+      if (a) {
+        a.order = idx;
+        a.synced = false;
+        a.op = "update";
+        LinkDB.put(a);
+      }
+    });
+    renderAll(); // 同步 apps 顺序与 order（DOM 已由拖拽排好，这里确保内存与界面一致）
+    try {
+      await flushPendingLinks();
+      toast(t("reorder.saved") || "已保存排序");
+    } catch (e) {
+      toast("排序已本地保存，联网后自动同步");
+    }
+  }
+
+  function toggleReorderMode() {
+    reorderMode = !reorderMode;
+    if (reorderMode && selectionMode) exitSelection(); // 排序与多选互斥；exitSelection 内 updateSelectionUI 会因 reorderMode=true 保留横栏
+    updateSelectionUI();
+    renderAll();
+  }
+
+  // 绑定一次 pointer 拖拽（事件委托到 grid）+ 排序按钮
+  function initReorderDrag() {
+    if (!grid) return;
+    grid.addEventListener("pointerdown", onReorderDown);
+    grid.addEventListener("pointermove", onReorderMove);
+    grid.addEventListener("pointerup", onReorderUp);
+    grid.addEventListener("pointercancel", onReorderUp);
+    const rb = $("#reorderBtn");
+    if (rb) rb.onclick = toggleReorderMode;
+  }
+  initReorderDrag();
 
   function toggleSelectAll() {
     if (!selectionMode) { selectionMode = true; }
@@ -561,6 +717,7 @@
       i18nText(appCount, "app.count.showing", { n: apps.length, m: filtered.length });
     }
     grid.innerHTML = "";
+    grid.classList.toggle("reordering", reorderMode);
 
     if (filtered.length === 0) {
       emptyState.hidden = false;
@@ -582,8 +739,10 @@
       const card = document.createElement("a");
       card.className = "card";
       card.href = a.url;
+      card.draggable = false; // 禁用原生链接拖出（避免拖拽时把 URL 拖到新标签），排序由 reorderMode 下的 pointer 拖拽接管
       card.dataset.id = a.id;
       if (selectionMode && selectedIds.has(a.id)) card.classList.add("selected");
+      if (reorderMode) card.classList.add("reorderable");
       const aMode = a.openMode || (a.openNew === false ? "self" : "new");
       // 内嵌模式：链接仍保留 href 以便中键/组合键在新标签打开，普通左键交给 openApp 处理
       card.target = aMode === "iframe" ? "_self" : (a.openNew === false ? "_self" : "_blank");
@@ -619,6 +778,7 @@
       let longFired = false;
       let lpTimer = null;
       const startLP = () => {
+        if (reorderMode) return; // 排序模式下不进入多选，避免与拖拽冲突
         longFired = false;
         lpTimer = setTimeout(() => {
           longFired = true;
@@ -640,7 +800,8 @@
         if (e.target.closest(".card-menu")) { e.preventDefault(); return; }
         // 长按已触发：吞掉随后的 click，避免误打开或误取消选中
         if (longFired) { e.preventDefault(); longFired = false; return; }
-        // 多选模式下：点击卡片切换选中（不打开）
+        // 排序模式下：点击不打开（专注拖拽）；多选模式下：点击卡片切换选中（不打开）
+        if (reorderMode) { e.preventDefault(); return; }
         if (selectionMode) { e.preventDefault(); toggleSelect(a.id); return; }
         // 普通左键（非组合键）走 openApp，支持「内嵌窗口」等打开方式
         if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
@@ -1385,6 +1546,11 @@
       "topbar.chat": "聊天",
       "topbar.meeting": "视频会议",
       "topbar.settings": "设置",
+      "topbar.reorder": "排序",
+      "topbar.reorder.title": "拖动排序：开启后可拖动网站链接调整顺序",
+      "reorder.saved": "已保存排序",
+      "reorder.hint": "拖动卡片排序",
+      "reorder.done": "完成",
       "topbar.logout": "登出",
       "app.modal.add": "添加应用",
       "app.modal.edit": "编辑应用",
@@ -1650,6 +1816,11 @@
       "topbar.chat": "Chat",
       "topbar.meeting": "Video Meeting",
       "topbar.settings": "Settings",
+      "topbar.reorder": "Reorder",
+      "topbar.reorder.title": "Toggle drag-to-reorder for your links",
+      "reorder.saved": "Order saved",
+      "reorder.hint": "Drag cards to reorder",
+      "reorder.done": "Done",
       "topbar.logout": "Log Out",
       "app.modal.add": "Add App",
       "app.modal.edit": "Edit App",
@@ -2004,7 +2175,7 @@
   $("#importChromeBtn").onclick = () => $("#importChromeFile").click();
   $("#importChromeFile").onchange = (e) => { if (e.target.files[0]) importChromeBookmarks(e.target.files[0]); e.target.value = ""; };
   // 多选 / 批量删除
-  $("#selCancel").onclick = exitSelection;
+  $("#selCancel").onclick = () => { if (reorderMode) toggleReorderMode(); else exitSelection(); };
   $("#selAll").onclick = toggleSelectAll;
   $("#selDelete").onclick = deleteSelected;
   $("#themeToggleBtn").onclick = () => {

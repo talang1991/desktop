@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="应用导航" />
-  <link rel="stylesheet" href="styles.css?v=82" />
+  <link rel="stylesheet" href="styles.css?v=84" />
 </head>
 <body>
   <!-- 内联 SVG 图标雪碧图：品牌/访客用极光渐变填充，其余 UI 图标用 currentColor 描边随主题色变化 -->
@@ -72,6 +72,12 @@
     <!-- 添加 -->
     <symbol id="sym-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M12 5v14"/><path d="M5 12h14"/>
+    </symbol>
+    <!-- 排序拖拽手柄 -->
+    <symbol id="sym-reorder" viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/>
+      <circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/>
+      <circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/>
     </symbol>
     <!-- 更新/庆祝 -->
     <symbol id="sym-sparkle" viewBox="0 0 24 24" fill="currentColor">
@@ -184,6 +190,7 @@
       <button id="selCancel" class="btn ghost" data-i18n="select.cancel">取消</button>
       <span id="selCount" class="sel-count"></span>
       <span class="sel-spacer"></span>
+      <button id="reorderBtn" class="btn ghost" title="拖动排序：开启后可拖动网站链接调整顺序" data-i18n-title="topbar.reorder.title" aria-pressed="false"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-reorder"/></svg><span data-i18n="topbar.reorder">排序</span></button>
       <button id="selAll" class="btn ghost"></button>
       <button id="selDelete" class="btn danger" data-i18n="select.delete">🗑️ 批量删除</button>
     </div>
@@ -585,7 +592,7 @@
     <input id="importChromeFile" type="file" accept=".html,text/html" hidden />
   </div>
 
-  <script src="app.js?v=139"></script>
+  <script src="app.js?v=141"></script>
   <script src="delight.js?v=4"></script>
 </body>
 </html>
