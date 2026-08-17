@@ -259,14 +259,17 @@ html, body {
 }
 .card.selected::after {
   content: "✓";
-  /* 覆盖 .card::after 卡片光泽的隐藏态（opacity:0 / translateX(-120%) / shine 动画），
-     否则勾选标记会因透明度为 0 且被移到屏外而完全不可见，并可能在 hover 时被光泽动画滑过 */
+  /* 覆盖 .card::after 卡片光泽的 inset:0（left:0 / right:0 / top:0 / bottom:0）。
+     关键：必须显式 left:auto，否则 left:0 + right:8px + width:22px 同时设置会被 CSS
+     视为「过度约束」而忽略 right，导致勾选标记定位到 top-LEFT、与 cat-tag 重叠。*/
   opacity: 1;
   transform: none;
   animation: none;
   position: absolute;
   top: 8px;
   right: 8px;
+  left: auto;
+  bottom: auto;
   width: 22px;
   height: 22px;
   border-radius: 50%;
@@ -276,6 +279,7 @@ html, body {
   line-height: 22px;
   text-align: center;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
 }
 body.selection-mode .card { cursor: pointer; }
 body.selection-mode .card-menu { opacity: 0 !important; pointer-events: none; }
