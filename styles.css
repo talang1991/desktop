@@ -259,6 +259,11 @@ html, body {
 }
 .card.selected::after {
   content: "✓";
+  /* 覆盖 .card::after 卡片光泽的隐藏态（opacity:0 / translateX(-120%) / shine 动画），
+     否则勾选标记会因透明度为 0 且被移到屏外而完全不可见，并可能在 hover 时被光泽动画滑过 */
+  opacity: 1;
+  transform: none;
+  animation: none;
   position: absolute;
   top: 8px;
   right: 8px;
