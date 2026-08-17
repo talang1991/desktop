@@ -432,26 +432,29 @@ export async function revokeSession(token: string, userId: number): Promise<bool
   return rows.length > 0;
 }
 
-// 更新会话活跃时间（/api/me 拉取时顺带刷新，用于「最近活跃」展示）
-export async function touchSession(token: string): Promise<void> {
-  ensureDb();
-  await query(`UPDATE sessions SET last_active = now() WHERE token = $1`, [token]).catch(() => {});
-}
-
 export async function getUserByToken(token: string): Promise<{ id: number; username: string; avatar: string; role: string } | null> {
+  if (!token) return null;
   ensureDb();
-  const rows = await query<{ id: number; username: string; avatar: string; role: string; expires_at: string }>(
-    `SELECT u.id, u.username, u.avatar, u.role, s.expires_at FROM sessions s
-     JOIN users u ON u.id = s.user_id WHERE s.token = $1`,
-    [token],
-  );
-  const r = rows[0];
-  if (!r) return null;
-  if (new Date(r.expires_at).getTime() < Date.now()) {
-    await query(`DELETE FROM sessions WHERE token = $1`, [token]).catch(() => {});
-    return null;
-  }
-  return { id: r.id, username: r.username, avatar: r.avatar, role: r.role };
+  // 在【同一条连接】上完成「读取用户 + 刷新活跃时间」：
+  // 这样只要能认证成功（读到了会话），就一定能更新 last_active，
+  // 避免池化代理（Prisma 等）在 flaky 时「读走健康连接、写走坏连接」导致活跃时间静默丢失。
+  return withClient(async (c: any) => {
+    const res = await c.queryObject<{ id: number; username: string; avatar: string; role: string; expires_at: string }>(
+      `SELECT u.id, u.username, u.avatar, u.role, s.expires_at FROM sessions s
+       JOIN users u ON u.id = s.user_id WHERE s.token = $1`,
+      [token],
+    );
+    const r = res.rows[0];
+    if (!r) return null;
+    if (new Date(r.expires_at).getTime() < Date.now()) {
+      await c.queryObject(`DELETE FROM sessions WHERE token = $1`, [token]).catch(() => {});
+      return null;
+    }
+    // 刷新活跃时间（与读同连接；写失败不阻断请求，但静默吞掉只在此处发生，
+    // 正常健康连接下必然成功）
+    await c.queryObject(`UPDATE sessions SET last_active = now() WHERE token = $1`, [token]).catch(() => {});
+    return { id: r.id, username: r.username, avatar: r.avatar, role: r.role };
+  });
 }
 
 // 按 id 取用户基本信息（用于会议房间名单展示），不存在返回 null
@@ -520,14 +523,15 @@ export async function updateUserRole(userId: number, role: string): Promise<bool
 // ---------------- 管理后台聚合查询 ----------------
 // 全部用户：含角色、头像、注册时间、链接数（按注册时间倒序）
 export async function listAllUsers(): Promise<
-  Array<{ id: number; username: string; avatar: string; role: string; created_at: string; link_count: number }>
+  Array<{ id: number; username: string; avatar: string; role: string; created_at: string; link_count: number; last_active: string | null }>
 > {
   ensureDb();
   const rows = await query<{
-    id: number; username: string; avatar: string; role: string; created_at: string; link_count: number;
+    id: number; username: string; avatar: string; role: string; created_at: string; link_count: number; last_active: string | null;
   }>(
     `SELECT u.id, u.username, u.avatar, u.role, u.created_at,
-            (SELECT COUNT(*) FROM links l WHERE l.user_id = u.id)::int AS link_count
+            (SELECT COUNT(*) FROM links l WHERE l.user_id = u.id)::int AS link_count,
+            (SELECT MAX(s.last_active) FROM sessions s WHERE s.user_id = u.id) AS last_active
      FROM users u ORDER BY u.created_at DESC`,
     [],
   );

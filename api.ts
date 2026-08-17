@@ -1,7 +1,7 @@
 // api.ts —— 认证与链接 CRUD 路由处理（基于本地可靠存储 store.ts）
 import {
   registerUser, findUserByUsername, verifyPassword, createSession,
-  getUserByToken, deleteSession, listSessions, deleteOtherSessions, revokeSession, touchSession,
+  getUserByToken, deleteSession, listSessions, deleteOtherSessions, revokeSession,
   listLinks, createLink, updateLink, deleteLink,
   bulkImportLinks,
   sendFriendRequest, listFriends, listFriendRequests, acceptFriendRequest, getFriendRequestRequester, removeFriend,
@@ -105,9 +105,8 @@ export async function handleApi(req: Request): Promise<Response> {
 
     // ---- 当前用户 ----
     if (path === "/api/me" && method === "GET") {
-      const token = getBearer(req);
+      // getUserByToken 内部已在同一连接上刷新 last_active（见 store.ts）
       const user = await requireUser(req);
-      if (token) await touchSession(token);
       return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar, role: user.role } : null });
     }
 

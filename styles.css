@@ -657,7 +657,8 @@ body.selection-mode .card:hover { transform: none; }
 @media (max-width: 560px) {
   .admin-stats { grid-template-columns: 1fr; }
   .admin-table th:nth-child(3), .admin-table td:nth-child(3),
-  .admin-table th:nth-child(4), .admin-table td:nth-child(4) { display: none; }
+  .admin-table th:nth-child(4), .admin-table td:nth-child(4),
+  .admin-table th:nth-child(5), .admin-table td:nth-child(5) { display: none; }
 }
 .sessions-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
 .session-row {

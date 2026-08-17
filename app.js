@@ -2943,7 +2943,7 @@
   if (enterAdminBtn) {
     enterAdminBtn.addEventListener("click", () => {
       if (!isAdmin()) return;
-      window.open("admin.html", "_blank");
+      location.href = "admin.html";
     });
   }
 
