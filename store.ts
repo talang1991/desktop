@@ -251,6 +251,10 @@ export async function initStore(): Promise<void> {
           await c.queryObject(
             `ALTER TABLE links ADD COLUMN IF NOT EXISTS open_mode TEXT NOT NULL DEFAULT 'new'`,
           );
+          // 兼容已存在的旧库：补充 sort_order 列（拖动排序用；老库无此列会导致排序读写静默失败）
+          await c.queryObject(
+            `ALTER TABLE links ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0`,
+          );
           // 群聊：群表 + 群成员表
           await c.queryObject(
             `CREATE TABLE IF NOT EXISTS chat_groups (

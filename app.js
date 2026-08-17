@@ -175,6 +175,9 @@
     if (currentUserId == null) return;
     const local = await LinkDB.allByUser(currentUserId);
     const pending = local.filter((l) => l.synced === false);
+    // 内存 apps 的顺序是拖拽时同步写好的权威顺序；用它在 flush 时取 sortOrder，
+    // 避免「刚拖完立刻点完成」时 IndexedDB 异步写入尚未落地，读到旧 order 把旧顺序 PUT 上去导致回退。
+    const appOrder = new Map(apps.map((a) => [String(a.id), a.order]));
     for (const l of pending) {
       try {
         if (l._tombstone || l.op === "delete") {
@@ -193,17 +196,17 @@
           }
           await LinkDB.delete(l.id);
         } else if (String(l.id).startsWith("tmp_") || l.op === "create") {
-          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode, sortOrder: l.order };
+          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode, sortOrder: appOrder.get(String(l.id)) ?? l.order };
           const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
           await LinkDB.delete(l.id);
           await LinkDB.put(linkServerToRec(data.link, currentUserId));
         } else if (l.op === "update") {
-          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode, sortOrder: l.order };
+          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode, sortOrder: appOrder.get(String(l.id)) ?? l.order };
           const data = await api("/api/links/" + l.id, { method: "PUT", body: JSON.stringify(obj) });
           await LinkDB.put(linkServerToRec(data.link, currentUserId));
         }
       } catch (e) {
-        // 仍未成功（如再次断网）：保留 synced=false，下次 syncLinks 重试
+        // 仍未成功（如再次断网 / 服务端 5xx）：保留 synced=false，下次 syncLinks 重试
         continue;
       }
     }
@@ -604,17 +607,20 @@
   // 拖拽过程中：按当前网格 DOM 顺序重排内存顺序并写入本地 IndexedDB（不调后端接口）
   function applyReorderLocal(orderedIds) {
     if (!orderedIds || !orderedIds.length) return;
+    const writes = [];
     orderedIds.forEach((id, idx) => {
       const a = apps.find((x) => String(x.id) === String(id));
       if (a) {
         a.order = idx;
         a.synced = false;
         a.op = "update";
-        LinkDB.put(a);
+        writes.push(LinkDB.put(a)); // 收集落库 Promise，稍后统一等待
       }
     });
     renderAll(); // 同步 apps 顺序与 order（DOM 已由拖拽排好，这里确保内存与界面一致）
     reorderDirty = true; // 标记本次会话改动过，退出时再同步后端
+    // 等待本地库真正落地，保证随后点「完成」时 IndexedDB 已是最新顺序（避免 flush 读到旧值）
+    return Promise.all(writes);
   }
 
   // 退出排序（点「完成」）时调用：若本次会话拖拽过，则统一把改动同步到后端
@@ -623,7 +629,10 @@
     reorderDirty = false;
     try {
       await flushPendingLinks();
-      toast(t("reorder.saved") || "已保存排序");
+      // flush 后若仍有未同步记录（断网 / 服务端 5xx / 列缺失等），说明仅存到本地，如实提示；
+      // 否则才是真正的「已保存」（之前逐条 catch 吞错会让这里误报成功，已修正）。
+      const stillPending = apps.some((a) => a.synced === false);
+      toast(stillPending ? "排序已本地保存，联网后自动同步" : (t("reorder.saved") || "已保存排序"));
     } catch (e) {
       toast("排序已本地保存，联网后自动同步");
     }
