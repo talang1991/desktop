@@ -565,7 +565,7 @@ export async function updateLink(
       i++;
     }
   }
-  const SEL = `id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, created_at`;
+  const SEL = `id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, sort_order, created_at`;
   if (!sets.length) {
     const cur = await query<LinkRow>(`SELECT ${SEL} FROM links WHERE id = $1 AND user_id = $2`, [id, userId]);
     return cur[0] ? toLinkShape(cur[0]) : null;

@@ -105,6 +105,16 @@
   }
 
   // 从本地 IndexedDB 重新载入当前用户的链接并刷新界面（同步内存 apps）
+  // 服务端返回的链接形态用 sortOrder，本地记录用 order：统一在此转换，避免刷新/同步后顺序丢失
+  function linkServerToRec(l, userId) {
+    return {
+      ...l,
+      order: (l.order != null) ? Number(l.order) : (Number(l.sortOrder) || 0),
+      userId: userId,
+      synced: true,
+    };
+  }
+
   async function refreshApps() {
     if (currentUserId == null) return;
     apps = await LinkDB.allByUser(currentUserId);
@@ -141,7 +151,7 @@
     await LinkDB.clearByUser(currentUserId);
     const serverRecs = serverLinks
       .filter((l) => !tombstoneIds.has(Number(l.id)))
-      .map((l) => ({ ...l, userId: currentUserId, synced: true }));
+      .map((l) => linkServerToRec(l, currentUserId));
     await LinkDB.putMany(serverRecs);
     // 把离线产生的待同步记录重新并入（不会被服务端数据覆盖）
     for (const p of pending) {
@@ -186,11 +196,11 @@
           const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode, sortOrder: l.order };
           const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
           await LinkDB.delete(l.id);
-          await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+          await LinkDB.put(linkServerToRec(data.link, currentUserId));
         } else if (l.op === "update") {
           const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode, sortOrder: l.order };
           const data = await api("/api/links/" + l.id, { method: "PUT", body: JSON.stringify(obj) });
-          await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+          await LinkDB.put(linkServerToRec(data.link, currentUserId));
         }
       } catch (e) {
         // 仍未成功（如再次断网）：保留 synced=false，下次 syncLinks 重试
@@ -222,7 +232,7 @@
       const obj = { name: rec.name, url: rec.url, category: rec.category, emoji: rec.emoji, color: rec.color, openNew: rec.openNew, openMode: rec.openMode, sortOrder: rec.order };
       const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
       await LinkDB.delete(rec.id);
-      await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+      await LinkDB.put(linkServerToRec(data.link, currentUserId));
       await refreshApps();
     } catch (e) {
       toast("已离线保存，联网后自动同步");
@@ -242,10 +252,10 @@
       if (isTemp) {
         const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
         await LinkDB.delete(id);
-        await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+        await LinkDB.put(linkServerToRec(data.link, currentUserId));
       } else {
         const data = await api("/api/links/" + id, { method: "PUT", body: JSON.stringify(obj) });
-        await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+        await LinkDB.put(linkServerToRec(data.link, currentUserId));
       }
       await refreshApps();
     } catch (e) {
