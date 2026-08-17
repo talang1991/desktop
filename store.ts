@@ -23,8 +23,10 @@ export interface StoredUser {
   username: string;
   password_hash: string;
   avatar: string;
+  role: string;
   created_at: string;
 }
+export type UserRole = "user" | "admin";
 interface LinkRow {
   id: number;
   user_id: number;
@@ -202,6 +204,15 @@ export async function initStore(): Promise<void> {
           await c.queryObject(
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT NOT NULL DEFAULT ''`,
           );
+          // 角色：普通用户 user / 管理员 admin（默认 user）；CHECK 约束保证取值合法，DO 块幂等可重复执行
+          await c.queryObject(
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'`,
+          );
+          await c.queryObject(
+            `DO $$ BEGIN
+               ALTER TABLE users ADD CONSTRAINT chk_users_role CHECK (role IN ('user','admin'));
+             EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+          );
           await c.queryObject(
             `CREATE TABLE IF NOT EXISTS links (
               id SERIAL PRIMARY KEY,
@@ -354,17 +365,17 @@ export async function registerUser(username: string, password: string, avatar = 
   if (exist.length) throw new Error("用户名已存在");
   const hash = await hashPassword(password);
   const av = String(avatar || "").slice(0, ICON_MAX);
-  const rows = await query<{ id: number; username: string }>(
-    `INSERT INTO users (username, password_hash, avatar) VALUES ($1,$2,$3) RETURNING id, username`,
+  const rows = await query<{ id: number; username: string; role: string }>(
+    `INSERT INTO users (username, password_hash, avatar) VALUES ($1,$2,$3) RETURNING id, username, role`,
     [username, hash, av],
   );
-  return { id: rows[0].id, username: rows[0].username, password_hash: hash, avatar: av, created_at: new Date().toISOString() };
+  return { id: rows[0].id, username: rows[0].username, password_hash: hash, avatar: av, role: rows[0].role, created_at: new Date().toISOString() };
 }
 
 export async function findUserByUsername(username: string): Promise<StoredUser | null> {
   ensureDb();
   const rows = await query<StoredUser>(
-    `SELECT id, username, password_hash, avatar, created_at FROM users WHERE username = $1`,
+    `SELECT id, username, password_hash, avatar, role, created_at FROM users WHERE username = $1`,
     [username],
   );
   return rows[0] ?? null;
@@ -427,10 +438,10 @@ export async function touchSession(token: string): Promise<void> {
   await query(`UPDATE sessions SET last_active = now() WHERE token = $1`, [token]).catch(() => {});
 }
 
-export async function getUserByToken(token: string): Promise<{ id: number; username: string; avatar: string } | null> {
+export async function getUserByToken(token: string): Promise<{ id: number; username: string; avatar: string; role: string } | null> {
   ensureDb();
-  const rows = await query<{ id: number; username: string; avatar: string; expires_at: string }>(
-    `SELECT u.id, u.username, u.avatar, s.expires_at FROM sessions s
+  const rows = await query<{ id: number; username: string; avatar: string; role: string; expires_at: string }>(
+    `SELECT u.id, u.username, u.avatar, u.role, s.expires_at FROM sessions s
      JOIN users u ON u.id = s.user_id WHERE s.token = $1`,
     [token],
   );
@@ -440,15 +451,15 @@ export async function getUserByToken(token: string): Promise<{ id: number; usern
     await query(`DELETE FROM sessions WHERE token = $1`, [token]).catch(() => {});
     return null;
   }
-  return { id: r.id, username: r.username, avatar: r.avatar };
+  return { id: r.id, username: r.username, avatar: r.avatar, role: r.role };
 }
 
 // 按 id 取用户基本信息（用于会议房间名单展示），不存在返回 null
-export async function getUserById(id: number): Promise<{ id: number; username: string; avatar: string } | null> {
+export async function getUserById(id: number): Promise<{ id: number; username: string; avatar: string; role: string } | null> {
   ensureDb();
   if (!Number.isFinite(id) || id < 0) return null; // 访客为负 id，无需查库
-  const rows = await query<{ id: number; username: string; avatar: string }>(
-    `SELECT id, username, avatar FROM users WHERE id = $1`,
+  const rows = await query<{ id: number; username: string; avatar: string; role: string }>(
+    `SELECT id, username, avatar, role FROM users WHERE id = $1`,
     [id],
   );
   return rows[0] ?? null;
@@ -492,6 +503,57 @@ export async function updateUserUsername(
 export async function deleteSession(token: string): Promise<void> {
   ensureDb();
   await query(`DELETE FROM sessions WHERE token = $1`, [token]).catch(() => {});
+}
+
+// ---------------- 角色管理（管理后台用）----------------
+// 修改用户角色（仅 'user' / 'admin' 合法）。返回是否有该行被更新。
+export async function updateUserRole(userId: number, role: string): Promise<boolean> {
+  ensureDb();
+  if (role !== "user" && role !== "admin") throw new Error("无效的角色");
+  const rows = await query<{ id: number }>(
+    `UPDATE users SET role = $1 WHERE id = $2 RETURNING id`,
+    [role, userId],
+  );
+  return rows.length > 0;
+}
+
+// ---------------- 管理后台聚合查询 ----------------
+// 全部用户：含角色、头像、注册时间、链接数（按注册时间倒序）
+export async function listAllUsers(): Promise<
+  Array<{ id: number; username: string; avatar: string; role: string; created_at: string; link_count: number }>
+> {
+  ensureDb();
+  const rows = await query<{
+    id: number; username: string; avatar: string; role: string; created_at: string; link_count: number;
+  }>(
+    `SELECT u.id, u.username, u.avatar, u.role, u.created_at,
+            (SELECT COUNT(*) FROM links l WHERE l.user_id = u.id)::int AS link_count
+     FROM users u ORDER BY u.created_at DESC`,
+    [],
+  );
+  return rows;
+}
+
+export async function countUsers(): Promise<number> {
+  ensureDb();
+  const rows = await query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM users`);
+  return rows[0]?.n ?? 0;
+}
+
+export async function countLinks(): Promise<number> {
+  ensureDb();
+  const rows = await query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM links`);
+  return rows[0]?.n ?? 0;
+}
+
+// 最近 N 天注册的用户数（默认 7 天）
+export async function recentRegistrations(days = 7): Promise<number> {
+  ensureDb();
+  const rows = await query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM users WHERE created_at >= now() - ($1 || ' days')::interval`,
+    [days],
+  );
+  return rows[0]?.n ?? 0;
 }
 
 // ---------------- 链接 ----------------

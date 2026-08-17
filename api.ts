@@ -8,6 +8,7 @@ import {
   updateUserAvatar, updateUserUsername, areFriends,
   createGroup, addGroupMember, listUserGroups, getGroupBasic, isGroupMember, leaveGroup,
   renameGroup, getGroupMemberIds,
+  listAllUsers, updateUserRole, countUsers, countLinks, recentRegistrations,
   DbUnavailableError,
 } from "./store.ts";
 
@@ -20,7 +21,7 @@ function normalizeDevice(d: unknown): string {
 import { getWsPublicUrl, getIceServers, isOnline, pushToUser } from "./signaling.ts";
 import { saveMessage, getMessages, saveGroupMessage, getGroupMessages, chatKvReady, saveReadCursor, getReadCursor } from "./chatstore.ts";
 
-interface User { id: number; username: string; avatar: string; }
+interface User { id: number; username: string; avatar: string; role: string; }
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -44,6 +45,11 @@ function requireUser(req: Request): Promise<User | null> {
   const token = getBearer(req);
   if (!token) return Promise.resolve(null);
   return getUserByToken(token);
+}
+
+// 仅管理员可访问：返回当前用户（含 role）；非 admin 或已登录返回 null（调用方据此返回 403）
+function requireAdmin(req: Request): Promise<User | null> {
+  return requireUser(req).then((u) => (u && u.role === "admin" ? u : null));
 }
 
 export async function handleApi(req: Request): Promise<Response> {
@@ -76,7 +82,7 @@ export async function handleApi(req: Request): Promise<Response> {
         return json({ error: msg }, status);
       }
       const token = await createSession(user.id, normalizeDevice(device), String(req.headers.get("user-agent") || ""));
-      return json({ user: { id: user.id, username: user.username, avatar: user.avatar }, token }, 201);
+      return json({ user: { id: user.id, username: user.username, avatar: user.avatar, role: user.role }, token }, 201);
     }
 
     // ---- 登录 ----
@@ -87,7 +93,7 @@ export async function handleApi(req: Request): Promise<Response> {
       const ok = await verifyPassword(String(password), u.password_hash);
       if (!ok) return json({ error: "用户名或密码错误" }, 401);
       const token = await createSession(u.id, normalizeDevice(device), String(req.headers.get("user-agent") || ""));
-      return json({ user: { id: u.id, username: u.username, avatar: u.avatar }, token });
+      return json({ user: { id: u.id, username: u.username, avatar: u.avatar, role: u.role }, token });
     }
 
     // ---- 登出 ----
@@ -102,7 +108,7 @@ export async function handleApi(req: Request): Promise<Response> {
       const token = getBearer(req);
       const user = await requireUser(req);
       if (token) await touchSession(token);
-      return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar } : null });
+      return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar, role: user.role } : null });
     }
 
     // ---- 更新当前用户资料（头像 / 昵称）----
@@ -122,6 +128,43 @@ export async function handleApi(req: Request): Promise<Response> {
         username = r.username ?? username;
       }
       return json({ user: { id: user.id, username, avatar } });
+    }
+
+    // ---- 管理后台：用户列表（仅管理员）----
+    if (path === "/api/admin/users" && method === "GET") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const users = await listAllUsers();
+      return json({ users });
+    }
+
+    // ---- 管理后台：修改用户角色（仅管理员；禁止取消自己的管理员角色以免锁死）----
+    const adm = path.match(/^\/api\/admin\/users\/(\d+)$/);
+    if (adm && method === "PATCH") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const id = Number(adm[1]);
+      const b = await req.json().catch(() => ({}));
+      const role = String(b.role || "");
+      if (role !== "user" && role !== "admin") return json({ error: "无效的角色" }, 400);
+      if (id === admin.id && role !== "admin") {
+        return json({ error: "不能取消自己的管理员角色" }, 400);
+      }
+      const ok = await updateUserRole(id, role);
+      if (!ok) return json({ error: "用户不存在" }, 404);
+      return json({ ok: true });
+    }
+
+    // ---- 管理后台：全局统计（仅管理员）----
+    if (path === "/api/admin/stats" && method === "GET") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const [users, links, recentUsers] = await Promise.all([
+        countUsers(),
+        countLinks(),
+        recentRegistrations(7),
+      ]);
+      return json({ stats: { users, links, recentUsers } });
     }
 
     // ---- 登录设备管理：列出当前账号所有会话（多端登录）----

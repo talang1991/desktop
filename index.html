@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="应用导航" />
-  <link rel="stylesheet" href="styles.css?v=88" />
+  <link rel="stylesheet" href="styles.css?v=89" />
 </head>
 <body>
   <!-- 内联 SVG 图标雪碧图：品牌/访客用极光渐变填充，其余 UI 图标用 currentColor 描边随主题色变化 -->
@@ -583,6 +583,10 @@
           <button id="logoutOthersBtn" class="btn ghost block" data-i18n="settings.logoutOthers">登出其他设备</button>
           <p class="settings-hint" data-i18n="settings.devicesHint">这里列出当前账号登录过的所有设备，可单独登出某台或一键登出其他设备。</p>
         </div>
+        <div class="settings-section" id="adminEntry" hidden>
+          <div class="settings-section-title" data-i18n="admin.entryTitle">管理</div>
+          <button id="enterAdminBtn" class="btn ghost block" data-i18n="admin.enter">⚙️ 进入管理后台</button>
+        </div>
         <div class="settings-section">
           <button id="logoutBtn2" class="btn ghost block danger" data-i18n="topbar.logout">登出</button>
         </div>
@@ -592,7 +596,9 @@
     <input id="importChromeFile" type="file" accept=".html,text/html" hidden />
   </div>
 
-  <script src="app.js?v=145"></script>
+  <!-- 管理后台已拆为独立页面 admin.html（从设置的「管理」入口打开） -->
+
+  <script src="app.js?v=147"></script>
   <script src="delight.js?v=4"></script>
 </body>
 </html>

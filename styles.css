@@ -603,6 +603,62 @@ body.selection-mode .card:hover { transform: none; }
 }
 .settings-panel .btn.block { display: block; width: 100%; margin-bottom: 10px; text-align: left; }
 .settings-hint { font-size: 12px; color: var(--text-2); line-height: 1.5; margin: 6px 0 0; }
+
+/* ---------- 管理后台 ---------- */
+.admin-panel {
+  position: fixed; inset: 0; z-index: 200;
+  background: var(--surface);
+  display: flex; flex-direction: column;
+  animation: settingsSlideIn 0.18s ease-out;
+}
+.admin-panel[hidden] { display: none; }
+.admin-content { display: flex; flex-direction: column; height: 100%; max-width: 960px; width: 100%; margin: 0 auto; padding: 0 18px 28px; }
+.admin-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 0; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: var(--surface); z-index: 1;
+}
+.admin-title { font-size: 18px; font-weight: 600; color: var(--text); }
+.admin-x {
+  background: transparent; border: none; color: var(--text-2);
+  font-size: 20px; line-height: 1; cursor: pointer; padding: 4px 10px; border-radius: 8px;
+}
+.admin-x:hover { background: var(--surface-2); color: var(--text); }
+
+.admin-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 18px 0; }
+.stat-card {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 14px; padding: 16px; text-align: center;
+}
+.stat-num { font-size: 28px; font-weight: 700; color: var(--primary); line-height: 1.1; }
+.stat-label { font-size: 12px; color: var(--text-2); margin-top: 6px; }
+.admin-section-title { font-size: 13px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: .04em; margin: 8px 0 12px; }
+
+.admin-table-wrap {
+  border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+  background: var(--surface);
+}
+.admin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.admin-table th, .admin-table td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+.admin-table th { font-size: 12px; color: var(--text-2); font-weight: 600; background: var(--surface-2); }
+.admin-table tbody tr:last-child td { border-bottom: none; }
+.admin-table tbody tr:hover { background: var(--surface-2); }
+.admin-user-cell { display: flex; align-items: center; gap: 10px; }
+.admin-user-cell .avatar { width: 30px; height: 30px; font-size: 14px; }
+
+.role-badge {
+  display: inline-block; padding: 2px 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; line-height: 1.6;
+}
+.role-admin { background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary); }
+.role-user { background: var(--surface-2); color: var(--text-2); }
+.admin-self { font-size: 12px; color: var(--text-2); }
+
+@media (max-width: 560px) {
+  .admin-stats { grid-template-columns: 1fr; }
+  .admin-table th:nth-child(3), .admin-table td:nth-child(3),
+  .admin-table th:nth-child(4), .admin-table td:nth-child(4) { display: none; }
+}
 .sessions-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
 .session-row {
   display: flex; align-items: center; gap: 10px;

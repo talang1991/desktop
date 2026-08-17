@@ -23,6 +23,7 @@
   let selectedColor = COLORS[0];
   let currentUsername = "";
   let myAvatar = "";
+  let currentUserRole = "user";   // 当前登录用户角色：user | admin（来自 /api/me）
 
   // ---------- DOM ----------
   const $ = (sel) => document.querySelector(sel);
@@ -308,6 +309,8 @@
     currentUsername = user.username;
     currentUserId = user.id;
     myAvatar = user.avatar || "";
+    currentUserRole = (user.role === "admin") ? "admin" : "user";
+    refreshAdminEntry();
     $("#userName").textContent = user.username;
     renderAvatarInto($("#userAvatar"), myAvatar, (user.username || "?").charAt(0).toUpperCase());
     await loadLinks();
@@ -1807,7 +1810,28 @@
       "meeting.inviting": "已发起群会议，正在呼叫成员…",
       "meeting.inOther": "已在其它群会议中",
       "meeting.shareVideoOnly": "仅视频会议中可共享屏幕",
-      "chat.group.renameFail": "修改失败："
+      "chat.group.renameFail": "修改失败：",
+      "admin.entryTitle": "管理",
+      "admin.enter": "⚙️ 进入管理后台",
+      "admin.title": "管理后台",
+      "admin.users": "用户",
+      "admin.stat.users": "总用户",
+      "admin.stat.links": "总链接",
+      "admin.stat.recent": "近 7 天注册",
+      "admin.col.user": "用户",
+      "admin.col.role": "角色",
+      "admin.col.links": "链接数",
+      "admin.col.joined": "注册时间",
+      "admin.col.actions": "操作",
+      "admin.role.admin": "管理员",
+      "admin.role.user": "普通用户",
+      "admin.promote": "设为管理员",
+      "admin.demote": "设为普通用户",
+      "admin.self": "（当前账号）",
+      "admin.promoted": "已设为管理员",
+      "admin.demoted": "已降级为普通用户",
+      "admin.loadError": "加载管理数据失败",
+      "admin.opError": "操作失败，请重试"
     },
     en: {
       "app.title": "Web App Navigator",
@@ -2077,7 +2101,28 @@
       "meeting.inviting": "Group meeting started, calling members…",
       "meeting.inOther": "Already in another group meeting",
       "meeting.shareVideoOnly": "Screen share only in video meeting",
-      "chat.group.renameFail": "Failed to rename: "
+      "chat.group.renameFail": "Failed to rename: ",
+      "admin.entryTitle": "Admin",
+      "admin.enter": "⚙️ Open Admin Panel",
+      "admin.title": "Admin Panel",
+      "admin.users": "Users",
+      "admin.stat.users": "Total Users",
+      "admin.stat.links": "Total Links",
+      "admin.stat.recent": "Registered (7d)",
+      "admin.col.user": "User",
+      "admin.col.role": "Role",
+      "admin.col.links": "Links",
+      "admin.col.joined": "Joined",
+      "admin.col.actions": "Actions",
+      "admin.role.admin": "Admin",
+      "admin.role.user": "User",
+      "admin.promote": "Make Admin",
+      "admin.demote": "Make User",
+      "admin.self": "(you)",
+      "admin.promoted": "Promoted to admin",
+      "admin.demoted": "Demoted to user",
+      "admin.loadError": "Failed to load admin data",
+      "admin.opError": "Operation failed, please retry"
     }
   };
   const LANG_KEY = "lang";
@@ -2885,6 +2930,22 @@
   if (settingsClose) settingsClose.onclick = closeSettings;
   const logoutBtn2 = $("#logoutBtn2");
   if (logoutBtn2) logoutBtn2.onclick = logout;
+
+  // ---------- 管理后台（仅管理员可见 / 可进入）----------
+  // ---------- 管理后台入口（已拆为独立页面 admin.html）----------
+  function isAdmin() { return currentUserRole === "admin"; }
+  // 根据当前角色显示 / 隐藏设置里的「管理」入口
+  function refreshAdminEntry() {
+    const el = $("#adminEntry");
+    if (el) el.hidden = !isAdmin();
+  }
+  const enterAdminBtn = $("#enterAdminBtn");
+  if (enterAdminBtn) {
+    enterAdminBtn.addEventListener("click", () => {
+      if (!isAdmin()) return;
+      window.open("admin.html", "_blank");
+    });
+  }
 
   // 清空本地缓存：保留登录、语言、主题等偏好，清除界面布局等本地缓存
   const clearCacheBtn = $("#clearCacheBtn");
