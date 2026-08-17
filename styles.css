@@ -281,6 +281,10 @@ html, body {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
   pointer-events: none;
 }
+/* 选中卡片的 ::after 不能被 .card:hover::after 重新启动 shine 动画。
+   单独写 :hover 选择器以拿到 (0,3,1) 特异性，胜过后面 (0,2,1) 的 .card:hover::after，
+   否则勾选标记会在鼠标移上卡片时随 shine 滑过 ~26px（transform:translateX(120%)）。*/
+.card.selected:hover::after { animation: none; opacity: 1; }
 body.selection-mode .card { cursor: pointer; }
 body.selection-mode .card-menu { opacity: 0 !important; pointer-events: none; }
 body.selection-mode .card:hover { transform: none; }
