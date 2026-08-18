@@ -353,6 +353,17 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && detailModal && !detailModal.hidden) closeAppDetail();
     });
+    // 「返回应用」：若由「进入管理后台」按钮以新标签页打开（window.opener 存在），直接关闭本标签页即可返回
+    // 原应用（原标签页始终处于登录态、不重载、不出登录检查）；直接访问 / 分享链接进入时，回退到首页。
+    const backBtn = document.getElementById("adminBack");
+    if (backBtn) {
+      backBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (window.opener) { try { window.close(); } catch {} return; }
+        if (history.length > 1) history.back();
+        else location.href = "index.html";
+      });
+    }
   }
 
   if (document.readyState === "loading") {

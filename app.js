@@ -2965,9 +2965,30 @@
   }
   const enterAdminBtn = $("#enterAdminBtn");
   if (enterAdminBtn) {
+    // 预加载：鼠标悬停 / 键盘聚焦 / 触摸开始 时提前拉取管理后台页面与脚本，点击瞬间近乎秒开。
+    // 注意：admin.js 的版本号需与 admin.html 底部 <script> 的 ?v= 保持一致。
+    let adminPrefetched = false;
+    const prefetchAdmin = () => {
+      if (adminPrefetched) return;
+      adminPrefetched = true;
+      ["admin.html", "admin.js?v=5"].forEach((href) => {
+        const link = document.createElement("link");
+        link.rel = "prefetch";
+        link.href = href;
+        if (href.endsWith(".js")) link.as = "script";
+        document.head.appendChild(link);
+      });
+    };
+    enterAdminBtn.addEventListener("mouseenter", prefetchAdmin);
+    enterAdminBtn.addEventListener("focus", prefetchAdmin);
+    enterAdminBtn.addEventListener("pointerdown", prefetchAdmin);
     enterAdminBtn.addEventListener("click", () => {
       if (!isAdmin()) return;
-      location.href = "admin.html";
+      prefetchAdmin();
+      // 在新标签页打开管理后台：原应用标签页保持登录态（不断开信令 WebSocket、不卸载），
+      // 因此返回时不会出现登录检查页面。弹窗被拦截时降级为同标签页跳转。
+      const w = window.open("admin.html", "_blank");
+      if (!w) location.href = "admin.html";
     });
   }
   // 应用广场入口：顶栏「应用广场」按钮（所有登录用户可见）
