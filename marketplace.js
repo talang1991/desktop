@@ -125,13 +125,20 @@
     const edit = (mine && app.status === "rejected")
       ? '<button class="mk-edit" data-edit="' + app.id + '">修改并重新提交</button>'
       : "";
+    // 被拒绝的应用不展示「打开」和「保存」（避免按钮过载；保存与否对被拒卡无意义）
+    const hideOpenAndSave = !!(mine && app.status === "rejected");
+    const open = hideOpenAndSave
+      ? ""
+      : '<a class="mk-open" href="' + escapeHtml(app.url) + '" target="_blank" rel="noopener">打开</a>';
+    const alreadySaved = !hideOpenAndSave && myLinkUrls.has(normUrl(app.url));
+    const save = hideOpenAndSave
+      ? ""
+      : (alreadySaved
+          ? '<button class="mk-save" data-save="' + app.id + '" disabled>✓ 已保存</button>'
+          : '<button class="mk-save" data-save="' + app.id + '">＋ 保存</button>');
     const reason = (mine && app.status === "rejected" && app.reject_reason)
       ? '<div class="mk-sub" style="color:#d23">拒绝原因：' + escapeHtml(app.reject_reason) + "</div>"
       : "";
-    const alreadySaved = myLinkUrls.has(normUrl(app.url));
-    const save = alreadySaved
-      ? '<button class="mk-save" data-save="' + app.id + '" disabled>✓ 已保存</button>'
-      : '<button class="mk-save" data-save="' + app.id + '">＋ 保存</button>';
     return (
       '<div class="mk-card">' +
         '<div class="mk-card-head">' +
@@ -146,7 +153,7 @@
         '<div class="mk-badges">' + badgeHtml(app) + "</div>" +
         reason +
         '<div class="mk-card-foot">' +
-          '<a class="mk-open" href="' + escapeHtml(app.url) + '" target="_blank" rel="noopener">打开</a>' +
+          open +
           save +
           edit +
           del +
