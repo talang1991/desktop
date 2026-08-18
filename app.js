@@ -2979,7 +2979,7 @@
     const prefetchMarket = () => {
       if (marketPrefetched) return;
       marketPrefetched = true;
-      ["marketplace.html", "marketplace.js?v=9"].forEach((href) => {
+      ["marketplace.html", "marketplace.js?v=10"].forEach((href) => {
         const link = document.createElement("link");
         link.rel = "prefetch";
         link.href = href;
@@ -2992,7 +2992,10 @@
     marketBtn.addEventListener("pointerdown", prefetchMarket);
     marketBtn.addEventListener("click", () => {
       prefetchMarket();
-      location.href = "marketplace.html";
+      // 在新标签页打开应用广场：原应用标签页保持登录态（不断开信令 WebSocket、不卸载），
+      // 因此返回时不会出现登录检查页面。弹窗被拦截时降级为同标签页跳转。
+      const w = window.open("marketplace.html", "_blank");
+      if (!w) location.href = "marketplace.html";
     });
   }
 

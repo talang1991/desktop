@@ -435,12 +435,13 @@
     document.querySelectorAll(".mk-tab").forEach((b) => {
       b.addEventListener("click", () => switchTab(b.getAttribute("data-tab")));
     });
-    // 「返回应用」走浏览器返回（bfcache 恢复，不重载 index.html，不重触发登录检查）；
-    // 仅当广场是被直接打开（无历史）时才回退到 index.html。
+    // 「返回应用」：若由「应用广场」按钮以新标签页打开（window.opener 存在），直接关闭本标签页即可返回
+    // 原应用（原标签页始终处于登录态、不重载、不出登录检查）；直接访问 / 分享链接进入时，回退到首页。
     const backBtn = document.getElementById("mkBack");
     if (backBtn) {
       backBtn.addEventListener("click", (e) => {
         e.preventDefault();
+        if (window.opener) { try { window.close(); } catch {} return; }
         if (history.length > 1) history.back();
         else location.href = "index.html";
       });
