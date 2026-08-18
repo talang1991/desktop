@@ -4204,7 +4204,9 @@
     // （同账号其它设备间的连接答案被广播到本机）直接忽略，避免产生互不相关的垃圾连接。
     const connId = data.connId || null;
     // 该信令若属于会议中的某个对等体（含同账号另一台设备），则按设备键处理；否则按 1:1 好友连接处理。
-    const mtKey = (meetingActive && fromDeviceId != null) ? meetingSignalKey(from, fromDeviceId) : null;
+    // 不要用 `fromDeviceId != null` 二次门控——会议中即使服务端没转发 deviceId，只要 from 在 meetingMembers 里就是会议对等体；
+    // 此前误把无 deviceId 的会议信令判为 1:1，导致流送到 #remoteVideo 而非会议瓦片，画面全黑。
+    const mtKey = meetingActive ? meetingSignalKey(from, fromDeviceId) : null;
     const isMeeting = mtKey != null;
     const key = isMeeting ? peerConnKey(mtKey, connId) : peerConnKey(from, connId);
     const isOffer = !!(data.sdp && data.sdp.type === "offer");
@@ -5272,13 +5274,15 @@
 
   // 房间模式下：按 id 取昵称/头像（优先 roomPeers，其次回退 id）
   function meetingPeerInfo(id) {
-    id = Number(id);
+    // 房间模式的成员键可能是数字（不同账号）或 "selfdev:<deviceId>"（同账号多设备）。
+    // 切勿在最外层 Number()——会把 "selfdev:xxx" 变成 NaN，导致 String(id) 兜底显示成 "NaN"。
+    // 先按原始键查，再降级到数字键；最后兜底用原始 id 字符串化（"selfdev:xxx" 仍可读）。
     if (meetingMode === "room") {
-      const r = roomPeers.get(id);
+      const r = roomPeers.get(id) || roomPeers.get(Number(id));
       if (r) return { name: r.name || String(id), avatar: r.avatar || "" };
       return { name: String(id), avatar: "" };
     }
-    return groupMemberName(meetingGroupId, id);
+    return groupMemberName(meetingGroupId, Number(id));
   }
 
   // ---- 房间信令处理（与群会议对称，仅 key 为 roomId）----
