@@ -3883,10 +3883,16 @@
     if (fromUserId === myId && fromDeviceId) return "selfdev:" + fromDeviceId;
     return fromUserId;
   }
-  // 确定性发起方：不同账号用 userId 比较；同账号用 deviceId 比较（userId 相同无法区分，否则双方都不发起）。
+  // 确定性发起方：优先用设备 id 比较（每次连接唯一、两端必然一真一假），
+  // 避免 myId 缺失（访客 / 未就绪 / 同账号设备 id 未随信令带齐）时双方都默认判为发起方 →
+  // 双向同时发 offer 撞车（glare）→ 双方都 rollback 又都忽略对方 answer → 协商永不收敛、视频流黑屏。
+  // 仅当设备 id 缺失时回退到 userId 比较；两端都缺失的极端情况则本端做应答方（不主动发 offer），
+  // 宁可少建一条也不双向撞车死锁。
   function meetingIAmOfferer(fromUserId, fromDeviceId) {
+    if (myDeviceId != null && fromDeviceId != null) return myDeviceId < fromDeviceId;
     if (Number(fromUserId) === myId && fromDeviceId) return myDeviceId < fromDeviceId;
-    return (myId != null) ? (Number(myId) < Number(fromUserId)) : true;
+    if (myId != null) return Number(myId) < Number(fromUserId);
+    return false;
   }
   // 判断一条收到的信令是否属于“会议中的某个对等体”，并返回其成员键（非会议则返回 null，按 1:1 处理）。
   function meetingSignalKey(from, fromDeviceId) {
@@ -4095,13 +4101,17 @@
     } catch { enableRelay(to); }
   }
 
-  function setupPc(p) {
+  function setupPc(p, peerDeviceId) {
     const id = p.pc._peerId;
     // 完美协商（Perfect Negotiation）状态位：避免双向同时发 offer 造成 glare
     p.makingOffer = false;
     p.ignoreOffer = false;
-    // 由双方 userId 大小决定“礼貌方”，结果两端一致，可预判冲突归属
-    p.polite = (myId != null) ? (myId < id) : true;
+    // “礼貌方”判定：会议连接优先用设备 id 比较（每次连接唯一、两端必然一真一假），
+    // 彻底规避双方都判为礼貌方导致的重协商 glare 死锁（对端 answer 在 stable 被忽略、无视频）。
+    // 1:1 连接（不传 peerDeviceId）沿用 userId 比较，与历史一致；myId 缺失兜底为礼貌方（1:1 场景极少缺失）。
+    p.polite = (peerDeviceId != null && myDeviceId != null)
+      ? (myDeviceId > peerDeviceId)
+      : ((myId != null) ? (myId < id) : true);
     p.pc.onicecandidate = (e) => { if (e.candidate) sendSignal(id, { candidate: e.candidate, connId: p.connId || null }); };
     // 新增/移除媒体轨道（addTrack）会自动触发本事件 → 生成新 offer（含媒体），无需另建连接
     p.pc.onnegotiationneeded = async () => {
@@ -4219,7 +4229,8 @@
       // 会议连接：用成员键（同账号为 selfdev:<deviceId>）作为 _peerId，保证 ontrack/信令投递一致；
       // 1:1 连接：沿用 userId（与历史一致）。
       p.pc._peerId = isMeeting ? mtKey : from;
-      setupPc(p);
+      // 会议连接传入对端设备 id，使 polite 判定按设备 id 比较（两端必然一真一假），规避 glare 死锁
+      setupPc(p, isMeeting ? fromDeviceId : null);
       // 同账号多设备：用 deviceId 决定 polite（应答方 polite），避免重协商 glare 无法解冲突
       if (isMeeting && from === myId && fromDeviceId) p.polite = (myDeviceId > fromDeviceId);
     }
@@ -4819,7 +4830,8 @@
       p.connId = connId;
       p.pc = new RTCPeerConnection(rtcConfig());
       p.pc._peerId = key; // 成员键（同账号为 selfdev:<deviceId>），保证 ontrack/信令一致
-      setupPc(p);
+      // 传入对端设备 id，使 polite 判定按设备 id 比较（两端必然一真一假），规避 glare 死锁
+      setupPc(p, fromDeviceId);
       // 同账号多设备：用 deviceId 决定 polite（应答方 polite），避免重协商 glare 无法解冲突
       if (Number(fromUserId) === myId && fromDeviceId) p.polite = (myDeviceId > fromDeviceId);
       p.mediaAdded = false;
