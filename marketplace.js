@@ -41,6 +41,39 @@
     return String(u == null ? "" : u).trim().replace(/\/+$/, "").toLowerCase();
   }
 
+  // ---------- 跨标签页消息总线（与 app.js 同源实现）----------
+  // 用途：保存到「我的应用」后，通知其它首页标签（及广场自身）同步列表/已保存徽标。
+  // 优先 BroadcastChannel；旧浏览器回退 localStorage 事件（只在其它标签触发，不会自环）。
+  const CrossTab = (function () {
+    const NAME = "wal-cross-tab";
+    const LS_KEY = "wal-crosstab-bus";
+    const handlers = new Set();
+    let bc = null;
+    try { bc = ("BroadcastChannel" in window) ? new BroadcastChannel(NAME) : null; } catch (_) { bc = null; }
+    if (bc) {
+      bc.onmessage = (e) => emit(e.data);
+    } else {
+      window.addEventListener("storage", (e) => {
+        if (e.key === LS_KEY && e.newValue) {
+          try { emit(JSON.parse(e.newValue)); } catch (_) {}
+        }
+      });
+    }
+    function emit(msg) { handlers.forEach((h) => { try { h(msg); } catch (_) {} }); }
+    return {
+      post(msg) {
+        if (bc) { try { bc.postMessage(msg); } catch (_) {} }
+        else { try { localStorage.setItem(LS_KEY, JSON.stringify(Object.assign({ _t: Date.now() }, msg))); } catch (_) {} }
+      },
+      on(h) { handlers.add(h); return () => handlers.delete(h); },
+    };
+  })();
+
+  // 跨标签页：其它首页标签（或本广场在其它标签的实例）改动「我的应用」后，刷新已保存徽标
+  CrossTab.on((msg) => {
+    if (msg && msg.type === "links-changed") refreshSavedState();
+  });
+
   // ---------- API（带轻量重试；401/403 直接抛出并标记 status）----------
   async function api(path, opts = {}) {
     const headers = { "content-type": "application/json" };
@@ -228,10 +261,30 @@
       toast("已保存到「我的应用」");
       myLinkUrls.add(normUrl(app.url));
       if (btn) { btn.textContent = "✓ 已保存"; }
+      // 跨标签页：通知其它首页标签（及本广场在其它标签的实例）同步「我的应用」列表
+      CrossTab.post({ type: "links-changed" });
     } catch (e) {
       if (btn) btn.disabled = false;
       toast((e && e.message) || "保存失败", "err");
     }
+  }
+  // 跨标签页：其它标签改动「我的应用」后，重新拉取已保存集合并刷新卡片上的「已保存」徽标
+  async function refreshSavedState() {
+    try {
+      const linksRes = await api("/api/links");
+      myLinkUrls = new Set((linksRes.links || []).map((l) => normUrl(l.url)));
+      syncSavedBadges();
+    } catch (_) { /* 取不到则保持现状 */ }
+  }
+  function syncSavedBadges() {
+    document.querySelectorAll("[data-save]").forEach((btn) => {
+      const id = Number(btn.getAttribute("data-save"));
+      const app = appIndex[id];
+      if (!app) return;
+      const saved = myLinkUrls.has(normUrl(app.url));
+      btn.textContent = saved ? "✓ 已保存" : "＋ 保存";
+      btn.disabled = saved;
+    });
   }
 
   // ---------- 渲染 ----------

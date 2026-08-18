@@ -44,6 +44,42 @@
 
   // ---------- DOM ----------
   const $ = (sel) => document.querySelector(sel);
+
+  // ---------- 跨标签页消息总线 ----------
+  // 用途：①「一处已读、处处清零」未读红点同步 ② 广场/首页「我的应用」列表跨标签同步。
+  // 优先 BroadcastChannel；旧浏览器（不支持时）回退到 localStorage 事件——二者都「只在其它标签触发、本标签不回声」，天然避免自环。
+  const CrossTab = (function () {
+    const NAME = "wal-cross-tab";
+    const LS_KEY = "wal-crosstab-bus";
+    const handlers = new Set();
+    let bc = null;
+    try { bc = ("BroadcastChannel" in window) ? new BroadcastChannel(NAME) : null; } catch (_) { bc = null; }
+    if (bc) {
+      bc.onmessage = (e) => emit(e.data);
+    } else {
+      window.addEventListener("storage", (e) => {
+        if (e.key === LS_KEY && e.newValue) {
+          try { emit(JSON.parse(e.newValue)); } catch (_) {}
+        }
+      });
+    }
+    function emit(msg) { handlers.forEach((h) => { try { h(msg); } catch (_) {} }); }
+    return {
+      post(msg) {
+        if (bc) { try { bc.postMessage(msg); } catch (_) {} }
+        else { try { localStorage.setItem(LS_KEY, JSON.stringify(Object.assign({ _t: Date.now() }, msg))); } catch (_) {} }
+      },
+      on(h) { handlers.add(h); return () => handlers.delete(h); },
+    };
+  })();
+
+  // 跨标签页同步：其它首页标签「已读」或「链接变更」时，本标签即时跟进
+  CrossTab.on((msg) => {
+    if (!msg || !msg.type) return;
+    if (msg.type === "peer-read") applyRemotePeerRead(msg.peerId, msg.ts);
+    else if (msg.type === "group-read") applyRemoteGroupRead(msg.gid, msg.ts);
+    else if (msg.type === "links-changed") onLinksChangedRemote();
+  });
   const grid = $("#appGrid");
   const emptyState = $("#emptyState");
   const appCount = $("#appCount");
@@ -188,6 +224,15 @@
     await flushPendingLinks();
   }
 
+  // 跨标签页：其它首页标签（或应用广场）对「我的应用」列表做了增删改后，本标签即时跟进。
+  // IndexedDB 在同源同配置文件下跨标签共享，先直接读本地（离线也能看到刚发生的改动），
+  // 再在联网时与服务端对齐，保证最终一致。
+  async function onLinksChangedRemote() {
+    if (currentUserId == null) return;
+    try { apps = await LinkDB.allByUser(currentUserId); renderAll(); } catch (_) {}
+    if (navigator.onLine !== false) { syncLinks().catch(() => {}); }
+  }
+
   // 把本地未同步（synced=false）的记录补推到服务端
   async function flushPendingLinks() {
     if (currentUserId == null) return;
@@ -258,6 +303,8 @@
     } catch (e) {
       toast("已离线保存，联网后自动同步");
     }
+    // 跨标签页：本标签新建了「我的应用」，通知其它首页标签（及广场）同步
+    CrossTab.post({ type: "links-changed" });
   }
 
   // 更新（离线友好）：本地立即更新，再推服务端；离线新建项仍按 create 处理
@@ -282,6 +329,8 @@
     } catch (e) {
       toast("已离线保存，联网后自动同步");
     }
+    // 跨标签页：本标签更新了「我的应用」，通知其它首页标签（及广场）同步
+    CrossTab.post({ type: "links-changed" });
   }
 
   // 删除（离线友好）：本地立即移除；服务端删除失败则保留墓碑，联网后重试
@@ -290,6 +339,8 @@
     const isTemp = String(id).startsWith("tmp_");
     await LinkDB.delete(id);
     await refreshApps();
+    // 跨标签页：本标签删除了「我的应用」，通知其它首页标签（及广场）同步
+    CrossTab.post({ type: "links-changed" });
     if (isTemp || !existing) return; // 从未同步到服务端，无需 DELETE
     try {
       await api("/api/links/" + id, { method: "DELETE" });
@@ -3004,7 +3055,7 @@
     const prefetchMarket = () => {
       if (marketPrefetched) return;
       marketPrefetched = true;
-      ["marketplace.html", "marketplace.js?v=11"].forEach((href) => {
+      ["marketplace.html", "marketplace.js?v=12"].forEach((href) => {
         const link = document.createElement("link");
         link.rel = "prefetch";
         link.href = href;
@@ -3620,6 +3671,14 @@
       renderFriends();
     }
   }
+  // 跨标签页：其它首页标签把某私聊标记为已读后，本标签同步清零红点，并抬高本地已读游标，
+  // 使之后到达的、ts 不晚于该游标的消息不再被本标签计为未读（避免一处已读、另一处又弹红点）。
+  function applyRemotePeerRead(peerId, ts) {
+    peerId = Number(peerId); ts = Number(ts) || 0;
+    if (!peerId) return;
+    if (ts) lastReadCache[peerId] = Math.max(lastReadCache[peerId] || 0, ts);
+    clearUnread(peerId);
+  }
   // 未读总数提醒：① 顶栏 💬 按钮上的红点徽标（抽屉关闭也始终可见）② 浏览器标签标题前缀
   const BASE_TITLE = "Web 应用导航面板";
   function updateUnreadTitle() {
@@ -3795,6 +3854,8 @@
     // 实现「已读的消息切换新客户端不再显示未读」。
     const convMax = await ChatDB.maxTs(convKeyLocal(myId, f.id));
     if (convMax) markRead(f.id, convMax);
+    // 跨标签页：本标签已读此会话，通知其它首页标签同步清零红点
+    if (convMax) CrossTab.post({ type: "peer-read", peerId: f.id, ts: convMax });
     // 打开会话：确保该会话出现在列表（首次发起聊天时创建），不改已有排序
     ensureConversation("peer", f.id);
     updateCallButtons();
@@ -5845,6 +5906,8 @@
       }
       // 正在看此会话收到新消息：已读游标跟随最新，避免换端后这些又算未读
       markRead(peerOfMsg, m.ts);
+      // 跨标签页：本标签已读此会话，通知其它首页标签同步清零红点
+      CrossTab.post({ type: "peer-read", peerId: peerOfMsg, ts: m.ts });
       // 新消息把会话前置（更新预览与排序）
       upsertConversation("peer", peerOfMsg, m.ts, m.text, false);
     } else if (m.from !== myId) {
@@ -5989,6 +6052,12 @@
       renderGroups();
     }
   }
+  // 跨标签页：其它首页标签把某群标记为已读后，本标签同步清零群红点。
+  function applyRemoteGroupRead(gid, ts) {
+    gid = Number(gid); ts = Number(ts) || 0;
+    if (!gid) return;
+    clearGroupUnread(gid);
+  }
   // 覆盖式设置群未读数（重算用）。
   function setGroupUnread(gid, n) {
     gid = Number(gid); n = Number(n) || 0;
@@ -6071,6 +6140,8 @@
     // 打开群会话即上报「已读」到服务端（用会话最新 ts），供其它端计算未读基准
     const gMax = await ChatDB.maxTs(groupConvKey(g.id));
     if (gMax) markGroupRead(g.id, gMax);
+    // 跨标签页：本标签已读此群，通知其它首页标签同步清零群红点
+    if (gMax) CrossTab.post({ type: "group-read", gid: g.id, ts: gMax });
     // 打开群会话：确保该会话出现在列表（首次发起聊天时创建），不改已有排序
     ensureConversation("group", g.id);
   }
