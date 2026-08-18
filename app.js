@@ -2979,7 +2979,7 @@
     const prefetchMarket = () => {
       if (marketPrefetched) return;
       marketPrefetched = true;
-      ["marketplace.html", "marketplace.js?v=8"].forEach((href) => {
+      ["marketplace.html", "marketplace.js?v=9"].forEach((href) => {
         const link = document.createElement("link");
         link.rel = "prefetch";
         link.href = href;

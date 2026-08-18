@@ -435,6 +435,16 @@
     document.querySelectorAll(".mk-tab").forEach((b) => {
       b.addEventListener("click", () => switchTab(b.getAttribute("data-tab")));
     });
+    // 「返回应用」走浏览器返回（bfcache 恢复，不重载 index.html，不重触发登录检查）；
+    // 仅当广场是被直接打开（无历史）时才回退到 index.html。
+    const backBtn = document.getElementById("mkBack");
+    if (backBtn) {
+      backBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (history.length > 1) history.back();
+        else location.href = "index.html";
+      });
+    }
     document.getElementById("fChina").addEventListener("change", loadPlaza);
     document.getElementById("fPwa").addEventListener("change", loadPlaza);
     document.getElementById("publishBtn").addEventListener("click", openPublish);
