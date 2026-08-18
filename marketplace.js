@@ -162,6 +162,35 @@
     );
   }
 
+  // 骨架屏：渲染若干张与真实卡片结构一致的占位卡（带 shimmer 动画）
+  function skeletonCardHtml() {
+    return (
+      '<div class="mk-card mk-card--skel">' +
+        '<div class="mk-card-head">' +
+          '<div class="mk-skel mk-skel-icon"></div>' +
+          '<div class="mk-skel-text">' +
+            '<div class="mk-skel mk-skel-line" style="width:62%"></div>' +
+            '<div class="mk-skel mk-skel-line mk-skel-line-sm" style="width:38%"></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="mk-skel mk-skel-line" style="width:100%"></div>' +
+        '<div class="mk-skel mk-skel-line" style="width:84%"></div>' +
+        '<div class="mk-skel-badges">' +
+          '<div class="mk-skel mk-skel-pill"></div>' +
+          '<div class="mk-skel mk-skel-pill"></div>' +
+        '</div>' +
+        '<div class="mk-card-foot">' +
+          '<div class="mk-skel mk-skel-btn"></div>' +
+          '<div class="mk-skel mk-skel-btn"></div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+  function showSkeleton(grid, count) {
+    const n = count || 6;
+    grid.innerHTML = Array.from({ length: n }, skeletonCardHtml).join("");
+  }
+
   // ---------- 状态 ----------
   let currentUser = null;
   let view = "plaza";
@@ -210,7 +239,7 @@
     const grid = document.getElementById("mkGrid");
     const china = document.getElementById("fChina").checked ? 1 : 0;
     const pwa = document.getElementById("fPwa").checked ? 1 : 0;
-    grid.innerHTML = '<div class="mk-msg">加载中…</div>';
+    showSkeleton(grid);
     try {
       const { apps } = await api("/api/apps?china=" + china + "&pwa=" + pwa);
       appIndex = {};
@@ -233,7 +262,7 @@
       grid.innerHTML = '<div class="mk-msg">请先在 <a href="index.html" style="color:var(--primary)">应用</a> 中登录后查看你的发布。</div>';
       return;
     }
-    grid.innerHTML = '<div class="mk-msg">加载中…</div>';
+    showSkeleton(grid);
     try {
       const { apps } = await api("/api/apps/mine");
       appIndex = {};

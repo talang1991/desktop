@@ -97,6 +97,38 @@
     .mk-msg { text-align: center; color: var(--text-2); padding: 40px 0; font-size: 14px; }
     .mk-empty { text-align: center; color: var(--text-2); padding: 40px 0; font-size: 14px; }
 
+    /* 骨架屏（tab 切换 / 筛选 / 首屏客户端加载时占位） */
+    :root {
+      --skel-base: rgba(0,0,0,.06);
+      --skel-shine: rgba(0,0,0,.12);
+    }
+    [data-theme="dark"] {
+      --skel-base: rgba(255,255,255,.07);
+      --skel-shine: rgba(255,255,255,.14);
+    }
+    .mk-card--skel { pointer-events: none; }
+    .mk-skel {
+      position: relative; overflow: hidden;
+      background: var(--skel-base); border-radius: 8px;
+    }
+    .mk-skel::after {
+      content: ""; position: absolute; inset: 0;
+      transform: translateX(-100%);
+      background: linear-gradient(90deg, transparent, var(--skel-shine), transparent);
+      animation: mk-shimmer 1.3s infinite;
+    }
+    @keyframes mk-shimmer { 100% { transform: translateX(100%); } }
+    @media (prefers-reduced-motion: reduce) {
+      .mk-skel::after { animation: none; }
+    }
+    .mk-skel-icon { width: 44px; height: 44px; border-radius: 12px; flex: 0 0 auto; }
+    .mk-skel-text { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+    .mk-skel-line { height: 12px; }
+    .mk-skel-line-sm { height: 10px; }
+    .mk-skel-badges { display: flex; gap: 6px; }
+    .mk-skel-pill { width: 66px; height: 20px; border-radius: 999px; }
+    .mk-skel-btn { flex: 1; height: 36px; border-radius: 10px; }
+
     /* 发布弹窗 */
     .mk-modal {
       position: fixed; inset: 0; background: rgba(0,0,0,.45);
@@ -197,6 +229,6 @@
     </div>
   </div>
 
-  <script src="marketplace.js?v=7"></script>
+  <script src="marketplace.js?v=8"></script>
 </body>
 </html>
