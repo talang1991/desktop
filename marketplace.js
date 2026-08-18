@@ -121,6 +121,10 @@
     const del = mine
       ? '<button class="mk-del" data-del="' + app.id + '">删除</button>'
       : "";
+    // 被拒绝的应用支持「修改并重新提交审核」
+    const edit = (mine && app.status === "rejected")
+      ? '<button class="mk-edit" data-edit="' + app.id + '">修改并重新提交</button>'
+      : "";
     const reason = (mine && app.status === "rejected" && app.reject_reason)
       ? '<div class="mk-sub" style="color:#d23">拒绝原因：' + escapeHtml(app.reject_reason) + "</div>"
       : "";
@@ -144,6 +148,7 @@
         '<div class="mk-card-foot">' +
           '<a class="mk-open" href="' + escapeHtml(app.url) + '" target="_blank" rel="noopener">打开</a>' +
           save +
+          edit +
           del +
         "</div>" +
       "</div>"
@@ -155,6 +160,7 @@
   let view = "plaza";
   let appIndex = {}; // id -> app 元数据，供「保存到我的应用」读取 name/url/category
   let myLinkUrls = new Set(); // 已保存到「我的应用」的归一化 URL 集合，用于卡片去重标记
+  let editingId = null; // 正在修改的应用 id（null = 新建模式）
 
   // 给当前渲染出的卡片绑定「保存到我的应用」按钮
   function bindSaveButtons(grid) {
@@ -246,6 +252,9 @@
           }
         });
       });
+      grid.querySelectorAll("[data-edit]").forEach((btn) => {
+        btn.addEventListener("click", () => openEdit(Number(btn.getAttribute("data-edit"))));
+      });
     } catch (e) {
       grid.innerHTML = '<div class="mk-msg">加载失败：' + escapeHtml((e && e.message) || "未知错误") + "</div>";
     }
@@ -262,18 +271,45 @@
     else loadMine();
   }
 
-  // ---------- 发布表单 ----------
+  // ---------- 发布 / 修改表单 ----------
+  function setPublishMode() {
+    // 根据 editingId 切换弹窗标题与提交按钮文案
+    const isEdit = editingId != null;
+    const titleEl = document.getElementById("publishTitle");
+    const submitEl = document.getElementById("publishSubmit");
+    if (titleEl) titleEl.textContent = isEdit ? "修改应用" : "发布应用";
+    if (submitEl) submitEl.textContent = isEdit ? "保存并重新提交审核" : "提交审核";
+  }
   function openPublish() {
     const tk = localStorage.getItem(TOKEN_KEY);
     if (!tk) {
       toast("请先在应用中登录后再发布", "err");
       return;
     }
+    editingId = null;
+    document.getElementById("publishForm").reset();
+    setPublishMode();
+    document.getElementById("publishModal").hidden = false;
+    document.getElementById("fName").focus();
+  }
+  function openEdit(id) {
+    const app = appIndex[id];
+    if (!app) return;
+    editingId = id;
+    document.getElementById("fName").value = app.name || "";
+    document.getElementById("fUrl").value = app.url || "";
+    document.getElementById("fCategory").value = app.category || "";
+    document.getElementById("fIcon").value = app.icon || "";
+    document.getElementById("fDesc").value = app.description || "";
+    document.getElementById("fChina2").checked = !!app.supports_china;
+    document.getElementById("fPwa2").checked = !!app.supports_pwa;
+    setPublishMode();
     document.getElementById("publishModal").hidden = false;
     document.getElementById("fName").focus();
   }
   function closePublish() {
     document.getElementById("publishModal").hidden = true;
+    editingId = null;
   }
   async function submitPublish(e) {
     e.preventDefault();
@@ -289,17 +325,25 @@
     const btn = document.getElementById("publishSubmit");
     btn.disabled = true;
     try {
-      await api("/api/apps", {
-        method: "POST",
-        body: JSON.stringify({ name, url, category, icon, description, supports_china, supports_pwa }),
-      });
-      toast("已提交，等待管理员审核");
+      if (editingId != null) {
+        // 修改模式：PUT 更新字段，后端重置状态为 pending
+        await api("/api/apps/" + editingId, {
+          method: "PUT",
+          body: JSON.stringify({ name, url, category, icon, description, supports_china, supports_pwa }),
+        });
+        toast("已保存并重新提交，等待管理员审核");
+      } else {
+        await api("/api/apps", {
+          method: "POST",
+          body: JSON.stringify({ name, url, category, icon, description, supports_china, supports_pwa }),
+        });
+        toast("已提交，等待管理员审核");
+      }
       closePublish();
-      document.getElementById("publishForm").reset();
       switchTab("mine");
       await loadMine();
     } catch (err) {
-      toast((err && err.message) || "发布失败", "err");
+      toast((err && err.message) || "提交失败", "err");
     } finally {
       btn.disabled = false;
     }

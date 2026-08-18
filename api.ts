@@ -9,7 +9,7 @@ import {
   createGroup, addGroupMember, listUserGroups, getGroupBasic, isGroupMember, leaveGroup,
   renameGroup, getGroupMemberIds,
   listAllUsers, updateUserRole, countUsers, countLinks, recentRegistrations,
-  createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, countPendingApps,
+  createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, updateApp, countPendingApps,
   DbUnavailableError,
 } from "./store.ts";
 
@@ -211,14 +211,36 @@ export async function handleApi(req: Request): Promise<Response> {
       return json({ apps });
     }
 
-    // ---- 应用广场：删除自己的应用（需登录）----
-    const appDel = path.match(/^\/api\/apps\/(\d+)$/);
-    if (appDel && method === "DELETE") {
+    // ---- 应用广场：修改 / 删除自己的应用（需登录）----
+    const appRes = path.match(/^\/api\/apps\/(\d+)$/);
+    if (appRes) {
       const user = await requireUser(req);
       if (!user) return json({ error: "请先登录" }, 401);
-      const ok = await deleteApp(Number(appDel[1]), user.id);
-      if (!ok) return json({ error: "应用不存在或无权删除" }, 404);
-      return json({ ok: true });
+      const id = Number(appRes[1]);
+      if (method === "DELETE") {
+        const ok = await deleteApp(id, user.id);
+        if (!ok) return json({ error: "应用不存在或无权删除" }, 404);
+        return json({ ok: true });
+      }
+      if (method === "PUT") {
+        // 修改自己的应用并重新提交审核：字段校验与发布一致；状态重置为 pending
+        const b = await req.json().catch(() => ({}));
+        const name = String(b.name || "").trim();
+        const rawUrl = String(b.url || "").trim();
+        if (!name) return json({ error: "请填写应用名称" }, 400);
+        if (name.length > 60) return json({ error: "应用名称过长（最多 60 字）" }, 400);
+        if (!isHttpUrl(rawUrl)) return json({ error: "请填写合法的 http(s) 链接" }, 400);
+        const description = String(b.description || "").slice(0, 500);
+        const icon = String(b.icon || "").slice(0, 2048);
+        const category = (String(b.category || "其它").trim() || "其它").slice(0, 20);
+        const supports_china = b.supports_china === true || b.supports_china === "true";
+        const supports_pwa = b.supports_pwa === true || b.supports_pwa === "true";
+        const ok = await updateApp(id, user.id, {
+          name, url: rawUrl, description, icon, category, supports_china, supports_pwa,
+        });
+        if (!ok) return json({ error: "应用不存在或无权修改" }, 404);
+        return json({ ok: true, status: "pending" });
+      }
     }
 
     // ---- 管理后台：应用审核列表（仅管理员）----

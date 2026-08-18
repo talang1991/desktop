@@ -738,6 +738,32 @@ export async function deleteApp(id: number, userId: number): Promise<boolean> {
   return rows.length > 0;
 }
 
+// 修改自己的应用并重新提交审核：更新字段 + 状态重置为 pending（清空拒绝/上架信息）
+export async function updateApp(
+  id: number,
+  userId: number,
+  data: {
+    name: string; url: string; description?: string; icon?: string;
+    category?: string; supports_china?: boolean; supports_pwa?: boolean;
+  },
+): Promise<boolean> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ id: number }>(
+    `UPDATE apps
+     SET name = $3, url = $4, description = $5, icon = $6, category = $7,
+         supports_china = $8, supports_pwa = $9,
+         status = 'pending', reject_reason = '', approved_at = NULL, approved_by = NULL
+     WHERE id = $1 AND user_id = $2 RETURNING id`,
+    [
+      id, userId,
+      data.name, data.url, data.description || "", data.icon || "",
+      data.category || "其它", !!data.supports_china, !!data.supports_pwa,
+    ],
+  );
+  return rows.length > 0;
+}
+
 // ---------------- 链接 ----------------
 function toLinkShape(l: LinkRow) {
   return {

@@ -85,6 +85,11 @@
     }
     .mk-save:hover { background: var(--primary); color: #fff; }
     .mk-save:disabled { opacity: .65; cursor: default; border-color: var(--border); color: var(--text-2); background: var(--surface); }
+    .mk-edit {
+      border: 1px solid rgba(183,121,31,.5); border-radius: 10px; padding: 8px 12px; font-size: 13px;
+      background: rgba(183,121,31,.10); color: #b7791f; cursor: pointer; white-space: nowrap;
+    }
+    .mk-edit:hover { background: rgba(183,121,31,.20); }
     .mk-status { font-size: 12px; padding: 2px 9px; border-radius: 999px; }
     .mk-status.pending { color: #b7791f; background: rgba(183,121,31,.12); }
     .mk-status.approved { color: #1a7f37; background: rgba(26,127,55,.12); }
@@ -163,7 +168,7 @@
   <!-- 发布应用弹窗 -->
   <div id="publishModal" class="mk-modal" hidden>
     <div class="mk-modal-card">
-      <div class="mk-modal-head">发布应用 <button id="publishClose" title="关闭">✕</button></div>
+      <div class="mk-modal-head"><span id="publishTitle">发布应用</span> <button id="publishClose" title="关闭">✕</button></div>
       <form id="publishForm">
         <div class="mk-field">
           <label>应用名称 *</label>
@@ -192,6 +197,6 @@
     </div>
   </div>
 
-  <script src="marketplace.js?v=3"></script>
+  <script src="marketplace.js?v=4"></script>
 </body>
 </html>
