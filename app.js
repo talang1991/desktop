@@ -1595,6 +1595,8 @@
       "settings.deviceActive": "活跃于",
       "topbar.search.ph": "搜索应用名称或网址…",
       "topbar.add": "添加应用",
+      "topbar.market": "应用广场",
+      "topbar.market.title": "进入应用广场，发现并发布应用",
       "topbar.chat": "聊天",
       "topbar.meeting": "视频会议",
       "topbar.settings": "设置",
@@ -2944,6 +2946,20 @@
     enterAdminBtn.addEventListener("click", () => {
       if (!isAdmin()) return;
       location.href = "admin.html";
+    });
+  }
+  // 应用广场入口：顶栏「应用广场」按钮（所有登录用户可见）
+  const marketBtn = $("#marketBtn");
+  if (marketBtn) {
+    marketBtn.addEventListener("click", () => {
+      location.href = "marketplace.html";
+    });
+  }
+  // 应用广场入口：设置面板旧入口（保留以便从设置进入）
+  const enterMarketBtn = $("#enterMarketBtn");
+  if (enterMarketBtn) {
+    enterMarketBtn.addEventListener("click", () => {
+      location.href = "marketplace.html";
     });
   }
 

@@ -73,6 +73,10 @@
     <symbol id="sym-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M12 5v14"/><path d="M5 12h14"/>
     </symbol>
+    <!-- 应用广场 / 商店 -->
+    <symbol id="sym-market" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M6 7h12l-1 13H7L6 7z"/><path d="M9 7V5a3 3 0 0 1 6 0v2"/>
+    </symbol>
     <!-- 排序拖拽手柄 -->
     <symbol id="sym-reorder" viewBox="0 0 24 24" fill="currentColor">
       <circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/>
@@ -180,6 +184,7 @@
         </button>
         <span id="userName" class="user-name"></span>
         <button id="addBtn" class="btn primary"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-plus"/></svg><span data-i18n="topbar.add">添加应用</span></button>
+        <button id="marketBtn" class="btn ghost" title="应用广场" data-i18n-title="topbar.market.title"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-market"/></svg><span data-i18n="topbar.market">应用广场</span></button>
         <button id="chatBtn" class="btn ghost" title="P2P 聊天"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-chat"/></svg><span data-i18n="topbar.chat">聊天</span><span id="chatUnreadBadge" class="nav-badge" hidden></span></button>
         <button id="meetingStartBtn" class="btn ghost" title="视频会议"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-video"/></svg><span data-i18n="topbar.meeting">视频会议</span></button>
         <button id="settingsBtn" class="btn ghost" title="设置"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-gear"/></svg><span data-i18n="topbar.settings">设置</span></button>
@@ -583,6 +588,10 @@
           <button id="logoutOthersBtn" class="btn ghost block" data-i18n="settings.logoutOthers">登出其他设备</button>
           <p class="settings-hint" data-i18n="settings.devicesHint">这里列出当前账号登录过的所有设备，可单独登出某台或一键登出其他设备。</p>
         </div>
+        <div class="settings-section">
+          <div class="settings-section-title" data-i18n="market.title">应用广场</div>
+          <button id="enterMarketBtn" class="btn ghost block" data-i18n="market.enter">🛍️ 进入应用广场</button>
+        </div>
         <div class="settings-section" id="adminEntry" hidden>
           <div class="settings-section-title" data-i18n="admin.entryTitle">管理</div>
           <button id="enterAdminBtn" class="btn ghost block" data-i18n="admin.enter">⚙️ 进入管理后台</button>
@@ -598,7 +607,7 @@
 
   <!-- 管理后台已拆为独立页面 admin.html（从设置的「管理」入口打开） -->
 
-  <script src="app.js?v=148"></script>
+  <script src="app.js?v=150"></script>
   <script src="delight.js?v=4"></script>
 </body>
 </html>

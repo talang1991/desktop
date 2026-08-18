@@ -9,6 +9,7 @@ import {
   createGroup, addGroupMember, listUserGroups, getGroupBasic, isGroupMember, leaveGroup,
   renameGroup, getGroupMemberIds,
   listAllUsers, updateUserRole, countUsers, countLinks, recentRegistrations,
+  createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, countPendingApps,
   DbUnavailableError,
 } from "./store.ts";
 
@@ -17,6 +18,15 @@ function normalizeDevice(d: unknown): string {
   const v = String(d || "").toLowerCase();
   if (v === "mobile" || v === "tablet" || v === "desktop") return v;
   return "desktop";
+}
+// 仅接受 http(s) 链接（应用广场的 url / icon 校验用）
+function isHttpUrl(s: unknown): boolean {
+  try {
+    const u = new URL(String(s || ""));
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 import { getWsPublicUrl, getIceServers, isOnline, pushToUser } from "./signaling.ts";
 import { saveMessage, getMessages, saveGroupMessage, getGroupMessages, chatKvReady, saveReadCursor, getReadCursor } from "./chatstore.ts";
@@ -164,6 +174,76 @@ export async function handleApi(req: Request): Promise<Response> {
         recentRegistrations(7),
       ]);
       return json({ stats: { users, links, recentUsers } });
+    }
+
+    // ---- 应用广场：公开列表（已上架；支持 china / pwa 过滤；无需登录）----
+    if (path === "/api/apps" && method === "GET") {
+      const china = url.searchParams.get("china") === "1";
+      const pwa = url.searchParams.get("pwa") === "1";
+      const apps = await listApprovedApps({ china, pwa });
+      return json({ apps });
+    }
+
+    // ---- 应用广场：发布应用（需登录）----
+    if (path === "/api/apps" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "请先登录" }, 401);
+      const b = await req.json().catch(() => ({}));
+      const name = String(b.name || "").trim();
+      const rawUrl = String(b.url || "").trim();
+      if (!name) return json({ error: "请填写应用名称" }, 400);
+      if (name.length > 60) return json({ error: "应用名称过长（最多 60 字）" }, 400);
+      if (!isHttpUrl(rawUrl)) return json({ error: "请填写合法的 http(s) 链接" }, 400);
+      const description = String(b.description || "").slice(0, 500);
+      const icon = String(b.icon || "").slice(0, 2048);
+      const category = (String(b.category || "其它").trim() || "其它").slice(0, 20);
+      const supports_china = b.supports_china === true || b.supports_china === "true";
+      const supports_pwa = b.supports_pwa === true || b.supports_pwa === "true";
+      const r = await createApp(user.id, { name, url: rawUrl, description, icon, category, supports_china, supports_pwa });
+      return json({ id: r.id, status: "pending" }, 201);
+    }
+
+    // ---- 应用广场：我的发布（需登录）----
+    if (path === "/api/apps/mine" && method === "GET") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "请先登录" }, 401);
+      const apps = await listMyApps(user.id);
+      return json({ apps });
+    }
+
+    // ---- 应用广场：删除自己的应用（需登录）----
+    const appDel = path.match(/^\/api\/apps\/(\d+)$/);
+    if (appDel && method === "DELETE") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "请先登录" }, 401);
+      const ok = await deleteApp(Number(appDel[1]), user.id);
+      if (!ok) return json({ error: "应用不存在或无权删除" }, 404);
+      return json({ ok: true });
+    }
+
+    // ---- 管理后台：应用审核列表（仅管理员）----
+    if (path === "/api/admin/apps" && method === "GET") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const apps = await listAllApps();
+      return json({ apps });
+    }
+
+    // ---- 管理后台：通过 / 拒绝应用（仅管理员）----
+    const appAct = path.match(/^\/api\/admin\/apps\/(\d+)\/(approve|reject)$/);
+    if (appAct && method === "POST") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const id = Number(appAct[1]);
+      let ok = false;
+      if (appAct[2] === "approve") {
+        ok = await approveApp(id, admin.id);
+      } else {
+        const b = await req.json().catch(() => ({}));
+        ok = await rejectApp(id, admin.id, String(b.reason || "").slice(0, 200));
+      }
+      if (!ok) return json({ error: "应用不存在" }, 404);
+      return json({ ok: true, status: appAct[2] === "approve" ? "approved" : "rejected" });
     }
 
     // ---- 登录设备管理：列出当前账号所有会话（多端登录）----

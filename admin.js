@@ -169,12 +169,14 @@
 
   async function loadData() {
     try {
-      const [usersRes, statsRes] = await Promise.all([
+      const [usersRes, statsRes, appsRes] = await Promise.all([
         api("/api/admin/users"),
         api("/api/admin/stats"),
+        api("/api/admin/apps"),
       ]);
       renderStats(statsRes.stats || {});
       renderUsers(usersRes.users || []);
+      renderApps(appsRes.apps || []);
     } catch (e) {
       if (e && e.status === 403) {
         renderNotice('无权访问：当前账号不是管理员。<a href="index.html">返回应用</a>');
@@ -182,6 +184,78 @@
         toast((e && e.message) || "加载失败", "err");
       }
     }
+  }
+
+  function renderApps(apps) {
+    const tb = document.getElementById("adminAppRows");
+    if (!tb) return;
+    const pending = apps.filter((a) => a.status === "pending").length;
+    const pc = document.getElementById("pendingCount");
+    if (pc) pc.textContent = pending ? ("（待审核 " + pending + "）") : "";
+    tb.innerHTML = "";
+    if (!apps.length) {
+      tb.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-2)">暂无应用</td></tr>';
+      return;
+    }
+    const stMap = { pending: "待审核", approved: "已上架", rejected: "已拒绝" };
+    for (const a of apps) {
+      const tr = document.createElement("tr");
+      const nameTd = document.createElement("td");
+      nameTd.innerHTML = '<div style="font-weight:600">' + escapeHtml(a.name) + "</div>" +
+        '<a href="' + escapeHtml(a.url) + '" target="_blank" rel="noopener" style="font-size:12px;color:var(--text-2)">' +
+        escapeHtml(a.url) + "</a>";
+      const userTd = document.createElement("td");
+      userTd.textContent = a.username || "未知";
+      const chinaTd = document.createElement("td");
+      chinaTd.textContent = a.supports_china ? "是" : "否";
+      const pwaTd = document.createElement("td");
+      pwaTd.textContent = a.supports_pwa ? "是" : "否";
+      const statusTd = document.createElement("td");
+      statusTd.innerHTML = '<span class="mk-status ' + escapeHtml(a.status) + '">' +
+        (stMap[a.status] || a.status) + "</span>";
+      const actTd = document.createElement("td");
+      let html = "";
+      if (a.status !== "approved") html += '<button class="btn ghost small app-approve" data-id="' + a.id + '">通过</button> ';
+      if (a.status !== "rejected") html += '<button class="btn ghost small app-reject" data-id="' + a.id + '">拒绝</button>';
+      actTd.innerHTML = html || '<span class="admin-self">—</span>';
+      tr.appendChild(nameTd);
+      tr.appendChild(userTd);
+      tr.appendChild(chinaTd);
+      tr.appendChild(pwaTd);
+      tr.appendChild(statusTd);
+      tr.appendChild(actTd);
+      tb.appendChild(tr);
+    }
+    tb.querySelectorAll(".app-approve").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = Number(btn.getAttribute("data-id"));
+        btn.disabled = true;
+        try {
+          await api("/api/admin/apps/" + id + "/approve", { method: "POST" });
+          toast("已通过并上架");
+          await loadData();
+        } catch (e) {
+          btn.disabled = false;
+          toast((e && e.message) || "操作失败", "err");
+        }
+      });
+    });
+    tb.querySelectorAll(".app-reject").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = Number(btn.getAttribute("data-id"));
+        const reason = prompt("拒绝原因（可选）：");
+        if (reason === null) return; // 用户取消
+        btn.disabled = true;
+        try {
+          await api("/api/admin/apps/" + id + "/reject", { method: "POST", body: JSON.stringify({ reason }) });
+          toast("已拒绝");
+          await loadData();
+        } catch (e) {
+          btn.disabled = false;
+          toast((e && e.message) || "操作失败", "err");
+        }
+      });
+    });
   }
 
   async function init() {

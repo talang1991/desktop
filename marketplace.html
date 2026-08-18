@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>应用广场 · Web 应用导航面板</title>
+  <link rel="stylesheet" href="styles.css?v=89" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <script>
+    // 避免主题闪烁：在渲染前应用已保存的主题
+    try {
+      if (localStorage.getItem("web-app-launcher:theme") === "dark") {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    } catch (e) {}
+  </script>
+  <style>
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif);
+    }
+    .mk-wrap { max-width: 1080px; margin: 0 auto; padding: 22px 18px 56px; }
+    .mk-top {
+      display: flex; align-items: center; gap: 12px;
+      padding: 6px 0 14px; border-bottom: 1px solid var(--border);
+    }
+    .mk-back {
+      color: var(--text-2); text-decoration: none; font-size: 14px;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .mk-back:hover { color: var(--text); }
+    .mk-top h1 { font-size: 18px; font-weight: 600; margin: 0; flex: 1; }
+    .mk-who { font-size: 13px; color: var(--text-2); }
+    .mk-who b { color: var(--primary); font-weight: 600; }
+    .mk-tabs { display: flex; gap: 8px; margin: 16px 0 10px; }
+    .mk-tab {
+      border: 1px solid var(--border); background: var(--surface); color: var(--text-2);
+      padding: 7px 16px; border-radius: 999px; font-size: 14px; cursor: pointer;
+    }
+    .mk-tab.active { color: #fff; background: var(--primary); border-color: var(--primary); }
+    .mk-filters { display: flex; flex-wrap: wrap; gap: 16px; margin: 6px 0 16px; font-size: 14px; color: var(--text-2); }
+    .mk-filters label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+    .mk-grid {
+      display: grid; gap: 14px;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    }
+    .mk-card {
+      border: 1px solid var(--border); border-radius: 16px; background: var(--surface);
+      padding: 14px; display: flex; flex-direction: column; gap: 10px;
+    }
+    .mk-card-head { display: flex; align-items: center; gap: 12px; }
+    .mk-icon {
+      width: 44px; height: 44px; border-radius: 12px; flex: 0 0 auto;
+      background: var(--bg); display: flex; align-items: center; justify-content: center;
+      overflow: hidden; font-weight: 700; color: var(--primary); font-size: 18px;
+    }
+    .mk-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .mk-title { font-weight: 600; font-size: 15px; }
+    .mk-sub { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+    .mk-desc { font-size: 13px; color: var(--text-2); line-height: 1.5; min-height: 20px; }
+    .mk-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+    .mk-badge {
+      font-size: 12px; padding: 2px 9px; border-radius: 999px;
+      border: 1px solid var(--border); color: var(--text-2);
+    }
+    .mk-badge.on-china { color: #1a7f37; border-color: rgba(26,127,55,.35); background: rgba(26,127,55,.10); }
+    .mk-badge.on-pwa { color: #2563eb; border-color: rgba(37,99,235,.35); background: rgba(37,99,235,.10); }
+    .mk-card-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; }
+    .mk-open {
+      flex: 1; text-align: center; text-decoration: none;
+      border: 1px solid var(--border); border-radius: 10px; padding: 8px; font-size: 13px;
+      color: var(--text); background: var(--bg);
+    }
+    .mk-open:hover { border-color: var(--primary); color: var(--primary); }
+    .mk-del {
+      border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; font-size: 13px;
+      background: var(--surface); color: var(--text-2); cursor: pointer;
+    }
+    .mk-del:hover { color: #d23; border-color: #d23; }
+    .mk-save {
+      border: 1px solid var(--primary); border-radius: 10px; padding: 8px 12px; font-size: 13px;
+      background: var(--surface); color: var(--primary); cursor: pointer; white-space: nowrap;
+    }
+    .mk-save:hover { background: var(--primary); color: #fff; }
+    .mk-save:disabled { opacity: .65; cursor: default; border-color: var(--border); color: var(--text-2); background: var(--surface); }
+    .mk-status { font-size: 12px; padding: 2px 9px; border-radius: 999px; }
+    .mk-status.pending { color: #b7791f; background: rgba(183,121,31,.12); }
+    .mk-status.approved { color: #1a7f37; background: rgba(26,127,55,.12); }
+    .mk-status.rejected { color: #d23; background: rgba(221,34,51,.12); }
+    .mk-msg { text-align: center; color: var(--text-2); padding: 40px 0; font-size: 14px; }
+    .mk-empty { text-align: center; color: var(--text-2); padding: 40px 0; font-size: 14px; }
+
+    /* 发布弹窗 */
+    .mk-modal {
+      position: fixed; inset: 0; background: rgba(0,0,0,.45);
+      display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 200;
+    }
+    /* 修复：hidden 属性需覆盖上面的 display:flex（否则弹窗关不掉、且首屏就显示）*/
+    .mk-modal[hidden] { display: none; }
+    .mk-modal-card {
+      width: 100%; max-width: 460px; max-height: 90vh; overflow: auto;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 16px; padding: 18px;
+    }
+    .mk-modal-head { display: flex; align-items: center; font-weight: 600; font-size: 16px; margin-bottom: 12px; }
+    .mk-modal-head button { margin-left: auto; border: none; background: none; color: var(--text-2); font-size: 18px; cursor: pointer; }
+    .mk-field { margin-bottom: 12px; }
+    .mk-field label { display: block; font-size: 13px; color: var(--text-2); margin-bottom: 5px; }
+    .mk-field input[type="text"], .mk-field textarea {
+      width: 100%; box-sizing: border-box; padding: 9px 11px; border-radius: 10px;
+      border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 14px;
+      font-family: inherit;
+    }
+    .mk-field textarea { resize: vertical; min-height: 64px; }
+    .mk-check { display: flex; align-items: center; gap: 9px; padding: 9px 0; font-size: 14px; cursor: pointer; }
+    .mk-check input { width: 16px; height: 16px; }
+    .mk-submit {
+      width: 100%; margin-top: 6px; padding: 11px; border: none; border-radius: 10px;
+      background: var(--primary); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    .mk-submit:disabled { opacity: .6; cursor: default; }
+    #notice {
+      margin-top: 18px; padding: 16px 18px; border: 1px solid var(--border);
+      border-radius: 14px; background: var(--surface); color: var(--text-2); font-size: 14px;
+    }
+    #notice a { color: var(--primary); }
+    .avatar-img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; display: block; }
+    @media (max-width: 560px) {
+      .mk-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="mk-wrap">
+    <div class="mk-top">
+      <a class="mk-back" href="index.html">← 返回应用</a>
+      <h1>应用广场</h1>
+      <div class="mk-who" id="mkWho" hidden>你好，<b></b></div>
+      <button id="publishBtn" class="btn primary">＋ 发布应用</button>
+    </div>
+
+    <div id="notice" hidden></div>
+
+    <div class="mk-tabs">
+      <button class="mk-tab active" data-tab="plaza">广场</button>
+      <button class="mk-tab" data-tab="mine">我的发布</button>
+    </div>
+
+    <div id="plazaView">
+      <div class="mk-filters">
+        <label><input type="checkbox" id="fChina" /> 仅支持中国境内访问</label>
+        <label><input type="checkbox" id="fPwa" /> 仅支持 PWA</label>
+      </div>
+      <div class="mk-grid" id="mkGrid"><div class="mk-msg">加载中…</div></div>
+    </div>
+
+    <div id="mineView" hidden>
+      <div class="mk-grid" id="mkMine"><div class="mk-msg">加载中…</div></div>
+    </div>
+  </div>
+
+  <!-- 发布应用弹窗 -->
+  <div id="publishModal" class="mk-modal" hidden>
+    <div class="mk-modal-card">
+      <div class="mk-modal-head">发布应用 <button id="publishClose" title="关闭">✕</button></div>
+      <form id="publishForm">
+        <div class="mk-field">
+          <label>应用名称 *</label>
+          <input type="text" id="fName" maxlength="60" placeholder="例如：Notion" required />
+        </div>
+        <div class="mk-field">
+          <label>应用地址（URL）*</label>
+          <input type="text" id="fUrl" placeholder="https://example.com" required />
+        </div>
+        <div class="mk-field">
+          <label>分类</label>
+          <input type="text" id="fCategory" maxlength="20" placeholder="例如：效率 / 设计 / 开发" />
+        </div>
+        <div class="mk-field">
+          <label>图标地址（可选，留空则用站点 favicon）</label>
+          <input type="text" id="fIcon" placeholder="https://example.com/icon.png" />
+        </div>
+        <div class="mk-field">
+          <label>简介（可选）</label>
+          <textarea id="fDesc" maxlength="500" placeholder="一句话介绍这个应用…"></textarea>
+        </div>
+        <label class="mk-check"><input type="checkbox" id="fChina2" /> 支持中国境内访问</label>
+        <label class="mk-check"><input type="checkbox" id="fPwa2" /> 支持 PWA（可安装到桌面/主屏）</label>
+        <button type="submit" class="mk-submit" id="publishSubmit">提交审核</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="marketplace.js?v=2"></script>
+</body>
+</html>

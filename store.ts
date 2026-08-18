@@ -133,6 +133,40 @@ function ensureDb() {
   if (!pool) throw new DbUnavailableError();
 }
 
+// 应用广场表 DDL（启动建表 + 运行时懒创建共用，避免启动期 DB 抖动导致表缺失）
+const APPS_DDL = `CREATE TABLE IF NOT EXISTS apps (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  icon TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT '其它',
+  supports_china BOOLEAN NOT NULL DEFAULT false,  -- 是否支持中国境内访问
+  supports_pwa BOOLEAN NOT NULL DEFAULT false,    -- 是否支持 PWA
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | rejected
+  reject_reason TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  approved_at TIMESTAMPTZ,
+  approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+)`;
+
+// 运行时懒创建 apps 表：首次访问任一应用广场接口时确保表存在（DB 可达即创建，
+// 与读同走重试连接；失败则下次重试）。这样即便启动期 DB 抖动导致建表被跳过，
+// 也能在 DB 恢复后自愈，不依赖重启。
+let appsTableEnsured: Promise<void> | null = null;
+async function ensureAppsTable(): Promise<void> {
+  if (!appsTableEnsured) {
+    appsTableEnsured = (async () => {
+      await withClient(async (c) => { await c.queryObject(APPS_DDL); });
+    })().catch((e) => {
+      appsTableEnsured = null; // 失败则清空，下次访问重试
+      throw e;
+    });
+  }
+  return appsTableEnsured;
+}
+
 // ---------------- 密码哈希（pbkdf2$iter$saltB64$keyB64，兼容历史账号）----------------
 const PBKDF2_ITER = 120_000;
 function bufToB64(buf: Uint8Array): string {
@@ -284,6 +318,8 @@ export async function initStore(): Promise<void> {
               PRIMARY KEY (group_id, user_id)
             )`,
           );
+          // 应用广场：用户发布的应用，经管理员审核（approved）后上架
+          await c.queryObject(APPS_DDL);
         });
         schemaOk = true;
       } catch (e) {
@@ -558,6 +594,148 @@ export async function recentRegistrations(days = 7): Promise<number> {
     [days],
   );
   return rows[0]?.n ?? 0;
+}
+
+// 待审核应用数（管理后台角标用）
+export async function countPendingApps(): Promise<number> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM apps WHERE status = 'pending'`);
+  return rows[0]?.n ?? 0;
+}
+
+// ---------------- 应用广场 ----------------
+export interface AppStatus {
+  id: number;
+  user_id: number;
+  name: string;
+  url: string;
+  description: string;
+  icon: string;
+  category: string;
+  supports_china: boolean;
+  supports_pwa: boolean;
+  status: "pending" | "approved" | "rejected";
+  reject_reason: string;
+  created_at: string;
+  approved_at: string | null;
+  username?: string;
+  approved_by?: number | null;
+}
+
+// 发布应用（用户）
+export async function createApp(
+  userId: number,
+  data: {
+    name: string; url: string; description?: string; icon?: string;
+    category?: string; supports_china?: boolean; supports_pwa?: boolean;
+  },
+): Promise<{ id: number }> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ id: number }>(
+    `INSERT INTO apps (user_id, name, url, description, icon, category, supports_china, supports_pwa)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    [
+      userId,
+      data.name,
+      data.url,
+      data.description || "",
+      data.icon || "",
+      data.category || "其它",
+      !!data.supports_china,
+      !!data.supports_pwa,
+    ],
+  );
+  return rows[0];
+}
+
+// 广场公开展示：仅已审核通过的应用；支持按「境内可访问 / 支持 PWA」过滤
+export async function listApprovedApps(opts: { china?: boolean; pwa?: boolean } = {}): Promise<AppStatus[]> {
+  ensureDb();
+  await ensureAppsTable();
+  const conds: string[] = ["a.status = 'approved'"];
+  const params: unknown[] = [];
+  if (opts.china) { params.push(true); conds.push(`a.supports_china = $${params.length}`); }
+  if (opts.pwa) { params.push(true); conds.push(`a.supports_pwa = $${params.length}`); }
+  const rows = await query<AppStatus>(
+    `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
+            a.supports_china, a.supports_pwa, a.status, a.reject_reason, a.created_at,
+            a.approved_at, u.username
+     FROM apps a JOIN users u ON u.id = a.user_id
+     WHERE ${conds.join(" AND ")}
+     ORDER BY a.approved_at DESC NULLS LAST, a.created_at DESC`,
+    params,
+  );
+  return rows;
+}
+
+// 我的发布（含状态 / 拒绝原因）
+export async function listMyApps(userId: number): Promise<AppStatus[]> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<AppStatus>(
+    `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
+            a.supports_china, a.supports_pwa, a.status, a.reject_reason, a.created_at,
+            a.approved_at, u.username
+     FROM apps a JOIN users u ON u.id = a.user_id
+     WHERE a.user_id = $1
+     ORDER BY a.created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+// 全部应用（管理后台审核用）
+export async function listAllApps(): Promise<AppStatus[]> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<AppStatus>(
+    `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
+            a.supports_china, a.supports_pwa, a.status, a.reject_reason, a.created_at,
+            a.approved_at, a.approved_by, u.username
+     FROM apps a JOIN users u ON u.id = a.user_id
+     ORDER BY
+       CASE a.status WHEN 'pending' THEN 0 ELSE 1 END,
+       a.created_at DESC`,
+    [],
+  );
+  return rows;
+}
+
+// 审核通过：上架
+export async function approveApp(id: number, adminId: number): Promise<boolean> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ id: number }>(
+    `UPDATE apps SET status = 'approved', approved_at = now(), approved_by = $2, reject_reason = ''
+     WHERE id = $1 RETURNING id`,
+    [id, adminId],
+  );
+  return rows.length > 0;
+}
+
+// 审核拒绝：下架并记录原因
+export async function rejectApp(id: number, adminId: number, reason: string): Promise<boolean> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ id: number }>(
+    `UPDATE apps SET status = 'rejected', approved_at = now(), approved_by = $2, reject_reason = $3
+     WHERE id = $1 RETURNING id`,
+    [id, adminId, reason || ""],
+  );
+  return rows.length > 0;
+}
+
+// 删除自己的应用（任意状态均可）
+export async function deleteApp(id: number, userId: number): Promise<boolean> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ id: number }>(
+    `DELETE FROM apps WHERE id = $1 AND user_id = $2 RETURNING id`,
+    [id, userId],
+  );
+  return rows.length > 0;
 }
 
 // ---------------- 链接 ----------------
