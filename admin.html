@@ -72,9 +72,31 @@
     .detail-val { flex: 1; word-break: break-all; }
     .detail-desc { line-height: 1.5; white-space: pre-wrap; }
     .padmin-modal-foot { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+  /* 版本更新提示条（与首页一致） */
+  .update-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 300;
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 16px; background: var(--primary); color: #fff;
+    font-size: 14px; box-shadow: var(--shadow);
+  }
+  .update-banner[hidden] { display: none; }
+  .update-banner .update-icon { display: inline-flex; line-height: 1; }
+  .update-banner .update-icon svg { width: 18px; height: 18px; display: block; }
+  .update-banner .update-text { flex: 1 1 auto; }
+  .update-banner .btn.small {
+    background: rgba(255, 255, 255, 0.22); color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.55); padding: 5px 12px;
+  }
+  .update-banner .btn.small:hover { background: rgba(255, 255, 255, 0.34); }
   </style>
 </head>
 <body>
+  <!-- 版本更新提示条（检测到新版本时由 admin.js 显示） -->
+  <div id="updateBanner" class="update-banner" hidden>
+    <span class="update-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.4 6.9H22l-6 4.3 2.3 7-6.3-4.4L5.7 20.2 8 13.2 2 8.9h7.6z" fill="currentColor"/></svg></span>
+    <span id="updateText" class="update-text">已更新到新版本</span>
+    <button id="updateReload" class="btn small" type="button">刷新</button>
+  </div>
   <div class="padmin-wrap">
     <div class="padmin-top">
       <a class="padmin-back" id="adminBack" href="index.html">← 返回应用</a>
@@ -131,6 +153,6 @@
     </div>
   </div>
 
-  <script src="admin.js?v=5"></script>
+  <script src="admin.js?v=6"></script>
 </body>
 </html>

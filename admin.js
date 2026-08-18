@@ -318,7 +318,82 @@
     if (m) m.hidden = true;
   }
 
+  // ---------- 版本更新提示（与 app.js 同源逻辑，按本页主脚本 admin.js?v= 判定）----------
+  // 让管理后台页也能检测新部署并提示刷新，避免用户停留在带版本号的旧缓存上（之前无任何更新机制）。
+  function getPageVersion() {
+    const s = document.querySelector('script[src*="admin.js"]');
+    if (s) {
+      const m = /[?&]v=([^&"'\s>]+)/.exec(s.getAttribute("src") || s.src || "");
+      if (m) return m[1];
+    }
+    return "unknown";
+  }
+  function showUpdateBanner(cur) {
+    const banner = document.getElementById("updateBanner");
+    const txt = document.getElementById("updateText");
+    if (txt) txt.textContent = "已更新到新版本 v" + cur + "，点击刷新";
+    if (banner) banner.hidden = false;
+  }
+  function handleServerVersion(ver) {
+    if (!ver) return;
+    const cur = getPageVersion();
+    if (ver !== cur) {
+      showUpdateBanner(ver);
+      try { localStorage.setItem("admin-app-version", ver); } catch (e) {}
+    }
+  }
+  function setupUpdateBanner() {
+    const btn = document.getElementById("updateReload");
+    if (btn) btn.onclick = () => location.reload();
+    const cur = getPageVersion();
+    let last = null;
+    try { last = localStorage.getItem("admin-app-version"); } catch (e) {}
+    if (last && last !== cur && cur !== "unknown") showUpdateBanner(cur);
+    try { localStorage.setItem("admin-app-version", cur); } catch (e) {}
+  }
+  function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) return;
+    // 仅安全上下文（https 或 localhost）注册；http 局域网 IP 跳过
+    if (location.protocol !== "https:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") return;
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/sw.js").catch((e) => {
+        console.warn("[SW] 注册失败（已忽略）:", (e && e.message) || e);
+      });
+    });
+  }
+  function setupSWUpdateListener() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      const data = (event && event.data) || {};
+      // SW_VERSION_UPDATE 带 url：仅对应页面弹提示，避免误报
+      if (data.type === "SW_VERSION_UPDATE" && data.version) {
+        if (!data.url || data.url === location.pathname) handleServerVersion(data.version);
+      } else if (data.type === "HTML_VERSION" && data.version) {
+        handleServerVersion(data.version);
+      } else if (data.type === "SW_READY" && data.versions) {
+        const v = data.versions[location.pathname];
+        if (v) handleServerVersion(v);
+      }
+    });
+    // 主动向已激活的 SW 查询“本页最新版本”，应对 SW 通知早于本监听的竞态
+    const query = () => {
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: "QUERY_HTML_VERSION", url: location.pathname });
+      }
+    };
+    if (navigator.serviceWorker.controller) query();
+    else navigator.serviceWorker.addEventListener("controllerchange", query);
+    if (navigator.serviceWorker.ready && typeof navigator.serviceWorker.ready.then === "function") {
+      navigator.serviceWorker.ready.then(query).catch(() => {});
+    }
+    setTimeout(query, 1500);
+  }
+
   async function init() {
+    // 注册 SW（幂等）+ 检测新版本提示（与应用页同源机制）；即便未登录也先就绪
+    registerServiceWorker();
+    setupUpdateBanner();
+    setupSWUpdateListener();
     const token = localStorage.getItem(TOKEN_KEY);
     if (!token) {
       renderNotice('未登录，请先在 <a href="index.html">应用</a> 中登录管理员账号。');

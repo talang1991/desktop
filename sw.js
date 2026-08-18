@@ -4,19 +4,19 @@
 // 注册地址固定为 /sw.js（不加 ?v=），由浏览器按字节差异自动检测更新。
 const CACHE = "static-v1";
 // SW 自身版本标记（仅用于前端探测“新 SW 是否已生效”，与页面部署版本无关）
-const SW_SELF_VERSION = 4;
+const SW_SELF_VERSION = 5;
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
-    // 预缓存页面壳（首页 + 应用广场），作为离线兜底；失败不阻塞安装
-    await cache.addAll(["/", "/marketplace.html"]).catch(() => {});
+    // 预缓存页面壳（首页 + 应用广场 + 管理后台），作为离线兜底；失败不阻塞安装
+    await cache.addAll(["/", "/marketplace.html", "/admin.html"]).catch(() => {});
     // 记录安装时首页页面壳的版本号，供页面后续主动查询
     try {
       const shell = await cache.match("/");
       if (shell) {
-        const v = extractAppVersion(await shell.text());
-        if (v) await saveHtmlVersion(cache, v);
+        const v = extractMainVersion(await shell.text(), "/");
+        if (v) await saveHtmlVersion(cache, "/", v);
       }
     } catch (e) {}
     // 预缓存页面壳中引用的带版本号静态资源（app.js?v= / marketplace.js?v= / styles.css?v= 等），
@@ -42,23 +42,40 @@ function extractVersionedAssets(html) {
   return out;
 }
 
-// 从 HTML 中提取 app.js 的版本号（?v=），作为“部署版本标识”；找不到返回 null
-function extractAppVersion(html) {
-  const m = /app\.js\?(?:[^"'&]*&)?v=([^"'&]+)/i.exec(html || "");
-  return m ? m[1] : null;
+// 各页面壳的主脚本（用作“部署版本标识”的版本号来源）：首页=app.js，广场=marketplace.js，后台=admin.js
+function mainScriptFor(pathname) {
+  if (pathname === "/marketplace.html") return "marketplace.js";
+  if (pathname === "/admin.html") return "admin.js";
+  return "app.js";
+}
+// 从 HTML 中提取“主脚本”的版本号（?v=）作为该页面的部署版本标识；找不到返回 null。
+// 这样应用广场 / 管理后台页面也能被 SW 正确识别版本变化（不再只认 app.js）。
+function extractMainVersion(html, pathname) {
+  const name = mainScriptFor(pathname).replace(/\./g, "\\.");
+  const m = new RegExp(name + "\\?(?:[^&\"'\\s>]*&)?v=([^&\"'\\s>]+)", "i").exec(html || "");
+  if (m) return m[1];
+  // 兜底：取页面中出现的第一个 ?v= 资源版本
+  const any = /[?&]v=([^"'\s>&]+)/.exec(html || "");
+  return any ? any[1] : null;
 }
 
-// 把最近一次成功拉取到的 HTML 版本号存入缓存元数据，供页面在“本端优先”返回旧缓存后主动查询，
-// 避免因 SW 通知早于页面监听而漏掉版本更新。
-async function saveHtmlVersion(cache, ver) {
-  try { await cache.put("sw-meta", new Response(JSON.stringify({ htmlVersion: ver }))); } catch (e) {}
+// sw-meta 存储“各页面壳最新版本”映射：{ "/": "156", "/marketplace.html": "10", "/admin.html": "5" }
+// 这样广场 / 后台页面各自维护独立版本，互不干扰（不再只有一个全局 htmlVersion）。
+async function saveHtmlVersion(cache, path, ver) {
+  try {
+    let map = {};
+    const m = await cache.match("sw-meta");
+    if (m) { try { map = (await m.json()) || {}; } catch (e) {} }
+    if (ver) map[path] = ver; else delete map[path];
+    await cache.put("sw-meta", new Response(JSON.stringify(map)));
+  } catch (e) {}
 }
-async function loadHtmlVersion(cache) {
+async function loadHtmlVersion(cache, path) {
   try {
     const m = await cache.match("sw-meta");
-    if (m) { const j = await m.json(); return j.htmlVersion || null; }
+    if (m) { const j = await m.json(); if (path) return (j && j[path]) || null; return j || {}; }
   } catch (e) {}
-  return null;
+  return path ? null : {};
 }
 
 self.addEventListener("activate", (event) => {
@@ -70,10 +87,10 @@ self.addEventListener("activate", (event) => {
     // 清理已不再被当前页面壳引用的旧 ?v= 资源，避免缓存无限增长
     await pruneStaleAssets(cache);
     await self.clients.claim();
-    // 通知已被控制的页面：新 SW 已生效，并附带当前已知的最新 HTML 版本（前端据此判定是否需提示更新）
-    const htmlVer = await loadHtmlVersion(cache);
+    // 通知已被控制的页面：新 SW 已生效，并附带各页面壳最新版本（前端据此判定是否需提示更新）
+    const verMap = await loadHtmlVersion(cache);
     const cls = await self.clients.matchAll({ includeUncontrolled: true });
-    for (const c of cls) c.postMessage({ type: "SW_READY", version: SW_SELF_VERSION, htmlVersion: htmlVer });
+    for (const c of cls) c.postMessage({ type: "SW_READY", version: SW_SELF_VERSION, htmlVersion: (verMap && verMap["/"]) || null, versions: verMap || {} });
   })());
 });
 
@@ -105,14 +122,15 @@ self.addEventListener("fetch", (event) => {
           if (isHtmlShell) {
             try {
               const freshHtml = await res.clone().text();
-              const freshVer = extractAppVersion(freshHtml);
+              const freshVer = extractMainVersion(freshHtml, pathname);
               if (freshVer) {
-                await saveHtmlVersion(cache, freshVer); // 记录最新服务端版本，供页面主动查询
+                await saveHtmlVersion(cache, pathname, freshVer); // 记录该页面壳最新版本，供页面主动查询
                 let servedVer = null;
-                if (cached) servedVer = extractAppVersion(await cached.clone().text());
+                if (cached) servedVer = extractMainVersion(await cached.clone().text(), pathname);
                 if (servedVer && servedVer !== freshVer) {
+                  // 带上 url，让“对应页面”而非所有页面弹出更新提示
                   const cls = await self.clients.matchAll({ includeUncontrolled: true });
-                  for (const c of cls) c.postMessage({ type: "SW_VERSION_UPDATE", version: freshVer });
+                  for (const c of cls) c.postMessage({ type: "SW_VERSION_UPDATE", url: pathname, version: freshVer });
                 }
               }
             } catch (e) { /* 解析/通知失败不影响返回 */ }
@@ -158,14 +176,16 @@ self.addEventListener("fetch", (event) => {
 self.addEventListener("message", (event) => {
   const data = (event && event.data) || {};
   if (data.type === "QUERY_HTML_VERSION") {
-    // 直接问服务端拿最新 HTML 版本（network-first，绕过本端缓存），彻底消除“本端优先返回旧缓存、
-    // 后台 revalidation 尚未完成”导致的竞态——无论 SW 当前缓存/后台更新是否就绪，页面都能拿到真实最新版本。
-    // 仅在服务端不可用 / 无版本时回退到缓存元数据（sw-meta）。
+    // 直接问服务端拿“发起查询的页面自身”的最新 HTML 版本（network-first，绕过本端缓存），
+    // 彻底消除“本端优先返回旧缓存、后台 revalidation 尚未完成”导致的竞态；广场 / 后台页面各自查各自。
+    // 仅在服务端不可用 / 无版本时回退到缓存元数据（sw-meta）中该页面的版本。
+    const url = data.url ? data.url : "/";
+    const full = url.startsWith("http") ? url : (self.location.origin + url);
     const reply = (v) => { if (event.source && v) event.source.postMessage({ type: "HTML_VERSION", version: v }); };
-    fetch(self.location.origin + "/", { cache: "no-store" })
+    fetch(full, { cache: "no-store" })
       .then((r) => (r && r.ok ? r.text() : Promise.reject()))
-      .then((html) => { const v = extractAppVersion(html); if (v) reply(v); else throw new Error("no-ver"); })
-      .catch(() => caches.open(CACHE).then(async (c) => reply(await loadHtmlVersion(c))));
+      .then((html) => { const v = extractMainVersion(html, new URL(full).pathname); if (v) reply(v); else throw new Error("no-ver"); })
+      .catch(() => caches.open(CACHE).then(async (c) => reply(await loadHtmlVersion(c, new URL(full).pathname))));
   }
 });
 
@@ -173,8 +193,9 @@ self.addEventListener("message", (event) => {
 async function pruneStaleAssets(cache) {
   const keys = await cache.keys();
   if (!keys.length) return;
-  // 同时参考首页与应用广场两个页面壳，避免误删任一页面引用的 ?v= 资源（如 marketplace.js?v=）
-  const shells = ["/", "/marketplace.html"];
+  // 同时参考首页、应用广场、管理后台三个页面壳，避免误删任一页面引用的 ?v= 资源
+  //（如 marketplace.js?v= 或 admin.js?v=；admin.html 若不在此列表，其 admin.js 会被误删）
+  const shells = ["/", "/marketplace.html", "/admin.html"];
   const valid = new Set();
   for (const s of shells) {
     const shell = await cache.match(s);

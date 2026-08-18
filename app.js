@@ -2971,7 +2971,7 @@
     const prefetchAdmin = () => {
       if (adminPrefetched) return;
       adminPrefetched = true;
-      ["admin.html", "admin.js?v=5"].forEach((href) => {
+      ["admin.html", "admin.js?v=6"].forEach((href) => {
         const link = document.createElement("link");
         link.rel = "prefetch";
         link.href = href;
@@ -3000,7 +3000,7 @@
     const prefetchMarket = () => {
       if (marketPrefetched) return;
       marketPrefetched = true;
-      ["marketplace.html", "marketplace.js?v=10"].forEach((href) => {
+      ["marketplace.html", "marketplace.js?v=11"].forEach((href) => {
         const link = document.createElement("link");
         link.rel = "prefetch";
         link.href = href;
@@ -6781,7 +6781,10 @@
     if (!("serviceWorker" in navigator)) return;
     navigator.serviceWorker.addEventListener("message", (event) => {
       const data = (event && event.data) || {};
-      if (data.type === "SW_VERSION_UPDATE" && data.version) handleServerVersion(data.version);
+      // SW_VERSION_UPDATE 现在带 url（仅对应页面应弹更新提示）；其余页面忽略，避免误报
+      if (data.type === "SW_VERSION_UPDATE" && data.version) {
+        if (!data.url || data.url === location.pathname) handleServerVersion(data.version);
+      }
       else if (data.type === "HTML_VERSION" && data.version) handleServerVersion(data.version);
       else if (data.type === "SW_READY" && data.htmlVersion) handleServerVersion(data.htmlVersion);
       // 来电通知的「接听 / 拒绝」按钮：由 SW notificationclick 回传，这里转交给通话模块
