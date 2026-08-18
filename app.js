@@ -2955,13 +2955,6 @@
       location.href = "marketplace.html";
     });
   }
-  // 应用广场入口：设置面板旧入口（保留以便从设置进入）
-  const enterMarketBtn = $("#enterMarketBtn");
-  if (enterMarketBtn) {
-    enterMarketBtn.addEventListener("click", () => {
-      location.href = "marketplace.html";
-    });
-  }
 
   // 清空本地缓存：保留登录、语言、主题等偏好，清除界面布局等本地缓存
   const clearCacheBtn = $("#clearCacheBtn");

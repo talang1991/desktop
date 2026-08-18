@@ -36,6 +36,10 @@
       });
     } catch { return String(s == null ? "" : s); }
   }
+  // 归一化 URL 用于「是否已保存」匹配：去首尾空白、去掉末尾斜杠、小写
+  function normUrl(u) {
+    return String(u == null ? "" : u).trim().replace(/\/+$/, "").toLowerCase();
+  }
 
   // ---------- API（带轻量重试；401/403 直接抛出并标记 status）----------
   async function api(path, opts = {}) {
@@ -120,7 +124,10 @@
     const reason = (mine && app.status === "rejected" && app.reject_reason)
       ? '<div class="mk-sub" style="color:#d23">拒绝原因：' + escapeHtml(app.reject_reason) + "</div>"
       : "";
-    const save = '<button class="mk-save" data-save="' + app.id + '">＋ 保存</button>';
+    const alreadySaved = myLinkUrls.has(normUrl(app.url));
+    const save = alreadySaved
+      ? '<button class="mk-save" data-save="' + app.id + '" disabled>✓ 已保存</button>'
+      : '<button class="mk-save" data-save="' + app.id + '">＋ 保存</button>';
     return (
       '<div class="mk-card">' +
         '<div class="mk-card-head">' +
@@ -147,6 +154,7 @@
   let currentUser = null;
   let view = "plaza";
   let appIndex = {}; // id -> app 元数据，供「保存到我的应用」读取 name/url/category
+  let myLinkUrls = new Set(); // 已保存到「我的应用」的归一化 URL 集合，用于卡片去重标记
 
   // 给当前渲染出的卡片绑定「保存到我的应用」按钮
   function bindSaveButtons(grid) {
@@ -176,6 +184,7 @@
         }),
       });
       toast("已保存到「我的应用」");
+      myLinkUrls.add(normUrl(app.url));
       if (btn) { btn.textContent = "✓ 已保存"; }
     } catch (e) {
       if (btn) btn.disabled = false;
@@ -308,6 +317,11 @@
           who.querySelector("b").textContent = me.user.username;
         }
       } catch { /* 非致命：广场本身可匿名浏览 */ }
+      // 拉取「我的应用」列表，标记广场中已保存的应用（避免重复保存）
+      try {
+        const linksRes = await api("/api/links");
+        (linksRes.links || []).forEach((l) => myLinkUrls.add(normUrl(l.url)));
+      } catch { /* 非致命 */ }
     }
     // 事件绑定
     document.querySelectorAll(".mk-tab").forEach((b) => {
