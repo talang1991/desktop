@@ -362,8 +362,14 @@
   function hydrateFromSSR() {
     const script = document.getElementById("ssrPlazaData");
     if (!script) return false;
-    let apps = [];
-    try { apps = JSON.parse(script.textContent || "[]"); } catch { return false; }
+    let data;
+    try { data = JSON.parse(script.textContent || "{}"); } catch { return false; }
+    // 兼容旧结构：部分缓存可能仍是裸数组；新结构为 { apps, savedUrls }
+    const apps = Array.isArray(data) ? data : (data.apps || []);
+    // 优先使用 SSR 注入的 savedUrls 填充「已保存」集合（首屏无需再请求 /api/links）
+    if (data && Array.isArray(data.savedUrls)) {
+      data.savedUrls.forEach((u) => myLinkUrls.add(normUrl(u)));
+    }
     script.remove();
     appIndex = {};
     const grid = document.getElementById("mkGrid");

@@ -124,9 +124,9 @@ async function writeWeb(res: ServerResponse, response: Response): Promise<void> 
 // 失败（网络错误 / 404 / 非图片）返回 4xx/5xx，SW 层据此不写缓存，下次仍会重新探测。
 // 应用广场页面：对「广场」tab 做首屏服务端渲染（SSR）。数据库可用时直接注入已上架卡片，
 // 数据库不可用时回退为原始模板（前端自行 loadPlaza 兜底）。
-async function serveMarketplace(_req: Request): Promise<Response> {
+async function serveMarketplace(req: Request): Promise<Response> {
   try {
-    const html = await renderMarketplaceHtml();
+    const html = await renderMarketplaceHtml(req);
     return new Response(html, {
       status: 200,
       headers: {

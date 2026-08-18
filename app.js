@@ -4,6 +4,23 @@
 
   const THEME_KEY = "web-app-launcher:theme";
   const TOKEN_KEY = "web-app-launcher:token";
+  // 与 localStorage 中的 token 保持同步的 Cookie 名：用于应用广场首屏（SSR）判断登录用户，
+  // 使服务端直接渲染「是否已保存」状态。HttpOnly 由服务端在需要时设置；此处为前端写入，
+  // 故仅作同源携带用途（SameSite=Lax；https 环境下追加 Secure）。
+  const TOKEN_COOKIE = "wal_token";
+  // 把 localStorage 中的 token 同步到 Cookie（或清除）；供 SSR 首屏携带。
+  function syncTokenCookie() {
+    const tk = localStorage.getItem(TOKEN_KEY);
+    const secure = location.protocol === "https:" ? "; Secure" : "";
+    if (tk) {
+      document.cookie =
+        TOKEN_COOKIE + "=" + encodeURIComponent(tk) +
+        "; Path=/; Max-Age=2592000; SameSite=Lax" + secure;
+    } else {
+      document.cookie =
+        TOKEN_COOKIE + "=; Path=/; Max-Age=0; SameSite=Lax" + secure;
+    }
+  }
   // 当前设备类型，登录时上报给服务端用于「登录设备」管理面板展示
   const DEVICE_TYPE = /iPad|Tablet/i.test(navigator.userAgent)
     ? "tablet"
@@ -337,6 +354,8 @@
       showAuth();
       return;
     }
+    // 本端已有登录态：确保 cookie 同步（供应用广场 SSR 首屏判断用户）
+    syncTokenCookie();
     // 本端存在登录态：先展示转圈等待服务端校验，并隐藏账号/密码输入框
     if ($("#appView")) $("#appView").hidden = true;
     if ($("#authView")) $("#authView").hidden = false;
@@ -2207,6 +2226,7 @@
         }),
       });
       localStorage.setItem(TOKEN_KEY, data.token);
+      syncTokenCookie();
       $("#loginForm").reset();
       await enterApp(data.user);
     } catch (err) {
@@ -2230,6 +2250,7 @@
         }),
       });
       localStorage.setItem(TOKEN_KEY, data.token);
+      syncTokenCookie();
       $("#registerForm").reset();
       await enterApp(data.user);
     } catch (err) {
@@ -2258,6 +2279,7 @@
     disconnectSignaling();
     try { await api("/api/logout", { method: "POST" }); } catch {}
     localStorage.removeItem(TOKEN_KEY);
+    syncTokenCookie();
     if (typeof closeSettings === "function") closeSettings();
     showAuth();
   }
