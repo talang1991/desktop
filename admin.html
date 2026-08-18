@@ -45,6 +45,33 @@
     .mk-status.pending { color: #b7791f; background: rgba(183,121,31,.12); }
     .mk-status.approved { color: #1a7f37; background: rgba(26,127,55,.12); }
     .mk-status.rejected { color: #d23; background: rgba(221,34,51,.12); }
+
+    /* 应用详情弹窗 */
+    .padmin-modal {
+      position: fixed; inset: 0; background: rgba(0,0,0,.45);
+      display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 200;
+    }
+    .padmin-modal[hidden] { display: none; }
+    .padmin-modal-card {
+      width: 100%; max-width: 480px; max-height: 90vh; overflow: auto;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 16px; padding: 18px;
+    }
+    .padmin-modal-head { display: flex; align-items: center; font-weight: 600; font-size: 16px; margin-bottom: 12px; }
+    .padmin-modal-head button { margin-left: auto; border: none; background: none; color: var(--text-2); font-size: 18px; cursor: pointer; }
+    .detail-head { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+    .detail-icon {
+      width: 48px; height: 48px; border-radius: 12px; overflow: hidden; flex: 0 0 auto;
+      background: var(--bg); display: flex; align-items: center; justify-content: center;
+      font-weight: 700; color: var(--primary); font-size: 18px;
+    }
+    .detail-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .detail-name { font-weight: 600; font-size: 16px; }
+    .detail-url { font-size: 13px; color: var(--primary); word-break: break-all; }
+    .detail-row { display: flex; gap: 12px; padding: 9px 0; border-top: 1px solid var(--border); font-size: 14px; }
+    .detail-label { color: var(--text-2); flex: 0 0 108px; }
+    .detail-val { flex: 1; word-break: break-all; }
+    .detail-desc { line-height: 1.5; white-space: pre-wrap; }
+    .padmin-modal-foot { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
   </style>
 </head>
 <body>
@@ -95,6 +122,15 @@
     </div>
   </div>
 
-  <script src="admin.js?v=3"></script>
+  <!-- 应用详情弹窗 -->
+  <div id="appDetailModal" class="padmin-modal" hidden>
+    <div class="padmin-modal-card">
+      <div class="padmin-modal-head">应用详情 <button id="appDetailClose" title="关闭">✕</button></div>
+      <div id="appDetailBody"></div>
+      <div class="padmin-modal-foot" id="appDetailActions"></div>
+    </div>
+  </div>
+
+  <script src="admin.js?v=4"></script>
 </body>
 </html>

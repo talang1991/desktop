@@ -38,6 +38,14 @@
       });
     } catch { return String(s == null ? "" : s); }
   }
+  function appIconHtml(app) {
+    const src = (app.icon && isIconUrl(app.icon))
+      ? app.icon
+      : "/favicon-proxy?url=" + encodeURIComponent(String(app.url || ""));
+    const letter = escapeHtml((app.name || "?").charAt(0).toUpperCase());
+    return '<img src="' + escapeHtml(src) + '" alt="" draggable="false" ' +
+      "onerror=\"this.style.display='none';this.parentNode.textContent='" + letter + "'\"/>";
+  }
 
   // ---------- API（带轻量重试；401/403 直接抛出并标记 status）----------
   async function api(path, opts = {}) {
@@ -87,6 +95,7 @@
 
   // ---------- 状态 ----------
   let currentUser = null;
+  let appIndex = {}; // id -> 应用，供「详情」弹窗读取完整字段
 
   // ---------- 渲染 ----------
   function renderNotice(html) {
@@ -189,6 +198,8 @@
   function renderApps(apps) {
     const tb = document.getElementById("adminAppRows");
     if (!tb) return;
+    appIndex = {};
+    apps.forEach((a) => { appIndex[a.id] = a; });
     const pending = apps.filter((a) => a.status === "pending").length;
     const pc = document.getElementById("pendingCount");
     if (pc) pc.textContent = pending ? ("（待审核 " + pending + "）") : "";
@@ -214,10 +225,10 @@
       statusTd.innerHTML = '<span class="mk-status ' + escapeHtml(a.status) + '">' +
         (stMap[a.status] || a.status) + "</span>";
       const actTd = document.createElement("td");
-      let html = "";
+      let html = '<button class="btn ghost small app-detail" data-id="' + a.id + '">详情</button> ';
       if (a.status !== "approved") html += '<button class="btn ghost small app-approve" data-id="' + a.id + '">通过</button> ';
       if (a.status !== "rejected") html += '<button class="btn ghost small app-reject" data-id="' + a.id + '">拒绝</button>';
-      actTd.innerHTML = html || '<span class="admin-self">—</span>';
+      actTd.innerHTML = html;
       tr.appendChild(nameTd);
       tr.appendChild(userTd);
       tr.appendChild(chinaTd);
@@ -226,36 +237,85 @@
       tr.appendChild(actTd);
       tb.appendChild(tr);
     }
+    tb.querySelectorAll(".app-detail").forEach((btn) => {
+      btn.addEventListener("click", () => openAppDetail(Number(btn.getAttribute("data-id"))));
+    });
     tb.querySelectorAll(".app-approve").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const id = Number(btn.getAttribute("data-id"));
-        btn.disabled = true;
-        try {
-          await api("/api/admin/apps/" + id + "/approve", { method: "POST" });
-          toast("已通过并上架");
-          await loadData();
-        } catch (e) {
-          btn.disabled = false;
-          toast((e && e.message) || "操作失败", "err");
-        }
-      });
+      btn.addEventListener("click", () => approveApp(Number(btn.getAttribute("data-id")), btn));
     });
     tb.querySelectorAll(".app-reject").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const id = Number(btn.getAttribute("data-id"));
-        const reason = prompt("拒绝原因（可选）：");
-        if (reason === null) return; // 用户取消
-        btn.disabled = true;
-        try {
-          await api("/api/admin/apps/" + id + "/reject", { method: "POST", body: JSON.stringify({ reason }) });
-          toast("已拒绝");
-          await loadData();
-        } catch (e) {
-          btn.disabled = false;
-          toast((e && e.message) || "操作失败", "err");
-        }
-      });
+      btn.addEventListener("click", () => rejectApp(Number(btn.getAttribute("data-id")), btn));
     });
+  }
+
+  // ---------- 审核操作（行内与详情弹窗共用）----------
+  async function approveApp(id, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      await api("/api/admin/apps/" + id + "/approve", { method: "POST" });
+      toast("已通过并上架");
+      closeAppDetail();
+      await loadData();
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      toast((e && e.message) || "操作失败", "err");
+    }
+  }
+  async function rejectApp(id, btn) {
+    const reason = prompt("拒绝原因（可选）：");
+    if (reason === null) { if (btn) btn.disabled = false; return; } // 用户取消
+    if (btn) btn.disabled = true;
+    try {
+      await api("/api/admin/apps/" + id + "/reject", { method: "POST", body: JSON.stringify({ reason }) });
+      toast("已拒绝");
+      closeAppDetail();
+      await loadData();
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      toast((e && e.message) || "操作失败", "err");
+    }
+  }
+
+  // ---------- 应用详情弹窗 ----------
+  function openAppDetail(id) {
+    const a = appIndex[id];
+    if (!a) return;
+    const stMap = { pending: "待审核", approved: "已上架", rejected: "已拒绝" };
+    const row = (label, val) =>
+      '<div class="detail-row"><div class="detail-label">' + label + "</div><div class=\"detail-val\">" + val + "</div></div>";
+    const body = document.getElementById("appDetailBody");
+    body.innerHTML =
+      '<div class="detail-head">' +
+        '<div class="detail-icon">' + appIconHtml(a) + "</div>" +
+        "<div>" +
+          '<div class="detail-name">' + escapeHtml(a.name) + "</div>" +
+          '<a class="detail-url" href="' + escapeHtml(a.url) + '" target="_blank" rel="noopener">' + escapeHtml(a.url) + "</a>" +
+        "</div>" +
+      "</div>" +
+      row("提交者", escapeHtml(a.username || "未知")) +
+      row("分类", escapeHtml(a.category || "—")) +
+      row("支持中国境内访问", a.supports_china ? "是" : "否") +
+      row("支持 PWA", a.supports_pwa ? "是" : "否") +
+      row("状态", '<span class="mk-status ' + escapeHtml(a.status) + '">' + (stMap[a.status] || a.status) + "</span>") +
+      row("创建时间", escapeHtml(fmtDate(a.created_at))) +
+      (a.description ? row("简介", '<div class="detail-desc">' + escapeHtml(a.description) + "</div>") : "") +
+      ((a.status === "rejected" && a.reject_reason)
+        ? row("拒绝原因", '<div class="detail-desc" style="color:#d23">' + escapeHtml(a.reject_reason) + "</div>")
+        : "");
+    const actions = document.getElementById("appDetailActions");
+    let ah = "";
+    if (a.status !== "approved") ah += '<button class="btn ghost small d-approve">通过</button> ';
+    if (a.status !== "rejected") ah += '<button class="btn ghost small d-reject">拒绝</button>';
+    actions.innerHTML = ah || '<span class="admin-self">已结束审核</span>';
+    const da = actions.querySelector(".d-approve");
+    if (da) da.addEventListener("click", () => approveApp(a.id, da));
+    const dr = actions.querySelector(".d-reject");
+    if (dr) dr.addEventListener("click", () => rejectApp(a.id, dr));
+    document.getElementById("appDetailModal").hidden = false;
+  }
+  function closeAppDetail() {
+    const m = document.getElementById("appDetailModal");
+    if (m) m.hidden = true;
   }
 
   async function init() {
@@ -281,6 +341,18 @@
         renderNotice("加载失败：" + ((e && e.message) || "未知错误"));
       }
     }
+    // 详情弹窗：关闭按钮 / 点遮罩 / Esc
+    const detailClose = document.getElementById("appDetailClose");
+    if (detailClose) detailClose.addEventListener("click", closeAppDetail);
+    const detailModal = document.getElementById("appDetailModal");
+    if (detailModal) {
+      detailModal.addEventListener("click", (e) => {
+        if (e.target.id === "appDetailModal") closeAppDetail();
+      });
+    }
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && detailModal && !detailModal.hidden) closeAppDetail();
+    });
   }
 
   if (document.readyState === "loading") {
