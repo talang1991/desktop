@@ -13,6 +13,7 @@ import { handleApi } from "./api.ts";
 import { initStore } from "./store.ts";
 import { attachSignaling, getWsPublicUrl } from "./signaling.ts";
 import { initChatStore } from "./chatstore.ts";
+import { renderMarketplaceHtml } from "./marketplace_ssr.ts";
 
 // 初始化 PostgreSQL 持久层：连接连接池并自动建表（幂等）。
 // 若数据库暂不可用，服务器仍会启动并提供静态页面与聊天；认证/链接接口会返回 503，连接恢复后自动重试。
@@ -121,6 +122,25 @@ async function writeWeb(res: ServerResponse, response: Response): Promise<void> 
 // 同源 favicon 代理：前端所有网站图标统一经此路径走 Service Worker「缓存优先」策略。
 // 由服务端 fetch 目标站 /favicon.ico（规避跨域 CORS 与污染问题），仅 2xx 且为图片时返回字节并设置缓存头；
 // 失败（网络错误 / 404 / 非图片）返回 4xx/5xx，SW 层据此不写缓存，下次仍会重新探测。
+// 应用广场页面：对「广场」tab 做首屏服务端渲染（SSR）。数据库可用时直接注入已上架卡片，
+// 数据库不可用时回退为原始模板（前端自行 loadPlaza 兜底）。
+async function serveMarketplace(_req: Request): Promise<Response> {
+  try {
+    const html = await renderMarketplaceHtml();
+    return new Response(html, {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-cache",
+        "pragma": "no-cache",
+      },
+    });
+  } catch (e) {
+    console.error("[marketplace SSR] 渲染失败：", (e as Error).message);
+    return new Response("500 Server Error", { status: 500 });
+  }
+}
+
 async function serveFaviconProxy(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const target = url.searchParams.get("url");
@@ -168,6 +188,7 @@ const server = createServer(async (req, res) => {
     let webRes: Response;
     if (url.pathname === "/favicon-proxy") webRes = await serveFaviconProxy(webReq);
     else if (url.pathname.startsWith("/api/")) webRes = await handleApi(webReq);
+    else if (url.pathname === "/marketplace.html") webRes = await serveMarketplace(webReq);
     else webRes = await serveStatic(webReq);
     await writeWeb(res, webRes);
   } catch (e) {

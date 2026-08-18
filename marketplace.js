@@ -356,6 +356,28 @@
     }
   }
 
+  // 首屏水合（hydration）：若服务端已渲染了广场卡片（携带 #ssrPlazaData 数据），
+  // 直接用该数据渲染卡片并绑定「保存」按钮，跳过首屏 fetch，避免回退到「加载中」闪烁。
+  // 返回 true 表示已水合（无需再 loadPlaza），false 表示需客户端自行加载。
+  function hydrateFromSSR() {
+    const script = document.getElementById("ssrPlazaData");
+    if (!script) return false;
+    let apps = [];
+    try { apps = JSON.parse(script.textContent || "[]"); } catch { return false; }
+    script.remove();
+    appIndex = {};
+    const grid = document.getElementById("mkGrid");
+    if (!grid) return false;
+    if (!apps.length) {
+      grid.innerHTML = '<div class="mk-empty">暂无已上架的应用。成为第一个发布者吧！</div>';
+      return true;
+    }
+    apps.forEach((a) => { appIndex[a.id] = a; });
+    grid.innerHTML = apps.map((a) => cardHtml(a, false)).join("");
+    bindSaveButtons(grid);
+    return true;
+  }
+
   async function init() {
     const tk = localStorage.getItem(TOKEN_KEY);
     if (tk) {
@@ -389,7 +411,10 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && !document.getElementById("publishModal").hidden) closePublish();
     });
-    await loadPlaza();
+    // 首屏优先用服务端渲染的数据水合；否则客户端拉取（含筛选/切换 tab 时也会走 loadPlaza）
+    if (!hydrateFromSSR()) {
+      await loadPlaza();
+    }
   }
 
   if (document.readyState === "loading") {
