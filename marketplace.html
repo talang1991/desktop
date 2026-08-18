@@ -6,6 +6,8 @@
   <title>应用广场 · Web 应用导航面板</title>
   <link rel="stylesheet" href="styles.css?v=89" />
   <link rel="manifest" href="manifest.webmanifest" />
+  <!-- 预加载首屏关键脚本：与底部 <script> 同源同版本，浏览器复用同一请求，提升打开速度 -->
+  <link rel="preload" href="marketplace.js?v=8" as="script" />
   <script>
     // 避免主题闪烁：在渲染前应用已保存的主题
     try {

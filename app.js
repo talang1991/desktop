@@ -2973,7 +2973,25 @@
   // 应用广场入口：顶栏「应用广场」按钮（所有登录用户可见）
   const marketBtn = $("#marketBtn");
   if (marketBtn) {
+    // 预加载：鼠标悬停 / 键盘聚焦 / 触摸开始 时提前拉取广场页面与脚本，点击瞬间近乎秒开。
+    // 注意：marketplace.js 的版本号需与 marketplace.html 底部 <script> 的 ?v= 保持一致。
+    let marketPrefetched = false;
+    const prefetchMarket = () => {
+      if (marketPrefetched) return;
+      marketPrefetched = true;
+      ["marketplace.html", "marketplace.js?v=8"].forEach((href) => {
+        const link = document.createElement("link");
+        link.rel = "prefetch";
+        link.href = href;
+        if (href.endsWith(".js")) link.as = "script";
+        document.head.appendChild(link);
+      });
+    };
+    marketBtn.addEventListener("mouseenter", prefetchMarket);
+    marketBtn.addEventListener("focus", prefetchMarket);
+    marketBtn.addEventListener("pointerdown", prefetchMarket);
     marketBtn.addEventListener("click", () => {
+      prefetchMarket();
       location.href = "marketplace.html";
     });
   }

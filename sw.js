@@ -4,14 +4,14 @@
 // 注册地址固定为 /sw.js（不加 ?v=），由浏览器按字节差异自动检测更新。
 const CACHE = "static-v1";
 // SW 自身版本标记（仅用于前端探测“新 SW 是否已生效”，与页面部署版本无关）
-const SW_SELF_VERSION = 3;
+const SW_SELF_VERSION = 4;
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
-    // 预缓存页面壳，作为离线兜底；失败不阻塞安装
-    await cache.addAll(["/"]).catch(() => {});
-    // 记录安装时页面壳的版本号，供页面后续主动查询
+    // 预缓存页面壳（首页 + 应用广场），作为离线兜底；失败不阻塞安装
+    await cache.addAll(["/", "/marketplace.html"]).catch(() => {});
+    // 记录安装时首页页面壳的版本号，供页面后续主动查询
     try {
       const shell = await cache.match("/");
       if (shell) {
@@ -19,15 +19,15 @@ self.addEventListener("install", (event) => {
         if (v) await saveHtmlVersion(cache, v);
       }
     } catch (e) {}
-    // 顺带预缓存页面壳中引用的带版本号静态资源（app.js?v= / styles.css?v=），
-    // 这样第二次加载起（页面已被 SW 控制）即可走 SW 缓存，离线也能打开应用
+    // 预缓存页面壳中引用的带版本号静态资源（app.js?v= / marketplace.js?v= / styles.css?v= 等），
+    // 这样 SW 控制后即使从未访问过广场，也能走本地缓存（离线也可打开）
     try {
-      const shell = await cache.match("/");
-      if (shell) {
-        const html = await shell.text();
-        const urls = extractVersionedAssets(html);
-        if (urls.length) await cache.addAll(urls).catch(() => {});
+      const assets = new Set();
+      for (const path of ["/", "/marketplace.html"]) {
+        const shell = await cache.match(path);
+        if (shell) extractVersionedAssets(await shell.text()).forEach((u) => assets.add(u));
       }
+      if (assets.size) await cache.addAll([...assets]).catch(() => {});
     } catch (e) { /* 预缓存失败不影响安装 */ }
     await self.skipWaiting();
   })());
@@ -173,13 +173,17 @@ self.addEventListener("message", (event) => {
 async function pruneStaleAssets(cache) {
   const keys = await cache.keys();
   if (!keys.length) return;
-  const shell = await cache.match("/");
+  // 同时参考首页与应用广场两个页面壳，避免误删任一页面引用的 ?v= 资源（如 marketplace.js?v=）
+  const shells = ["/", "/marketplace.html"];
   const valid = new Set();
-  if (shell) {
-    const html = await shell.text();
-    const re = /[?&]v=([^"'&]+)/g;
-    let m;
-    while ((m = re.exec(html))) valid.add(m[1]);
+  for (const s of shells) {
+    const shell = await cache.match(s);
+    if (shell) {
+      const html = await shell.text();
+      const re = /[?&]v=([^"'&]+)/g;
+      let m;
+      while ((m = re.exec(html))) valid.add(m[1]);
+    }
   }
   if (!valid.size) return; // 无壳可参考时不删，避免误清
   await Promise.all(keys.map(async (req) => {
