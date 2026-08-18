@@ -2813,6 +2813,10 @@
   let relayActive = false;       // 中继兜底开关（全局：只要任一好友可走中继即为 true）
   let enteringMsg = null;
   let renderedIds = new Set();   // 当前会话已渲染的消息 id，避免同步时重复渲染
+  // 实时私聊未读去重：按「标签页内存」记录已处理过的消息 id，跨标签不共享。
+  // 不能用共享的 IndexedDB.has() 判断——多个首页标签共用同一 IndexedDB，先处理到消息的标签
+  // 写入后，其余标签的 ChatDB.has 返回 true 而误跳过未读 +1，表现为「只有一个首页收到新消息」。
+  let rtUnreadDedup = new Set();
   let friends = [];              // [{id, username, online}]
   let friendRequests = [];       // [{id, userId, username}]
   let presenceFriends = new Set();
@@ -5820,7 +5824,11 @@
   async function onChatReceived(m) {
     // 先于落库判断本条消息是否已存在：当消息经 DataChannel + 服务端中继双通道到达时，
     // 仅首次（existed=false）计入未读，避免未读红点被重复 +1。
-    const existed = await ChatDB.has(m.id).catch(() => false);
+    // 注意：去重基于「标签页内存集合」rtUnreadDedup，而非共享的 IndexedDB.has()——
+    // 多首页标签共用同一 IndexedDB，若用 has() 会因其它标签先写库而误判“已存在”，
+    // 导致其它标签漏计未读（仅一个首页弹红点）。见 rtUnreadDedup 定义处注释。
+    const existed = rtUnreadDedup.has(m.id);
+    rtUnreadDedup.add(m.id);
     m.synced = false;
     await ChatDB.put(m).catch(() => {});
     flushPending();
