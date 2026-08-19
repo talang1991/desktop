@@ -4024,7 +4024,6 @@
       setChatStatus("", "warn", { key: "chat.status.connectingName", params: { name } });
       enteringMsg = addChatMessage("system", `正在连接 ${name} …`);
     }
-    enableRelay(to);
     if (!mediaType && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "call", to, connId }));
     }
@@ -4044,7 +4043,7 @@
       // 仍确保该好友 pc 就绪（应答方），便于后续协商媒体轨道
       const p = ensurePeerConn(key);
       if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); p.mediaAdded = false; p.connId = connId || null; }
-      enableRelay(from);
+      enableChatInput();
       return;
     }
     const p = ensurePeerConn(key);
@@ -4062,7 +4061,7 @@
         clearEntering();
       }
     }
-    enableRelay(from);
+    enableChatInput();
   }
 
   function endCurrent() {
@@ -4147,7 +4146,7 @@
         setPeerStatus(id, "直连失败，改用中继", "warn");
         enableRelay(id);
       } else if (p.pc.connectionState === "connected") {
-        setPeerStatus(id, "P2P 已直连 🔗", "ok");
+        refreshConnRelayStatus(p);
       }
     };
     // 接收远端音视频轨道
@@ -4309,7 +4308,7 @@
     ch.onopen = () => {
       if (p) p.p2pReady = true;
       clearEntering();
-      setPeerStatus(id, "P2P 已直连 🔗", "ok");
+      refreshConnRelayStatus(p);
       enableChatInput();
     };
     ch.onmessage = (e) => {
@@ -4335,6 +4334,35 @@
       sigSocket.send(JSON.stringify({ type: "signal", toDeviceId: deviceId, data }));
     } else {
       sigSocket.send(JSON.stringify({ type: "signal", to: Number(to), data }));
+    }
+  }
+
+  // 检测当前连接是否实际走 TURN 中继（而非直连），并据此刷新状态提示。
+  // 用 getStats 读取被采纳(nominated)且已成功(succeeded)的候选对：若本地或远端
+  // 候选任一方 candidateType==="relay"，即为中继；否则为直连(host/srflx)。
+  // 修复：原先只要 connectionState==="connected" 就显示“P2P 已直连”，会把 TURN
+  // 中继成功的连接误标成直连；且 startCall 每次都先 enableRelay 闪烁“中继”再被覆盖，
+  // 导致提示不稳定、要点几次才出现。
+  async function refreshConnRelayStatus(p) {
+    const id = p.pc && p.pc._peerId;
+    if (!p || !p.pc || p.pc.connectionState !== "connected") return;
+    let relay = false;
+    try {
+      const stats = await p.pc.getStats();
+      stats.forEach((report) => {
+        if (report.type === "candidate-pair" && report.nominated && report.state === "succeeded") {
+          const local = report.localCandidateId ? stats.get(report.localCandidateId) : null;
+          const remote = report.remoteCandidateId ? stats.get(report.remoteCandidateId) : null;
+          if ((local && local.candidateType === "relay") || (remote && remote.candidateType === "relay")) relay = true;
+        }
+      });
+    } catch (e) { /* 取不到统计时保守按直连提示，不影响可用性 */ }
+    p.isRelay = relay;
+    if (relay) {
+      relayActive = true;
+      setPeerStatus(id, "中继模式（服务器转发）", "warn");
+    } else {
+      setPeerStatus(id, "P2P 已直连 🔗", "ok");
     }
   }
 
