@@ -1,0 +1,26 @@
+# coturn TURN 中继服务
+# 用法：
+#   1. 把证书放到 ./certs/fullchain.pem 与 ./certs/privkey.pem
+#   2. 修改 ./coturn.conf 里的 external-ip / realm / user 密码
+#   3. docker compose up -d
+# 说明：使用 host 网络模式，避免 docker 二次 NAT，external-ip 直接等于本机公网 IP。
+#       防火墙需放行：3478/udp、3478/tcp、5349/tcp、5349/udp
+services:
+  coturn:
+    image: coturn/coturn:latest
+    container_name: wal-coturn
+    restart: unless-stopped
+    network_mode: "host"
+    volumes:
+      - ./coturn.conf:/etc/coturn/turnserver.conf:ro
+      - ./certs:/etc/coturn/certs:ro
+      - coturn-data:/var/lib/coturn
+    # 若改用 bridge 模式（去掉 network_mode），则取消注释 ports 映射：
+    # ports:
+    #   - "3478:3478/udp"
+    #   - "3478:3478/tcp"
+    #   - "5349:5349/tcp"
+    #   - "5349:5349/udp"
+
+volumes:
+  coturn-data:
