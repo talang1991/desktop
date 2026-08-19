@@ -3346,7 +3346,7 @@
         break;
       case "call-offline":
         if (currentPeer === m.to) {
-          setChatStatus("对方不在线（可发送离线消息）", "warn");
+          setChatStatus("", "warn", { key: "chat.status.offline" });
           clearEntering();
           // 离线也允许输入：消息会存到服务端 KV，对方上线后可收取
         }
@@ -3831,7 +3831,12 @@
     } else if (p && p.pc && p.pc.connectionState === "connecting") {
       setChatStatus("正在连接…", "warn");
     } else {
-      setChatStatus(f.online ? "在线" : "离线", f.online ? "ok" : "");
+      // 对方不在线时用更友好的"对方不在线（可发送离线消息）",避免顶栏像"我自己离线"了,
+      // 与 chat.status.offline i18n key 保持一致(完整含义:i18n key 已在 1758 行定义)。
+      setChatStatus(
+        f.online ? t("chat.status.online") : t("chat.status.offline"),
+        f.online ? "ok" : "warn",
+      );
     }
     enableChatInput();
     renderFriends();
