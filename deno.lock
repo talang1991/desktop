@@ -6,6 +6,7 @@
     "npm:pg@8.13.1": "8.13.1",
     "npm:postgres@3.4.5": "3.4.5",
     "npm:puppeteer-core@^23.11.1": "23.11.1",
+    "npm:terser@5.36.0": "5.36.0",
     "npm:ws@8.18.0": "8.18.0"
   },
   "npm": {
@@ -877,8 +878,8 @@
       ],
       "tarball": "https://mirrors.cloud.tencent.com/npm/teex/-/teex-1.0.1.tgz"
     },
-    "terser@5.46.1": {
-      "integrity": "sha512-vzCjQO/rgUuK9sf8VJZvjqiqiHFaZLnOiimmUuOKODxWL8mm/xua7viT7aqX7dgPY60otQjUotzFMmCB4VdmqQ==",
+    "terser@5.36.0": {
+      "integrity": "sha512-IYV9eNMuFAV4THUspIRXkLakHnV6XO7FEdtKjf/mDyrnqUg9LnlOn6/RwRvM9SZjR4GUq8Nk8zj67FzVARr74w==",
       "dependencies": [
         "@jridgewell/source-map",
         "acorn",
@@ -886,7 +887,7 @@
         "source-map-support"
       ],
       "bin": true,
-      "tarball": "https://mirrors.cloud.tencent.com/npm/terser/-/terser-5.46.1.tgz"
+      "tarball": "https://mirrors.cloud.tencent.com/npm/terser/-/terser-5.36.0.tgz"
     },
     "text-decoder@1.2.7": {
       "integrity": "sha512-vlLytXkeP4xvEq2otHeJfSQIRyWxo/oZGEbXrtEEF9Hnmrdly59sUbzZ/QgyWuLYHctCHxFF4tRQZNQ9k60ExQ==",

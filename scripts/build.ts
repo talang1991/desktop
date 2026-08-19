@@ -21,6 +21,8 @@
  * 产物:dist/ 即部署目录(Entry Point 仍为 server.ts,代码无需改动)。
  */
 
+import { minify as terserMinify } from "npm:terser@5.36.0";
+
 const ROOT = ".";
 const OUT = "dist";
 
@@ -63,39 +65,25 @@ const SKIP = new Set([
 const enc = new TextEncoder();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 字节级 minifier(纯 Deno 实现,无第三方依赖)
+// 字节级 minifier
 //
-// 设计思路:先把字符串字面量从源码中"挖出来"放到 slots[],源码里替换成占位符,
-// 在没有字符串的源码里再做注释删除和空白折叠——这样字符串里的字符不会被
-// 误处理,又保证结果语法正确。
+// JS: 用 terser(纯 JavaScript 实现,无 native binary、无 postinstall 下载平台
+//     二进制,Deno Deploy 的 build runner 沙箱里能稳定跑通)。压缩质量(变量名
+//     混淆、死代码删除、常量折叠、去注释)与 esbuild 同级,且它用真正的 JS
+//     parser,对正则 / 字符串 / 模板字面量的处理 100% 安全。
+// CSS / HTML: 纯 Deno regex 压缩已足够(CSS 压缩收益小,CDN 会再 gzip/brotli)。
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** 匹配 JS 字符串字面量:双引号 / 单引号 / 模板字符串,内部允许转义符。 */
-const JS_STRING_RE = /(["'`])(?:\\.|(?!\1)[^\\])*\1/g;
-
-function minifyJs(src: string): string {
-  // 1) 把字符串字面量挖出来用占位符代替
-  const slots: string[] = [];
-  const masked = src.replace(JS_STRING_RE, (m) => {
-    slots.push(m);
-    return `\u0000S${slots.length - 1}\u0000`;
+async function minifyJs(src: string): Promise<Uint8Array> {
+  const r = await terserMinify(src, {
+    compress: { passes: 2 },
+    mangle: true,
+    format: { comments: false },
+    module: false,
+    sourceMap: false,
   });
-
-  // 2) 在无字符串区段去除注释、折叠空白
-  let cleaned = masked
-    .replace(/\/\*[\s\S]*?\*\//g, "") // /* 块注释 */
-    .replace(/(^|[^:'"`\\])\/\/[^\n]*/g, "$1") // 行注释(URL "https://" 内的 :// 保留)
-    .replace(/[ \t]+/g, " ")
-    .replace(/\s*\n\s*/g, "\n")
-    .replace(/\n{2,}/g, "\n")
-    .trim();
-
-  // 3) 还原字符串
-  cleaned = cleaned.replace(
-    /\u0000S(\d+)\u0000/g,
-    (_m, i) => slots[Number(i)],
-  );
-  return cleaned;
+  if (r.error) throw new Error("terser 压缩失败: " + JSON.stringify(r.error));
+  return enc.encode(r.code ?? "");
 }
 
 function minifyCss(src: string): string {
@@ -202,7 +190,7 @@ async function main() {
   for (const f of JS_FILES) {
     const before = (await Deno.stat(`${ROOT}/${f}`)).size;
     const raw = await Deno.readTextFile(`${ROOT}/${f}`);
-    const min = enc.encode(minifyJs(raw));
+    const min = await minifyJs(raw);
     await Deno.writeFile(`${OUT}/${f}`, min);
     versionMap[f] = await sha256short(min);
     report.push(`JS  ${f.padEnd(18)} ${kb(before)} -> ${kb(min.length)}`);

@@ -1,8 +1,9 @@
 {
   "tasks": {
-    "build": "deno run --allow-read --allow-write scripts/build.ts",
+    "build": "deno run --allow-read --allow-write --allow-net --allow-scripts=npm:terser scripts/build.ts",
     "start": "deno run --unstable-kv --allow-net --allow-read --allow-env --allow-write --env-file=.env server.ts",
     "dev": "deno run --watch --unstable-kv --allow-net --allow-read --allow-env --allow-write --env-file=.env server.ts"
   },
+  "nodeModulesDir": "auto",
   "exclude": ["README.md"]
 }

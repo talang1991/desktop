@@ -65,6 +65,7 @@ deno task dev             # 带 --watch 热重载
 1. 把仓库推到 GitHub(含 `index.html` `styles.css` `app.js` `server.ts` `api.ts` `db.ts` `deno.json` `scripts/`;**不要提交 `.env`**,它已被 `.gitignore` 排除)。
 2. 控制台 **+ New App** → 选仓库 → 打开 **Edit app configuration**,按下面配置:
    - **App Directory** = `dist` ← 关键:让运行时 cwd = `dist/`,`ROOT="."` 自然命中压缩后的 `app.js`
+   - **Runtime Working Directory** = **留空**(默认 = App Directory = `dist`)。这是进程启动时的子目录,**相对 App Directory 拼一层**——如果填 `dist` 就会变成 `dist/dist/`,启动失败。**千万别填值**。
    - **Framework preset** = `No Preset`
    - **Runtime** = `Dynamic`
    - **Dynamic Entry Point** = `server.ts`
@@ -75,6 +76,8 @@ deno task dev             # 带 --watch 热重载
 4. 创建即上线,控制台给出生产 URL。
 
 > 💡 **为什么是 dist + Build command 双填**:Deno Deploy 默认会把仓库根当成 App Directory,直接跑会读到未压缩的源码。填 `dist` 把工作目录切到压缩产物目录,`deno task build` 负责在部署时按需重新生成该目录(只需 **Build command 一次**,之后 Deploy 时 Deno Deploy 会先跑 Build 重新生成 `dist/`,再以 `dist/` 为 App Directory 启动)。
+>
+> **等价写法**(已实测可用):把 **App Directory 留空**(默认=仓库根),**Runtime Working Directory 填 `dist/`**。两者最终运行时 cwd 都是 `dist/`,效果完全相同。区别:留空写法会把整个仓库(含未压缩源码)上传到平台;App Directory=`dist` 只上传压缩产物,更干净。任选其一即可。
 
 ### CLI 直传(无需 GitHub)
 ```bash
