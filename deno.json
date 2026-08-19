@@ -1,5 +1,6 @@
 {
   "tasks": {
+    "build": "deno run --allow-read --allow-write --allow-net --allow-env --allow-run scripts/build.ts",
     "start": "deno run --unstable-kv --allow-net --allow-read --allow-env --allow-write --env-file=.env server.ts",
     "dev": "deno run --watch --unstable-kv --allow-net --allow-read --allow-env --allow-write --env-file=.env server.ts"
   },

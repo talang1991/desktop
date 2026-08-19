@@ -10,6 +10,9 @@ node_modules/
 # 本地存储（含账号哈希与链接数据，不提交）
 data.json
 
+# 构建产物（deno deploy 前压缩生成的 dist/，由 scripts/build.ts 产出）
+dist/
+
 # TURN 配置（含账号密码）与证书私钥，绝不提交
 turn/coturn.conf
 turn/certs/

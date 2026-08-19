@@ -59,18 +59,33 @@ deno task dev             # 带 --watch 热重载
 2. 新版平台用**交互式浏览器 OAuth 登录**(无 `DENO_DEPLOY_TOKEN` 无头令牌)，部署需在能开浏览器的本机执行。
 
 ### 控制台 + GitHub（推荐）
-1. 把仓库推到 GitHub（含 `index.html` `styles.css` `app.js` `server.ts` `api.ts` `db.ts` `deno.json`；**不要提交 `.env`**，它已被 `.gitignore` 排除）。
-2. 控制台 **+ New App** → 选仓库 → Framework Preset `No Preset` → Runtime `Dynamic` → **Dynamic Entrypoint 填 `server.ts`** → Install/Build 留空。
-3. 在 App 的 **Environment Variables** 里添加 `DATABASE_URL`（你的 PostgreSQL 连接串）。
-4. 创建即上线，控制台给出生产 URL。
 
-### CLI 直传（无需 GitHub）
+> 核心思路:让 Deno Deploy 把 `dist/` 当成**应用工作目录**来跑 `server.ts`。`server.ts` 用 `const ROOT = "."`(相对 cwd),只要运行时 cwd = `dist/`,就会自动服务压缩后的前端资源。
+
+1. 把仓库推到 GitHub(含 `index.html` `styles.css` `app.js` `server.ts` `api.ts` `db.ts` `deno.json` `scripts/`;**不要提交 `.env`**,它已被 `.gitignore` 排除)。
+2. 控制台 **+ New App** → 选仓库 → 打开 **Edit app configuration**,按下面配置:
+   - **App Directory** = `dist` ← 关键:让运行时 cwd = `dist/`,`ROOT="."` 自然命中压缩后的 `app.js`
+   - **Framework preset** = `No Preset`
+   - **Runtime** = `Dynamic`
+   - **Dynamic Entry Point** = `server.ts`
+   - **Install command** 留空(无 npm 依赖,不要写 `npm install`)
+   - **Build command** = `deno task build` ← 部署前压缩,生成 dist/ 与预生成 .gz/.br
+   - **Pre-deploy command** 留空(无 DB migration 需求)
+3. 在 App 的 **Environment Variables** 里添加 `DATABASE_URL`(你的 PostgreSQL 连接串)。
+4. 创建即上线,控制台给出生产 URL。
+
+> 💡 **为什么是 dist + Build command 双填**:Deno Deploy 默认会把仓库根当成 App Directory,直接跑会读到未压缩的源码。填 `dist` 把工作目录切到压缩产物目录,`deno task build` 负责在部署时按需重新生成该目录(只需 **Build command 一次**,之后 Deploy 时 Deno Deploy 会先跑 Build 重新生成 `dist/`,再以 `dist/` 为 App Directory 启动)。
+
+### CLI 直传(无需 GitHub)
 ```bash
-deno deploy create --org <组织名> --app web-app-launcher \
-  --source local --runtime-mode dynamic --entrypoint server.ts --region global
-deno deploy --org <组织名> --app web-app-launcher --prod
+# ① 部署前先压缩 JS/CSS/HTML 并预生成 .gz/.br,产物输出到 dist/
+deno task build
+# ② 进入 dist/ 部署(dist/ 才是压缩后的部署目录,且已排除 .env / 证书等敏感文件)
+cd dist && deno deploy --org <组织名> --app web-app-launcher --prod && cd ..
 # 部署时仍需在控制台 Environment Variables 配置 DATABASE_URL
 ```
+
+> 🗜️ **部署前压缩**：`deno task build` 会用 esbuild 压缩 `app.js`/`admin.js`/`marketplace.js`/`delight.js`/`sw.js`/`styles.css`、用 html-minifier-terser 压缩三个 HTML，按「压缩后内容」自动重算 `?v=` 版本号（内容变了才换 URL、才让浏览器重新拉取），并为所有文本资源预生成 `.gz`/`.br`。`server.ts` 已支持按 `Accept-Encoding` 协商发送预压缩文件，无需运行时压缩。本地开发与线上部署都走这套压缩产物，体积通常可降 50%+。
 
 ## 安全提示
 - `.env` 含数据库凭据，已写入 `.gitignore`，**严禁提交到仓库**。

@@ -52,6 +52,14 @@ function contentType(path: string): string {
   return MIME[ext] ?? "application/octet-stream";
 }
 
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    return (await Deno.stat(p)).isFile;
+  } catch {
+    return false;
+  }
+}
+
 async function serveStatic(req: Request): Promise<Response> {
   const url = new URL(req.url);
   let pathname = decodeURIComponent(url.pathname);
@@ -67,7 +75,20 @@ async function serveStatic(req: Request): Promise<Response> {
     if (!abs.startsWith(rootAbs)) {
       return new Response("403 Forbidden", { status: 403 });
     }
-    const data = await Deno.readFile(abs);
+
+    // 传输压缩协商：构建脚本已为文本资源预生成 .br / .gz，
+    // 客户端支持时直接发送对应文件（无需运行时压缩），否则回退到原文件。
+    const acceptEnc = req.headers.get("accept-encoding") || "";
+    let servedPath = abs;
+    let contentEncoding: string | null = null;
+    if (/br/i.test(acceptEnc) && (await fileExists(abs + ".br"))) {
+      servedPath = abs + ".br";
+      contentEncoding = "br";
+    } else if (/gzip/i.test(acceptEnc) && (await fileExists(abs + ".gz"))) {
+      servedPath = abs + ".gz";
+      contentEncoding = "gzip";
+    }
+    const data = await Deno.readFile(servedPath);
 
     // 缓存策略：
     // ① 入口 HTML（含 ?meeting= 会议邀请链接）始终 no-cache，确保每次导航都能拿到引用最新资源版本的页面壳；
@@ -77,7 +98,9 @@ async function serveStatic(req: Request): Promise<Response> {
     // ④ 其余无版本资源保守缓存 1 小时。
     const headers: Record<string, string> = {
       "content-type": contentType(target),
+      "vary": "Accept-Encoding",
     };
+    if (contentEncoding) headers["content-encoding"] = contentEncoding;
     if (target.endsWith(".html") || pathname.endsWith("/sw.js")) {
       headers["cache-control"] = "no-cache";
       headers["pragma"] = "no-cache";
