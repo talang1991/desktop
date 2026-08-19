@@ -4008,8 +4008,13 @@
   function startCall(to, name, mediaType) {
     to = Number(to);
     enableChatInput();
-    // 每条连接一个 connId：让好友端能把「PC 连」与「手机连」区分开，互不覆盖
-    const connId = "c_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    // 复用该好友已有“存活”连接的 connId，避免每次点击都重建连接。
+    // 每次重建会触发重新协商，新连接可能走 TURN 中继，导致状态在不对称时刻
+    // 误报“服务器中继”（PC 显示 P2P、手机再次点击却翻成中继）。
+    let connId = null;
+    const live = getPeerConns(to).find((p) => p.pc && ["connected", "connecting", "new"].includes(p.pc.connectionState));
+    if (live && live.connId) connId = live.connId;
+    if (!connId) connId = "c_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     const key = peerConnKey(to, connId);
     const p = ensurePeerConn(key);
     const st = p.pc ? p.pc.connectionState : null;
@@ -4147,6 +4152,8 @@
         enableRelay(id);
       } else if (p.pc.connectionState === "connected") {
         refreshConnRelayStatus(p);
+        // ICE 可能在 connected 之后才最终敲定被选中的候选对，延迟再核一次避免误报中继
+        setTimeout(() => refreshConnRelayStatus(p), 2000);
       }
     };
     // 接收远端音视频轨道
@@ -4309,6 +4316,8 @@
       if (p) p.p2pReady = true;
       clearEntering();
       refreshConnRelayStatus(p);
+      // 同上：延迟复检，确保显示的是最终选中的候选对（直连 / 中继）
+      setTimeout(() => refreshConnRelayStatus(p), 2000);
       enableChatInput();
     };
     ch.onmessage = (e) => {
@@ -4350,7 +4359,7 @@
     try {
       const stats = await p.pc.getStats();
       stats.forEach((report) => {
-        if (report.type === "candidate-pair" && report.nominated && report.state === "succeeded") {
+        if (report.type === "candidate-pair" && report.selected && report.state === "succeeded") {
           const local = report.localCandidateId ? stats.get(report.localCandidateId) : null;
           const remote = report.remoteCandidateId ? stats.get(report.remoteCandidateId) : null;
           if ((local && local.candidateType === "relay") || (remote && remote.candidateType === "relay")) relay = true;
