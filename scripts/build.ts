@@ -15,13 +15,14 @@
  *
  * 行为:
  *  1. 复制项目到 dist/(排除 .env / turn / node_modules / .git 等);
- *  2. 压缩 JS / CSS / HTML,并对带 ?v= 的资源按「压缩后内容」算 8 位哈希,
- *     自动替换 HTML 中的版本号(内容变了才换 URL)。
+ *  2. 压缩 JS / CSS,对带 ?v= 的资源按「压缩后内容」算 8 位哈希,
+ *     自动替换 HTML 中的版本号(内容变了才换 URL);
+ *  3. **HTML 不再做任何结构压缩**(历史:regex 折叠曾经在 marketplace.html 上
+ *     因为 NUL 占位符泄漏导致 <link rel=stylesheet> 被截断、styles.css 完全
+ *     未加载)。改用 passthrough:只做 ?v= 版本号替换,完全保留原文结构。
  *
  * 产物:dist/ 即部署目录(Entry Point 仍为 server.ts,代码无需改动)。
  */
-
-import { minify as terserMinify } from "npm:terser@5.36.0";
 
 const ROOT = ".";
 const OUT = "dist";
@@ -35,11 +36,6 @@ const JS_FILES: string[] = [
 ];
 const CSS_FILES: string[] = ["styles.css"];
 const HTML_FILES: string[] = ["index.html", "admin.html", "marketplace.html"];
-const VERSIONED: string[] = [
-  ...JS_FILES,
-  ...CSS_FILES,
-  "manifest.webmanifest",
-];
 
 const SKIP = new Set([
   ".git",
@@ -71,8 +67,12 @@ const enc = new TextEncoder();
 //     二进制,Deno Deploy 的 build runner 沙箱里能稳定跑通)。压缩质量(变量名
 //     混淆、死代码删除、常量折叠、去注释)与 esbuild 同级,且它用真正的 JS
 //     parser,对正则 / 字符串 / 模板字面量的处理 100% 安全。
-// CSS / HTML: 纯 Deno regex 压缩已足够(CSS 压缩收益小,CDN 会再 gzip/brotli)。
+// CSS: 纯 Deno regex 压缩已足够(CSS 压缩收益小,CDN 会再 gzip/brotli)。
+// HTML: 不再做结构压缩(历史:regex 折叠因 NUL 占位符泄漏炸过,见上方文档)
+//       只做 ?v= 版本号替换。
 // ─────────────────────────────────────────────────────────────────────────────
+
+import { minify as terserMinify } from "npm:terser@5.36.0";
 
 async function minifyJs(src: string): Promise<Uint8Array> {
   const r = await terserMinify(src, {
@@ -93,35 +93,6 @@ function minifyCss(src: string): string {
     .replace(/\s*([{};:,()])\s*/g, "$1")
     .replace(/;}/g, "}")
     .trim();
-}
-
-function minifyHtml(src: string): string {
-  // 先挖走 <script> / <style> / <pre> / <textarea> / <!-- 段,再折叠标签间空白
-  const slots: string[] = [];
-  const SLOT_HEAD = "\u0000S";
-  const SLOT_TAIL = "\u0000";
-  function stash(re: RegExp): void {
-    src = src.replace(re, (m) => {
-      slots.push(m);
-      return `${SLOT_HEAD}${slots.length - 1}${SLOT_TAIL}`;
-    });
-  }
-  stash(/<script\b[\s\S]*?<\/script>/gi);
-  stash(/<style\b[\s\S]*?<\/style>/gi);
-  stash(/<pre\b[\s\S]*?<\/pre>/gi);
-  stash(/<textarea\b[\s\S]*?<\/textarea>/gi);
-  stash(/<!--[\s\S]*?-->/g);
-
-  let s = src
-    .replace(/>\s+</g, "><")
-    .replace(/[ \t]+(?=\n)/g, "")
-    .trim();
-
-  s = s.replace(
-    new RegExp(`${SLOT_HEAD}(\\d+)${SLOT_TAIL}`, "g"),
-    (_m, i) => slots[Number(i)],
-  );
-  return s;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,6 +143,24 @@ function bumpVersion(html: string, map: Record<string, string>): string {
   return html;
 }
 
+/**
+ * 复制 HTML 到部署目录,只做 ?v= 版本号替换,**不做任何结构修改**。
+ *
+ * 早期版本曾用 regex 折叠标签间空白,但实现中对 SVG 注释 / 内嵌脚本 /
+ * 特定属性值处理不可靠,曾在 marketplace.html 中留下 NUL 字节导致
+ * 浏览器解析 <link> 被截断、styles.css 完全不加载。这里保守地不做
+ * 任何结构压缩 —— HTML 通常 < 35KB,gzip 后损失 < 10KB,不值得为这点
+ * 收益冒险。
+ */
+async function passthroughHtml(
+  f: string,
+  versionMap: Record<string, string>,
+): Promise<void> {
+  const raw = await Deno.readTextFile(`${ROOT}/${f}`);
+  const out = bumpVersion(raw, versionMap);
+  await Deno.writeFile(`${OUT}/${f}`, enc.encode(out));
+}
+
 async function main() {
   console.log("🧹 清理旧的 dist/ ...");
   await Deno.remove(OUT, { recursive: true }).catch(() => {});
@@ -212,13 +201,12 @@ async function main() {
     versionMap["manifest.webmanifest"] = await sha256short(bytes);
   }
 
-  // 4) HTML:压缩并替换 ?v=
+  // 4) HTML:**不做结构压缩**,只原样复制 + 替换 ?v=
   for (const f of HTML_FILES) {
     const before = (await Deno.stat(`${ROOT}/${f}`)).size;
-    const raw = await Deno.readTextFile(`${ROOT}/${f}`);
-    const min = bumpVersion(minifyHtml(raw), versionMap);
-    await Deno.writeFile(`${OUT}/${f}`, enc.encode(min));
-    report.push(`HTML ${f.padEnd(17)} ${kb(before)} -> ${kb(min.length)}`);
+    await passthroughHtml(f, versionMap);
+    const after = (await Deno.stat(`${OUT}/${f}`)).size;
+    report.push(`HTML ${f.padEnd(17)} ${kb(before)} -> ${kb(after)} (passthrough)`);
   }
 
   console.log("\n✅ 压缩完成(dist/ 即为部署目录):");
