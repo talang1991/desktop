@@ -23,8 +23,10 @@ export interface StoredUser {
   username: string;
   password_hash: string;
   avatar: string;
+  role: string;
   created_at: string;
 }
+export type UserRole = "user" | "admin";
 interface LinkRow {
   id: number;
   user_id: number;
@@ -35,6 +37,7 @@ interface LinkRow {
   color: string;
   open_new: boolean;
   open_mode: string;
+  sort_order: number;
   created_at: string;
 }
 
@@ -130,6 +133,40 @@ function ensureDb() {
   if (!pool) throw new DbUnavailableError();
 }
 
+// 应用广场表 DDL（启动建表 + 运行时懒创建共用，避免启动期 DB 抖动导致表缺失）
+const APPS_DDL = `CREATE TABLE IF NOT EXISTS apps (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  icon TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT '其它',
+  supports_china BOOLEAN NOT NULL DEFAULT false,  -- 是否支持中国境内访问
+  supports_pwa BOOLEAN NOT NULL DEFAULT false,    -- 是否支持 PWA
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | rejected
+  reject_reason TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  approved_at TIMESTAMPTZ,
+  approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+)`;
+
+// 运行时懒创建 apps 表：首次访问任一应用广场接口时确保表存在（DB 可达即创建，
+// 与读同走重试连接；失败则下次重试）。这样即便启动期 DB 抖动导致建表被跳过，
+// 也能在 DB 恢复后自愈，不依赖重启。
+let appsTableEnsured: Promise<void> | null = null;
+async function ensureAppsTable(): Promise<void> {
+  if (!appsTableEnsured) {
+    appsTableEnsured = (async () => {
+      await withClient(async (c) => { await c.queryObject(APPS_DDL); });
+    })().catch((e) => {
+      appsTableEnsured = null; // 失败则清空，下次访问重试
+      throw e;
+    });
+  }
+  return appsTableEnsured;
+}
+
 // ---------------- 密码哈希（pbkdf2$iter$saltB64$keyB64，兼容历史账号）----------------
 const PBKDF2_ITER = 120_000;
 function bufToB64(buf: Uint8Array): string {
@@ -201,6 +238,15 @@ export async function initStore(): Promise<void> {
           await c.queryObject(
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT NOT NULL DEFAULT ''`,
           );
+          // 角色：普通用户 user / 管理员 admin（默认 user）；CHECK 约束保证取值合法，DO 块幂等可重复执行
+          await c.queryObject(
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'`,
+          );
+          await c.queryObject(
+            `DO $$ BEGIN
+               ALTER TABLE users ADD CONSTRAINT chk_users_role CHECK (role IN ('user','admin'));
+             EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+          );
           await c.queryObject(
             `CREATE TABLE IF NOT EXISTS links (
               id SERIAL PRIMARY KEY,
@@ -250,6 +296,10 @@ export async function initStore(): Promise<void> {
           await c.queryObject(
             `ALTER TABLE links ADD COLUMN IF NOT EXISTS open_mode TEXT NOT NULL DEFAULT 'new'`,
           );
+          // 兼容已存在的旧库：补充 sort_order 列（拖动排序用；老库无此列会导致排序读写静默失败）
+          await c.queryObject(
+            `ALTER TABLE links ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0`,
+          );
           // 群聊：群表 + 群成员表
           await c.queryObject(
             `CREATE TABLE IF NOT EXISTS chat_groups (
@@ -268,6 +318,8 @@ export async function initStore(): Promise<void> {
               PRIMARY KEY (group_id, user_id)
             )`,
           );
+          // 应用广场：用户发布的应用，经管理员审核（approved）后上架
+          await c.queryObject(APPS_DDL);
         });
         schemaOk = true;
       } catch (e) {
@@ -349,17 +401,17 @@ export async function registerUser(username: string, password: string, avatar = 
   if (exist.length) throw new Error("用户名已存在");
   const hash = await hashPassword(password);
   const av = String(avatar || "").slice(0, ICON_MAX);
-  const rows = await query<{ id: number; username: string }>(
-    `INSERT INTO users (username, password_hash, avatar) VALUES ($1,$2,$3) RETURNING id, username`,
+  const rows = await query<{ id: number; username: string; role: string }>(
+    `INSERT INTO users (username, password_hash, avatar) VALUES ($1,$2,$3) RETURNING id, username, role`,
     [username, hash, av],
   );
-  return { id: rows[0].id, username: rows[0].username, password_hash: hash, avatar: av, created_at: new Date().toISOString() };
+  return { id: rows[0].id, username: rows[0].username, password_hash: hash, avatar: av, role: rows[0].role, created_at: new Date().toISOString() };
 }
 
 export async function findUserByUsername(username: string): Promise<StoredUser | null> {
   ensureDb();
   const rows = await query<StoredUser>(
-    `SELECT id, username, password_hash, avatar, created_at FROM users WHERE username = $1`,
+    `SELECT id, username, password_hash, avatar, role, created_at FROM users WHERE username = $1`,
     [username],
   );
   return rows[0] ?? null;
@@ -416,34 +468,37 @@ export async function revokeSession(token: string, userId: number): Promise<bool
   return rows.length > 0;
 }
 
-// 更新会话活跃时间（/api/me 拉取时顺带刷新，用于「最近活跃」展示）
-export async function touchSession(token: string): Promise<void> {
+export async function getUserByToken(token: string): Promise<{ id: number; username: string; avatar: string; role: string } | null> {
+  if (!token) return null;
   ensureDb();
-  await query(`UPDATE sessions SET last_active = now() WHERE token = $1`, [token]).catch(() => {});
-}
-
-export async function getUserByToken(token: string): Promise<{ id: number; username: string; avatar: string } | null> {
-  ensureDb();
-  const rows = await query<{ id: number; username: string; avatar: string; expires_at: string }>(
-    `SELECT u.id, u.username, u.avatar, s.expires_at FROM sessions s
-     JOIN users u ON u.id = s.user_id WHERE s.token = $1`,
-    [token],
-  );
-  const r = rows[0];
-  if (!r) return null;
-  if (new Date(r.expires_at).getTime() < Date.now()) {
-    await query(`DELETE FROM sessions WHERE token = $1`, [token]).catch(() => {});
-    return null;
-  }
-  return { id: r.id, username: r.username, avatar: r.avatar };
+  // 在【同一条连接】上完成「读取用户 + 刷新活跃时间」：
+  // 这样只要能认证成功（读到了会话），就一定能更新 last_active，
+  // 避免池化代理（Prisma 等）在 flaky 时「读走健康连接、写走坏连接」导致活跃时间静默丢失。
+  return withClient(async (c: any) => {
+    const res = await c.queryObject<{ id: number; username: string; avatar: string; role: string; expires_at: string }>(
+      `SELECT u.id, u.username, u.avatar, u.role, s.expires_at FROM sessions s
+       JOIN users u ON u.id = s.user_id WHERE s.token = $1`,
+      [token],
+    );
+    const r = res.rows[0];
+    if (!r) return null;
+    if (new Date(r.expires_at).getTime() < Date.now()) {
+      await c.queryObject(`DELETE FROM sessions WHERE token = $1`, [token]).catch(() => {});
+      return null;
+    }
+    // 刷新活跃时间（与读同连接；写失败不阻断请求，但静默吞掉只在此处发生，
+    // 正常健康连接下必然成功）
+    await c.queryObject(`UPDATE sessions SET last_active = now() WHERE token = $1`, [token]).catch(() => {});
+    return { id: r.id, username: r.username, avatar: r.avatar, role: r.role };
+  });
 }
 
 // 按 id 取用户基本信息（用于会议房间名单展示），不存在返回 null
-export async function getUserById(id: number): Promise<{ id: number; username: string; avatar: string } | null> {
+export async function getUserById(id: number): Promise<{ id: number; username: string; avatar: string; role: string } | null> {
   ensureDb();
   if (!Number.isFinite(id) || id < 0) return null; // 访客为负 id，无需查库
-  const rows = await query<{ id: number; username: string; avatar: string }>(
-    `SELECT id, username, avatar FROM users WHERE id = $1`,
+  const rows = await query<{ id: number; username: string; avatar: string; role: string }>(
+    `SELECT id, username, avatar, role FROM users WHERE id = $1`,
     [id],
   );
   return rows[0] ?? null;
@@ -489,6 +544,226 @@ export async function deleteSession(token: string): Promise<void> {
   await query(`DELETE FROM sessions WHERE token = $1`, [token]).catch(() => {});
 }
 
+// ---------------- 角色管理（管理后台用）----------------
+// 修改用户角色（仅 'user' / 'admin' 合法）。返回是否有该行被更新。
+export async function updateUserRole(userId: number, role: string): Promise<boolean> {
+  ensureDb();
+  if (role !== "user" && role !== "admin") throw new Error("无效的角色");
+  const rows = await query<{ id: number }>(
+    `UPDATE users SET role = $1 WHERE id = $2 RETURNING id`,
+    [role, userId],
+  );
+  return rows.length > 0;
+}
+
+// ---------------- 管理后台聚合查询 ----------------
+// 全部用户：含角色、头像、注册时间、链接数（按注册时间倒序）
+export async function listAllUsers(): Promise<
+  Array<{ id: number; username: string; avatar: string; role: string; created_at: string; link_count: number; last_active: string | null }>
+> {
+  ensureDb();
+  const rows = await query<{
+    id: number; username: string; avatar: string; role: string; created_at: string; link_count: number; last_active: string | null;
+  }>(
+    `SELECT u.id, u.username, u.avatar, u.role, u.created_at,
+            (SELECT COUNT(*) FROM links l WHERE l.user_id = u.id)::int AS link_count,
+            (SELECT MAX(s.last_active) FROM sessions s WHERE s.user_id = u.id) AS last_active
+     FROM users u ORDER BY u.created_at DESC`,
+    [],
+  );
+  return rows;
+}
+
+export async function countUsers(): Promise<number> {
+  ensureDb();
+  const rows = await query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM users`);
+  return rows[0]?.n ?? 0;
+}
+
+export async function countLinks(): Promise<number> {
+  ensureDb();
+  const rows = await query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM links`);
+  return rows[0]?.n ?? 0;
+}
+
+// 最近 N 天注册的用户数（默认 7 天）
+export async function recentRegistrations(days = 7): Promise<number> {
+  ensureDb();
+  const rows = await query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM users WHERE created_at >= now() - ($1 || ' days')::interval`,
+    [days],
+  );
+  return rows[0]?.n ?? 0;
+}
+
+// 待审核应用数（管理后台角标用）
+export async function countPendingApps(): Promise<number> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM apps WHERE status = 'pending'`);
+  return rows[0]?.n ?? 0;
+}
+
+// ---------------- 应用广场 ----------------
+export interface AppStatus {
+  id: number;
+  user_id: number;
+  name: string;
+  url: string;
+  description: string;
+  icon: string;
+  category: string;
+  supports_china: boolean;
+  supports_pwa: boolean;
+  status: "pending" | "approved" | "rejected";
+  reject_reason: string;
+  created_at: string;
+  approved_at: string | null;
+  username?: string;
+  approved_by?: number | null;
+}
+
+// 发布应用（用户）
+export async function createApp(
+  userId: number,
+  data: {
+    name: string; url: string; description?: string; icon?: string;
+    category?: string; supports_china?: boolean; supports_pwa?: boolean;
+  },
+): Promise<{ id: number }> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ id: number }>(
+    `INSERT INTO apps (user_id, name, url, description, icon, category, supports_china, supports_pwa)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    [
+      userId,
+      data.name,
+      data.url,
+      data.description || "",
+      data.icon || "",
+      data.category || "其它",
+      !!data.supports_china,
+      !!data.supports_pwa,
+    ],
+  );
+  return rows[0];
+}
+
+// 广场公开展示：仅已审核通过的应用；支持按「境内可访问 / 支持 PWA」过滤
+export async function listApprovedApps(opts: { china?: boolean; pwa?: boolean } = {}): Promise<AppStatus[]> {
+  ensureDb();
+  await ensureAppsTable();
+  const conds: string[] = ["a.status = 'approved'"];
+  const params: unknown[] = [];
+  if (opts.china) { params.push(true); conds.push(`a.supports_china = $${params.length}`); }
+  if (opts.pwa) { params.push(true); conds.push(`a.supports_pwa = $${params.length}`); }
+  const rows = await query<AppStatus>(
+    `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
+            a.supports_china, a.supports_pwa, a.status, a.reject_reason, a.created_at,
+            a.approved_at, u.username
+     FROM apps a JOIN users u ON u.id = a.user_id
+     WHERE ${conds.join(" AND ")}
+     ORDER BY a.approved_at DESC NULLS LAST, a.created_at DESC`,
+    params,
+  );
+  return rows;
+}
+
+// 我的发布（含状态 / 拒绝原因）
+export async function listMyApps(userId: number): Promise<AppStatus[]> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<AppStatus>(
+    `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
+            a.supports_china, a.supports_pwa, a.status, a.reject_reason, a.created_at,
+            a.approved_at, u.username
+     FROM apps a JOIN users u ON u.id = a.user_id
+     WHERE a.user_id = $1
+     ORDER BY a.created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+// 全部应用（管理后台审核用）
+export async function listAllApps(): Promise<AppStatus[]> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<AppStatus>(
+    `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
+            a.supports_china, a.supports_pwa, a.status, a.reject_reason, a.created_at,
+            a.approved_at, a.approved_by, u.username
+     FROM apps a JOIN users u ON u.id = a.user_id
+     ORDER BY
+       CASE a.status WHEN 'pending' THEN 0 ELSE 1 END,
+       a.created_at DESC`,
+    [],
+  );
+  return rows;
+}
+
+// 审核通过：上架
+export async function approveApp(id: number, adminId: number): Promise<boolean> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ id: number }>(
+    `UPDATE apps SET status = 'approved', approved_at = now(), approved_by = $2, reject_reason = ''
+     WHERE id = $1 RETURNING id`,
+    [id, adminId],
+  );
+  return rows.length > 0;
+}
+
+// 审核拒绝：下架并记录原因
+export async function rejectApp(id: number, adminId: number, reason: string): Promise<boolean> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ id: number }>(
+    `UPDATE apps SET status = 'rejected', approved_at = now(), approved_by = $2, reject_reason = $3
+     WHERE id = $1 RETURNING id`,
+    [id, adminId, reason || ""],
+  );
+  return rows.length > 0;
+}
+
+// 删除自己的应用（任意状态均可）
+export async function deleteApp(id: number, userId: number): Promise<boolean> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ id: number }>(
+    `DELETE FROM apps WHERE id = $1 AND user_id = $2 RETURNING id`,
+    [id, userId],
+  );
+  return rows.length > 0;
+}
+
+// 修改自己的应用并重新提交审核：更新字段 + 状态重置为 pending（清空拒绝/上架信息）
+export async function updateApp(
+  id: number,
+  userId: number,
+  data: {
+    name: string; url: string; description?: string; icon?: string;
+    category?: string; supports_china?: boolean; supports_pwa?: boolean;
+  },
+): Promise<boolean> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ id: number }>(
+    `UPDATE apps
+     SET name = $3, url = $4, description = $5, icon = $6, category = $7,
+         supports_china = $8, supports_pwa = $9,
+         status = 'pending', reject_reason = '', approved_at = NULL, approved_by = NULL
+     WHERE id = $1 AND user_id = $2 RETURNING id`,
+    [
+      id, userId,
+      data.name, data.url, data.description || "", data.icon || "",
+      data.category || "其它", !!data.supports_china, !!data.supports_pwa,
+    ],
+  );
+  return rows.length > 0;
+}
+
 // ---------------- 链接 ----------------
 function toLinkShape(l: LinkRow) {
   return {
@@ -500,6 +775,7 @@ function toLinkShape(l: LinkRow) {
     color: l.color,
     openNew: l.open_new,
     openMode: l.open_mode,
+    sortOrder: l.sort_order,
     createdAt: new Date(l.created_at).getTime(),
   };
 }
@@ -507,8 +783,8 @@ function toLinkShape(l: LinkRow) {
 export async function listLinks(userId: number): Promise<unknown[]> {
   ensureDb();
   const rows = await query<LinkRow>(
-    `SELECT id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, created_at
-     FROM links WHERE user_id = $1 ORDER BY created_at DESC`,
+    `SELECT id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, sort_order, created_at
+     FROM links WHERE user_id = $1 ORDER BY sort_order ASC, created_at DESC`,
     [userId],
   );
   return rows.map(toLinkShape);
@@ -518,18 +794,18 @@ const ICON_MAX = 2048; // 图标字段可存 emoji 或 favicon 链接，限制�
 
 export async function createLink(
   userId: number,
-  data: { name: string; url: string; category: string; emoji: string; color: string; openNew: boolean; openMode?: string },
+  data: { name: string; url: string; category: string; emoji: string; color: string; openNew: boolean; openMode?: string; sortOrder?: number },
 ): Promise<unknown> {
   ensureDb();
   const icon = String(data.emoji || "").slice(0, ICON_MAX);
   const rows = await query<LinkRow>(
     `INSERT INTO links (user_id, title, url, category, icon, color, open_new, open_mode, sort_order)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-     RETURNING id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, created_at`,
+     RETURNING id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, sort_order, created_at`,
     [
       userId, data.name, data.url,
       data.category || "未分类", icon, data.color || "#4f6ef7",
-      data.openNew !== false, data.openMode || "new", 0,
+      data.openNew !== false, data.openMode || "new", Number(data.sortOrder) || 0,
     ],
   );
   return toLinkShape(rows[0]);
@@ -550,6 +826,7 @@ export async function updateLink(
     color: ["color", fields.color],
     openNew: ["open_new", fields.openNew],
     openMode: ["open_mode", fields.openMode],
+    sortOrder: ["sort_order", fields.sortOrder == null ? undefined : Number(fields.sortOrder)],
   };
   const sets: string[] = [];
   const params: unknown[] = [];
@@ -562,7 +839,7 @@ export async function updateLink(
       i++;
     }
   }
-  const SEL = `id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, created_at`;
+  const SEL = `id, user_id, title AS name, url, category, icon AS emoji, color, open_new, open_mode, sort_order, created_at`;
   if (!sets.length) {
     const cur = await query<LinkRow>(`SELECT ${SEL} FROM links WHERE id = $1 AND user_id = $2`, [id, userId]);
     return cur[0] ? toLinkShape(cur[0]) : null;
@@ -610,6 +887,7 @@ export async function bulkImportLinks(
         color: String(a.color || "#4f6ef7"),
         openNew: a.openNew !== false,
         openMode: a.openMode || "new",
+        sortOrder: typeof a.sortOrder === "number" ? a.sortOrder : 0,
       };
     });
   if (valid.length === 0) return { created: 0, skipped: 0, total: 0 };
@@ -629,7 +907,7 @@ export async function bulkImportLinks(
         await c.queryObject(
           `INSERT INTO links (user_id, title, url, category, icon, color, open_new, open_mode, sort_order)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [userId, it.name, it.url, it.category, it.emoji, it.color, it.openNew, it.openMode, 0],
+          [userId, it.name, it.url, it.category, it.emoji, it.color, it.openNew, it.openMode, it.sortOrder || 0],
         );
         created++;
       }

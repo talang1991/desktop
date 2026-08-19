@@ -1,13 +1,15 @@
 // api.ts —— 认证与链接 CRUD 路由处理（基于本地可靠存储 store.ts）
 import {
   registerUser, findUserByUsername, verifyPassword, createSession,
-  getUserByToken, deleteSession, listSessions, deleteOtherSessions, revokeSession, touchSession,
+  getUserByToken, deleteSession, listSessions, deleteOtherSessions, revokeSession,
   listLinks, createLink, updateLink, deleteLink,
   bulkImportLinks,
   sendFriendRequest, listFriends, listFriendRequests, acceptFriendRequest, getFriendRequestRequester, removeFriend,
   updateUserAvatar, updateUserUsername, areFriends,
   createGroup, addGroupMember, listUserGroups, getGroupBasic, isGroupMember, leaveGroup,
   renameGroup, getGroupMemberIds,
+  listAllUsers, updateUserRole, countUsers, countLinks, recentRegistrations,
+  createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, updateApp, countPendingApps,
   DbUnavailableError,
 } from "./store.ts";
 
@@ -17,10 +19,19 @@ function normalizeDevice(d: unknown): string {
   if (v === "mobile" || v === "tablet" || v === "desktop") return v;
   return "desktop";
 }
+// 仅接受 http(s) 链接（应用广场的 url / icon 校验用）
+function isHttpUrl(s: unknown): boolean {
+  try {
+    const u = new URL(String(s || ""));
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 import { getWsPublicUrl, getIceServers, isOnline, pushToUser } from "./signaling.ts";
 import { saveMessage, getMessages, saveGroupMessage, getGroupMessages, chatKvReady, saveReadCursor, getReadCursor } from "./chatstore.ts";
 
-interface User { id: number; username: string; avatar: string; }
+interface User { id: number; username: string; avatar: string; role: string; }
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -44,6 +55,11 @@ function requireUser(req: Request): Promise<User | null> {
   const token = getBearer(req);
   if (!token) return Promise.resolve(null);
   return getUserByToken(token);
+}
+
+// 仅管理员可访问：返回当前用户（含 role）；非 admin 或已登录返回 null（调用方据此返回 403）
+function requireAdmin(req: Request): Promise<User | null> {
+  return requireUser(req).then((u) => (u && u.role === "admin" ? u : null));
 }
 
 export async function handleApi(req: Request): Promise<Response> {
@@ -76,7 +92,7 @@ export async function handleApi(req: Request): Promise<Response> {
         return json({ error: msg }, status);
       }
       const token = await createSession(user.id, normalizeDevice(device), String(req.headers.get("user-agent") || ""));
-      return json({ user: { id: user.id, username: user.username, avatar: user.avatar }, token }, 201);
+      return json({ user: { id: user.id, username: user.username, avatar: user.avatar, role: user.role }, token }, 201);
     }
 
     // ---- 登录 ----
@@ -87,7 +103,7 @@ export async function handleApi(req: Request): Promise<Response> {
       const ok = await verifyPassword(String(password), u.password_hash);
       if (!ok) return json({ error: "用户名或密码错误" }, 401);
       const token = await createSession(u.id, normalizeDevice(device), String(req.headers.get("user-agent") || ""));
-      return json({ user: { id: u.id, username: u.username, avatar: u.avatar }, token });
+      return json({ user: { id: u.id, username: u.username, avatar: u.avatar, role: u.role }, token });
     }
 
     // ---- 登出 ----
@@ -99,10 +115,9 @@ export async function handleApi(req: Request): Promise<Response> {
 
     // ---- 当前用户 ----
     if (path === "/api/me" && method === "GET") {
-      const token = getBearer(req);
+      // getUserByToken 内部已在同一连接上刷新 last_active（见 store.ts）
       const user = await requireUser(req);
-      if (token) await touchSession(token);
-      return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar } : null });
+      return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar, role: user.role } : null });
     }
 
     // ---- 更新当前用户资料（头像 / 昵称）----
@@ -122,6 +137,135 @@ export async function handleApi(req: Request): Promise<Response> {
         username = r.username ?? username;
       }
       return json({ user: { id: user.id, username, avatar } });
+    }
+
+    // ---- 管理后台：用户列表（仅管理员）----
+    if (path === "/api/admin/users" && method === "GET") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const users = await listAllUsers();
+      return json({ users });
+    }
+
+    // ---- 管理后台：修改用户角色（仅管理员；禁止取消自己的管理员角色以免锁死）----
+    const adm = path.match(/^\/api\/admin\/users\/(\d+)$/);
+    if (adm && method === "PATCH") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const id = Number(adm[1]);
+      const b = await req.json().catch(() => ({}));
+      const role = String(b.role || "");
+      if (role !== "user" && role !== "admin") return json({ error: "无效的角色" }, 400);
+      if (id === admin.id && role !== "admin") {
+        return json({ error: "不能取消自己的管理员角色" }, 400);
+      }
+      const ok = await updateUserRole(id, role);
+      if (!ok) return json({ error: "用户不存在" }, 404);
+      return json({ ok: true });
+    }
+
+    // ---- 管理后台：全局统计（仅管理员）----
+    if (path === "/api/admin/stats" && method === "GET") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const [users, links, recentUsers] = await Promise.all([
+        countUsers(),
+        countLinks(),
+        recentRegistrations(7),
+      ]);
+      return json({ stats: { users, links, recentUsers } });
+    }
+
+    // ---- 应用广场：公开列表（已上架；支持 china / pwa 过滤；无需登录）----
+    if (path === "/api/apps" && method === "GET") {
+      const china = url.searchParams.get("china") === "1";
+      const pwa = url.searchParams.get("pwa") === "1";
+      const apps = await listApprovedApps({ china, pwa });
+      return json({ apps });
+    }
+
+    // ---- 应用广场：发布应用（需登录）----
+    if (path === "/api/apps" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "请先登录" }, 401);
+      const b = await req.json().catch(() => ({}));
+      const name = String(b.name || "").trim();
+      const rawUrl = String(b.url || "").trim();
+      if (!name) return json({ error: "请填写应用名称" }, 400);
+      if (name.length > 60) return json({ error: "应用名称过长（最多 60 字）" }, 400);
+      if (!isHttpUrl(rawUrl)) return json({ error: "请填写合法的 http(s) 链接" }, 400);
+      const description = String(b.description || "").slice(0, 500);
+      const icon = String(b.icon || "").slice(0, 2048);
+      const category = (String(b.category || "其它").trim() || "其它").slice(0, 20);
+      const supports_china = b.supports_china === true || b.supports_china === "true";
+      const supports_pwa = b.supports_pwa === true || b.supports_pwa === "true";
+      const r = await createApp(user.id, { name, url: rawUrl, description, icon, category, supports_china, supports_pwa });
+      return json({ id: r.id, status: "pending" }, 201);
+    }
+
+    // ---- 应用广场：我的发布（需登录）----
+    if (path === "/api/apps/mine" && method === "GET") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "请先登录" }, 401);
+      const apps = await listMyApps(user.id);
+      return json({ apps });
+    }
+
+    // ---- 应用广场：修改 / 删除自己的应用（需登录）----
+    const appRes = path.match(/^\/api\/apps\/(\d+)$/);
+    if (appRes) {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "请先登录" }, 401);
+      const id = Number(appRes[1]);
+      if (method === "DELETE") {
+        const ok = await deleteApp(id, user.id);
+        if (!ok) return json({ error: "应用不存在或无权删除" }, 404);
+        return json({ ok: true });
+      }
+      if (method === "PUT") {
+        // 修改自己的应用并重新提交审核：字段校验与发布一致；状态重置为 pending
+        const b = await req.json().catch(() => ({}));
+        const name = String(b.name || "").trim();
+        const rawUrl = String(b.url || "").trim();
+        if (!name) return json({ error: "请填写应用名称" }, 400);
+        if (name.length > 60) return json({ error: "应用名称过长（最多 60 字）" }, 400);
+        if (!isHttpUrl(rawUrl)) return json({ error: "请填写合法的 http(s) 链接" }, 400);
+        const description = String(b.description || "").slice(0, 500);
+        const icon = String(b.icon || "").slice(0, 2048);
+        const category = (String(b.category || "其它").trim() || "其它").slice(0, 20);
+        const supports_china = b.supports_china === true || b.supports_china === "true";
+        const supports_pwa = b.supports_pwa === true || b.supports_pwa === "true";
+        const ok = await updateApp(id, user.id, {
+          name, url: rawUrl, description, icon, category, supports_china, supports_pwa,
+        });
+        if (!ok) return json({ error: "应用不存在或无权修改" }, 404);
+        return json({ ok: true, status: "pending" });
+      }
+    }
+
+    // ---- 管理后台：应用审核列表（仅管理员）----
+    if (path === "/api/admin/apps" && method === "GET") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const apps = await listAllApps();
+      return json({ apps });
+    }
+
+    // ---- 管理后台：通过 / 拒绝应用（仅管理员）----
+    const appAct = path.match(/^\/api\/admin\/apps\/(\d+)\/(approve|reject)$/);
+    if (appAct && method === "POST") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const id = Number(appAct[1]);
+      let ok = false;
+      if (appAct[2] === "approve") {
+        ok = await approveApp(id, admin.id);
+      } else {
+        const b = await req.json().catch(() => ({}));
+        ok = await rejectApp(id, admin.id, String(b.reason || "").slice(0, 200));
+      }
+      if (!ok) return json({ error: "应用不存在" }, 404);
+      return json({ ok: true, status: appAct[2] === "approve" ? "approved" : "rejected" });
     }
 
     // ---- 登录设备管理：列出当前账号所有会话（多端登录）----
@@ -435,6 +579,7 @@ export async function handleApi(req: Request): Promise<Response> {
         color: String(b.color ?? "#4f6ef7"),
         openNew: b.openNew !== false,
         openMode: ["new", "self", "iframe"].includes(b.openMode) ? b.openMode : "new",
+        sortOrder: typeof b.sortOrder === "number" ? b.sortOrder : undefined,
       });
       return json({ link }, 201);
     }
@@ -496,6 +641,7 @@ export async function handleApi(req: Request): Promise<Response> {
           name: b.name, url: b.url, category: b.category,
           emoji: b.emoji, color: b.color, openNew: b.openNew,
           openMode: ["new", "self", "iframe"].includes(b.openMode) ? b.openMode : undefined,
+          sortOrder: typeof b.sortOrder === "number" ? b.sortOrder : undefined,
         });
         if (!link) return json({ error: "链接不存在" }, 404);
         return json({ link });

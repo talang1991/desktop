@@ -4,6 +4,23 @@
 
   const THEME_KEY = "web-app-launcher:theme";
   const TOKEN_KEY = "web-app-launcher:token";
+  // 与 localStorage 中的 token 保持同步的 Cookie 名：用于应用广场首屏（SSR）判断登录用户，
+  // 使服务端直接渲染「是否已保存」状态。HttpOnly 由服务端在需要时设置；此处为前端写入，
+  // 故仅作同源携带用途（SameSite=Lax；https 环境下追加 Secure）。
+  const TOKEN_COOKIE = "wal_token";
+  // 把 localStorage 中的 token 同步到 Cookie（或清除）；供 SSR 首屏携带。
+  function syncTokenCookie() {
+    const tk = localStorage.getItem(TOKEN_KEY);
+    const secure = location.protocol === "https:" ? "; Secure" : "";
+    if (tk) {
+      document.cookie =
+        TOKEN_COOKIE + "=" + encodeURIComponent(tk) +
+        "; Path=/; Max-Age=2592000; SameSite=Lax" + secure;
+    } else {
+      document.cookie =
+        TOKEN_COOKIE + "=; Path=/; Max-Age=0; SameSite=Lax" + secure;
+    }
+  }
   // 当前设备类型，登录时上报给服务端用于「登录设备」管理面板展示
   const DEVICE_TYPE = /iPad|Tablet/i.test(navigator.userAgent)
     ? "tablet"
@@ -13,17 +30,56 @@
     "#9b5de5", "#f15bb5", "#00bbf9", "#8ac926",
   ];
 
-  /** @type {Array<{id:number,name:string,url:string,category?:string,emoji?:string,color:string,openNew:boolean,openMode?:'new'|'self'|'iframe',createdAt:number}>} */
+  /** @type {Array<{id:number,name:string,url:string,category?:string,emoji?:string,color:string,openNew:boolean,openMode?:'new'|'self'|'iframe',order?:number,createdAt:number}>} */
   let apps = [];
   let activeCategory = "全部";
   let searchTerm = "";
+  let reorderMode = false;   // 拖动排序模式：开启后卡片可拖拽重排并持久化顺序
+  let reorderDirty = false;  // 本次排序会话中是否发生过拖拽重排（退出时据此决定是否同步后端）
   let editingId = null;
   let selectedColor = COLORS[0];
   let currentUsername = "";
   let myAvatar = "";
+  let currentUserRole = "user";   // 当前登录用户角色：user | admin（来自 /api/me）
 
   // ---------- DOM ----------
   const $ = (sel) => document.querySelector(sel);
+
+  // ---------- 跨标签页消息总线 ----------
+  // 用途：①「一处已读、处处清零」未读红点同步 ② 广场/首页「我的应用」列表跨标签同步。
+  // 优先 BroadcastChannel；旧浏览器（不支持时）回退到 localStorage 事件——二者都「只在其它标签触发、本标签不回声」，天然避免自环。
+  const CrossTab = (function () {
+    const NAME = "wal-cross-tab";
+    const LS_KEY = "wal-crosstab-bus";
+    const handlers = new Set();
+    let bc = null;
+    try { bc = ("BroadcastChannel" in window) ? new BroadcastChannel(NAME) : null; } catch (_) { bc = null; }
+    if (bc) {
+      bc.onmessage = (e) => emit(e.data);
+    } else {
+      window.addEventListener("storage", (e) => {
+        if (e.key === LS_KEY && e.newValue) {
+          try { emit(JSON.parse(e.newValue)); } catch (_) {}
+        }
+      });
+    }
+    function emit(msg) { handlers.forEach((h) => { try { h(msg); } catch (_) {} }); }
+    return {
+      post(msg) {
+        if (bc) { try { bc.postMessage(msg); } catch (_) {} }
+        else { try { localStorage.setItem(LS_KEY, JSON.stringify(Object.assign({ _t: Date.now() }, msg))); } catch (_) {} }
+      },
+      on(h) { handlers.add(h); return () => handlers.delete(h); },
+    };
+  })();
+
+  // 跨标签页同步：其它首页标签「已读」或「链接变更」时，本标签即时跟进
+  CrossTab.on((msg) => {
+    if (!msg || !msg.type) return;
+    if (msg.type === "peer-read") applyRemotePeerRead(msg.peerId, msg.ts);
+    else if (msg.type === "group-read") applyRemoteGroupRead(msg.gid, msg.ts);
+    else if (msg.type === "links-changed") onLinksChangedRemote();
+  });
   const grid = $("#appGrid");
   const emptyState = $("#emptyState");
   const appCount = $("#appCount");
@@ -103,6 +159,16 @@
   }
 
   // 从本地 IndexedDB 重新载入当前用户的链接并刷新界面（同步内存 apps）
+  // 服务端返回的链接形态用 sortOrder，本地记录用 order：统一在此转换，避免刷新/同步后顺序丢失
+  function linkServerToRec(l, userId) {
+    return {
+      ...l,
+      order: (l.order != null) ? Number(l.order) : (Number(l.sortOrder) || 0),
+      userId: userId,
+      synced: true,
+    };
+  }
+
   async function refreshApps() {
     if (currentUserId == null) return;
     apps = await LinkDB.allByUser(currentUserId);
@@ -139,7 +205,7 @@
     await LinkDB.clearByUser(currentUserId);
     const serverRecs = serverLinks
       .filter((l) => !tombstoneIds.has(Number(l.id)))
-      .map((l) => ({ ...l, userId: currentUserId, synced: true }));
+      .map((l) => linkServerToRec(l, currentUserId));
     await LinkDB.putMany(serverRecs);
     // 把离线产生的待同步记录重新并入（不会被服务端数据覆盖）
     for (const p of pending) {
@@ -158,11 +224,23 @@
     await flushPendingLinks();
   }
 
+  // 跨标签页：其它首页标签（或应用广场）对「我的应用」列表做了增删改后，本标签即时跟进。
+  // IndexedDB 在同源同配置文件下跨标签共享，先直接读本地（离线也能看到刚发生的改动），
+  // 再在联网时与服务端对齐，保证最终一致。
+  async function onLinksChangedRemote() {
+    if (currentUserId == null) return;
+    try { apps = await LinkDB.allByUser(currentUserId); renderAll(); } catch (_) {}
+    if (navigator.onLine !== false) { syncLinks().catch(() => {}); }
+  }
+
   // 把本地未同步（synced=false）的记录补推到服务端
   async function flushPendingLinks() {
     if (currentUserId == null) return;
     const local = await LinkDB.allByUser(currentUserId);
     const pending = local.filter((l) => l.synced === false);
+    // 内存 apps 的顺序是拖拽时同步写好的权威顺序；用它在 flush 时取 sortOrder，
+    // 避免「刚拖完立刻点完成」时 IndexedDB 异步写入尚未落地，读到旧 order 把旧顺序 PUT 上去导致回退。
+    const appOrder = new Map(apps.map((a) => [String(a.id), a.order]));
     for (const l of pending) {
       try {
         if (l._tombstone || l.op === "delete") {
@@ -181,17 +259,17 @@
           }
           await LinkDB.delete(l.id);
         } else if (String(l.id).startsWith("tmp_") || l.op === "create") {
-          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode };
+          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode, sortOrder: appOrder.get(String(l.id)) ?? l.order };
           const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
           await LinkDB.delete(l.id);
-          await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+          await LinkDB.put(linkServerToRec(data.link, currentUserId));
         } else if (l.op === "update") {
-          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode };
+          const obj = { name: l.name, url: l.url, category: l.category, emoji: l.emoji, color: l.color, openNew: l.openNew, openMode: l.openMode, sortOrder: appOrder.get(String(l.id)) ?? l.order };
           const data = await api("/api/links/" + l.id, { method: "PUT", body: JSON.stringify(obj) });
-          await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+          await LinkDB.put(linkServerToRec(data.link, currentUserId));
         }
       } catch (e) {
-        // 仍未成功（如再次断网）：保留 synced=false，下次 syncLinks 重试
+        // 仍未成功（如再次断网 / 服务端 5xx）：保留 synced=false，下次 syncLinks 重试
         continue;
       }
     }
@@ -202,6 +280,8 @@
 
   // 新建（离线友好）：先落本地，再尝试推服务端；失败则作为离线待同步保留
   async function createLinkLocal(payload) {
+    // 初始顺序：比当前最小 order 再小 1，保证新链接默认排在最前（与旧数据 createdAt DESC 行为一致）
+    const baseOrder = apps.length ? Math.min.apply(null, apps.map((a) => Number(a.order) || 0)) : 0;
     const rec = {
       id: genTempId(), userId: currentUserId, synced: false, op: "create",
       name: payload.name, url: payload.url,
@@ -209,19 +289,22 @@
       emoji: payload.emoji || "", color: payload.color,
       openNew: payload.openNew !== false,
       openMode: payload.openMode || "new",
+      order: baseOrder - 1,
       createdAt: Date.now(),
     };
     await LinkDB.put(rec);
     await refreshApps();
     try {
-      const obj = { name: rec.name, url: rec.url, category: rec.category, emoji: rec.emoji, color: rec.color, openNew: rec.openNew, openMode: rec.openMode };
+      const obj = { name: rec.name, url: rec.url, category: rec.category, emoji: rec.emoji, color: rec.color, openNew: rec.openNew, openMode: rec.openMode, sortOrder: rec.order };
       const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
       await LinkDB.delete(rec.id);
-      await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+      await LinkDB.put(linkServerToRec(data.link, currentUserId));
       await refreshApps();
     } catch (e) {
       toast("已离线保存，联网后自动同步");
     }
+    // 跨标签页：本标签新建了「我的应用」，通知其它首页标签（及广场）同步
+    CrossTab.post({ type: "links-changed" });
   }
 
   // 更新（离线友好）：本地立即更新，再推服务端；离线新建项仍按 create 处理
@@ -233,19 +316,21 @@
     await LinkDB.put(merged);
     await refreshApps();
     try {
-      const obj = { name: merged.name, url: merged.url, category: merged.category, emoji: merged.emoji, color: merged.color, openNew: merged.openNew, openMode: merged.openMode };
+      const obj = { name: merged.name, url: merged.url, category: merged.category, emoji: merged.emoji, color: merged.color, openNew: merged.openNew, openMode: merged.openMode, sortOrder: merged.order };
       if (isTemp) {
         const data = await api("/api/links", { method: "POST", body: JSON.stringify(obj) });
         await LinkDB.delete(id);
-        await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+        await LinkDB.put(linkServerToRec(data.link, currentUserId));
       } else {
         const data = await api("/api/links/" + id, { method: "PUT", body: JSON.stringify(obj) });
-        await LinkDB.put({ ...data.link, userId: currentUserId, synced: true });
+        await LinkDB.put(linkServerToRec(data.link, currentUserId));
       }
       await refreshApps();
     } catch (e) {
       toast("已离线保存，联网后自动同步");
     }
+    // 跨标签页：本标签更新了「我的应用」，通知其它首页标签（及广场）同步
+    CrossTab.post({ type: "links-changed" });
   }
 
   // 删除（离线友好）：本地立即移除；服务端删除失败则保留墓碑，联网后重试
@@ -254,6 +339,8 @@
     const isTemp = String(id).startsWith("tmp_");
     await LinkDB.delete(id);
     await refreshApps();
+    // 跨标签页：本标签删除了「我的应用」，通知其它首页标签（及广场）同步
+    CrossTab.post({ type: "links-changed" });
     if (isTemp || !existing) return; // 从未同步到服务端，无需 DELETE
     try {
       await api("/api/links/" + id, { method: "DELETE" });
@@ -290,6 +377,8 @@
     currentUsername = user.username;
     currentUserId = user.id;
     myAvatar = user.avatar || "";
+    currentUserRole = (user.role === "admin") ? "admin" : "user";
+    refreshAdminEntry();
     $("#userName").textContent = user.username;
     renderAvatarInto($("#userAvatar"), myAvatar, (user.username || "?").charAt(0).toUpperCase());
     await loadLinks();
@@ -316,6 +405,8 @@
       showAuth();
       return;
     }
+    // 本端已有登录态：确保 cookie 同步（供应用广场 SSR 首屏判断用户）
+    syncTokenCookie();
     // 本端存在登录态：先展示转圈等待服务端校验，并隐藏账号/密码输入框
     if ($("#appView")) $("#appView").hidden = true;
     if ($("#authView")) $("#authView").hidden = false;
@@ -366,6 +457,19 @@
     try { return new URL(url).origin + "/favicon.ico"; }
     catch (e) { return ""; }
   }
+  // 缓存优先：所有远程网站图标统一经同源代理 /favicon-proxy 走 Service Worker 缓存优先策略。
+  // 默认 favicon：取站点 origin 拼 /favicon.ico；自定义图标链接：原样透传完整 URL（代理会按给定路径取）。
+  function defaultFaviconProxy(siteUrl) {
+    try { return "/favicon-proxy?url=" + encodeURIComponent(new URL(siteUrl).origin + "/favicon.ico"); }
+    catch (e) { return ""; }
+  }
+  function remoteIconProxy(iconUrl) {
+    try {
+      const u = new URL(iconUrl);
+      if (/^https?:$/i.test(u.protocol)) return "/favicon-proxy?url=" + encodeURIComponent(u.href);
+    } catch (e) {}
+    return iconUrl; // data: 或相对路径 -> 原样（相对路径同源，SW 已按静态资源缓存）
+  }
   // 图标字段可存 emoji，也可存 favicon 链接（http(s)/相对路径/data:image）
   function isIconUrl(s) {
     return !!s && /^(https?:\/\/|\/|data:image\/)/i.test(String(s).trim());
@@ -378,7 +482,7 @@
   function renderAvatar(val, fallback) {
     const v = val || "";
     if (isIconUrl(v)) {
-      return `<img src="${escapeHtml(v)}" alt="" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml((fallback || "?").toString().charAt(0).toUpperCase())}'"/>`;
+      return `<img src="${escapeHtml(v)}" alt="" draggable="false" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml((fallback || "?").toString().charAt(0).toUpperCase())}'"/>`;
     }
     if (v) return escapeHtml(v);
     return escapeHtml((fallback || "?").toString().charAt(0).toUpperCase());
@@ -397,7 +501,7 @@
       const b = document.createElement("button");
       b.className = "chip" + (cat === activeCategory ? " active" : "");
       b.textContent = cat;
-      b.onclick = () => { activeCategory = cat; renderCategories(); renderGrid(); };
+      b.onclick = () => { activeCategory = cat; renderCategories(); renderGrid(); if (window.__delightEntrance) window.__delightEntrance(); };
       filtersEl.appendChild(b);
     });
 
@@ -418,6 +522,15 @@
   let selectionMode = false;
   const selectedIds = new Set();
 
+  // 排序比较：order 升序（越小越靠前）；order 相同时维持"新在前"（createdAt 降序），
+  // 保证老数据（order 全为 0）视觉与旧版 createdAt DESC 一致，拖拽后才真正按 order 排列。
+  function sortByOrder(a, b) {
+    const oa = Number(a && a.order) || 0;
+    const ob = Number(b && b.order) || 0;
+    if (oa !== ob) return oa - ob;
+    return (Number(b && b.createdAt) || 0) - (Number(a && a.createdAt) || 0);
+  }
+
   function getFilteredApps() {
     const term = searchTerm.trim().toLowerCase();
     return apps.filter((a) => {
@@ -430,19 +543,49 @@
         hayName.toLowerCase().includes(term) ||
         hayUrl.toLowerCase().includes(term);
       return matchCat && matchTerm;
-    });
+    }).sort(sortByOrder);
   }
 
   function updateSelectionUI() {
     const bar = $("#selectionBar");
     if (!bar) return;
-    bar.hidden = !selectionMode;
+    // 横栏在「多选」或「排序」模式下都显示：长按卡片进入多选，排序按钮也放在这里
+    const show = selectionMode || reorderMode;
+    bar.hidden = !show;
     document.body.classList.toggle("selection-mode", selectionMode);
-    const cnt = selectedIds.size;
-    i18nText($("#selCount"), "select.count", { n: cnt });
-    const visible = getFilteredApps();
-    const allSelected = visible.length > 0 && visible.every((a) => selectedIds.has(a.id));
-    $("#selAll").textContent = allSelected ? t("select.deselectAll") : t("select.selectAll");
+    document.body.classList.toggle("reorder-mode", reorderMode);
+    // 排序按钮（始终在横栏中）：状态随 reorderMode 联动
+    const rb = $("#reorderBtn");
+    if (rb) {
+      rb.classList.toggle("active", reorderMode);
+      rb.setAttribute("aria-pressed", String(reorderMode));
+    }
+    const selCount = $("#selCount");
+    const selAll = $("#selAll");
+    const selDelete = $("#selDelete");
+    const selCancel = $("#selCancel");
+    const selSpacer = bar.querySelector(".sel-spacer");
+    if (selectionMode) {
+      // 多选模式：显示计数 / 全选 / 删除
+      const cnt = selectedIds.size;
+      i18nText(selCount, "select.count", { n: cnt });
+      selCount.hidden = false;
+      const visible = getFilteredApps();
+      const allSelected = visible.length > 0 && visible.every((a) => selectedIds.has(a.id));
+      selAll.textContent = allSelected ? t("select.deselectAll") : t("select.selectAll");
+      selAll.hidden = false;
+      selDelete.hidden = false;
+      if (selSpacer) selSpacer.hidden = false;
+      selCancel.textContent = t("select.cancel");
+    } else {
+      // 排序模式（或空闲）：隐藏删除控件，改为提示「拖动卡片排序」+「完成」
+      selCount.hidden = false;
+      selCount.textContent = t("reorder.hint");
+      selAll.hidden = true;
+      selDelete.hidden = true;
+      if (selSpacer) selSpacer.hidden = true;
+      selCancel.textContent = t("reorder.done");
+    }
     grid.querySelectorAll(".card").forEach((c) => {
       const id = Number(c.dataset.id);
       c.classList.toggle("selected", selectedIds.has(id));
@@ -472,6 +615,138 @@
     grid.querySelectorAll(".card.selected").forEach((c) => c.classList.remove("selected"));
     updateSelectionUI();
   }
+
+  // ---------- 拖动排序（基于 Pointer Events，桌面 / 移动统一）----------
+  let dragCtx = null; // { id, card, startX, startY, pointerId, dragging, ghost, offsetX, offsetY }
+  const REORDER_THRESHOLD = 8; // 位移超过该阈值才视为拖拽，否则当作点击
+
+  function onReorderDown(e) {
+    if (!reorderMode) return;
+    if (e.button != null && e.button !== 0) return; // 仅响应左键 / 触摸
+    const card = e.target.closest(".card");
+    if (!card || card.classList.contains("card-broken")) return; // 坏卡不可拖
+    if (e.target.closest(".card-menu")) return; // 菜单按钮不触发拖拽
+    // 命中 favicon 图片时阻止默认行为，避免触发浏览器原生图片拖拽（原生拖拽会抢走指针、与 pointer 拖拽冲突）
+    if (e.target.closest("img")) { try { e.preventDefault(); } catch {} }
+    dragCtx = {
+      id: card.dataset.id,
+      card,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+      dragging: false,
+      ghost: null,
+      offsetX: 0,
+      offsetY: 0,
+    };
+    try { grid.setPointerCapture(e.pointerId); } catch {}
+  }
+
+  function onReorderMove(e) {
+    if (!dragCtx) return;
+    const dx = e.clientX - dragCtx.startX;
+    const dy = e.clientY - dragCtx.startY;
+    if (!dragCtx.dragging) {
+      if (Math.hypot(dx, dy) < REORDER_THRESHOLD) return;
+      // 进入拖拽：克隆镜像 ghost 跟随指针，源卡半透明占位并随插入实时移动
+      dragCtx.dragging = true;
+      dragCtx.card.classList.add("dragging");
+      const rect = dragCtx.card.getBoundingClientRect();
+      dragCtx.offsetX = dragCtx.startX - rect.left;
+      dragCtx.offsetY = dragCtx.startY - rect.top;
+      const ghost = dragCtx.card.cloneNode(true);
+      ghost.classList.add("reorder-ghost");
+      ghost.style.width = rect.width + "px";
+      ghost.style.height = rect.height + "px";
+      ghost.style.left = (e.clientX - dragCtx.offsetX) + "px";
+      ghost.style.top = (e.clientY - dragCtx.offsetY) + "px";
+      document.body.appendChild(ghost);
+      dragCtx.ghost = ghost;
+    }
+    if (dragCtx.ghost) {
+      dragCtx.ghost.style.left = (e.clientX - dragCtx.offsetX) + "px";
+      dragCtx.ghost.style.top = (e.clientY - dragCtx.offsetY) + "px";
+    }
+    // 命中测试：找到指针下的目标卡，按指针在卡片中线上下决定插前 / 插后
+    const overEl = document.elementFromPoint(e.clientX, e.clientY);
+    const tgt = overEl && overEl.closest && overEl.closest(".card");
+    if (tgt && tgt !== dragCtx.card) {
+      const tRect = tgt.getBoundingClientRect();
+      const before = (e.clientY - tRect.top) < tRect.height / 2;
+      if (before) grid.insertBefore(dragCtx.card, tgt);
+      else grid.insertBefore(dragCtx.card, tgt.nextSibling);
+    }
+  }
+
+  function onReorderUp() {
+    if (!dragCtx) return;
+    try { grid.releasePointerCapture(dragCtx.pointerId); } catch {}
+    if (dragCtx.dragging) {
+      if (dragCtx.ghost) dragCtx.ghost.remove();
+      dragCtx.card.classList.remove("dragging");
+      // 拖拽结束：仅更新本地顺序（内存 + IndexedDB），不立刻调接口；
+      // 真正的后端同步推迟到点击「完成」退出排序时统一进行（减少请求次数）
+      const orderedIds = [...grid.querySelectorAll(".card")].map((c) => c.dataset.id);
+      applyReorderLocal(orderedIds);
+    }
+    dragCtx = null;
+  }
+
+  // 拖拽过程中：按当前网格 DOM 顺序重排内存顺序并写入本地 IndexedDB（不调后端接口）
+  function applyReorderLocal(orderedIds) {
+    if (!orderedIds || !orderedIds.length) return;
+    const writes = [];
+    orderedIds.forEach((id, idx) => {
+      const a = apps.find((x) => String(x.id) === String(id));
+      if (a) {
+        a.order = idx;
+        a.synced = false;
+        a.op = "update";
+        writes.push(LinkDB.put(a)); // 收集落库 Promise，稍后统一等待
+      }
+    });
+    renderAll(); // 同步 apps 顺序与 order（DOM 已由拖拽排好，这里确保内存与界面一致）
+    reorderDirty = true; // 标记本次会话改动过，退出时再同步后端
+    // 等待本地库真正落地，保证随后点「完成」时 IndexedDB 已是最新顺序（避免 flush 读到旧值）
+    return Promise.all(writes);
+  }
+
+  // 退出排序（点「完成」）时调用：若本次会话拖拽过，则统一把改动同步到后端
+  async function syncReorderToServer() {
+    if (!reorderDirty) return;
+    reorderDirty = false;
+    try {
+      await flushPendingLinks();
+      // flush 后若仍有未同步记录（断网 / 服务端 5xx / 列缺失等），说明仅存到本地，如实提示；
+      // 否则才是真正的「已保存」（之前逐条 catch 吞错会让这里误报成功，已修正）。
+      const stillPending = apps.some((a) => a.synced === false);
+      toast(stillPending ? "排序已本地保存，联网后自动同步" : (t("reorder.saved") || "已保存排序"));
+    } catch (e) {
+      toast("排序已本地保存，联网后自动同步");
+    }
+  }
+
+  function toggleReorderMode() {
+    const wasReorder = reorderMode;
+    reorderMode = !reorderMode;
+    if (reorderMode && selectionMode) exitSelection(); // 排序与多选互斥；exitSelection 内 updateSelectionUI 会因 reorderMode=true 保留横栏
+    // 退出排序（点「完成」）：若本次会话拖拽过，统一同步后端（拖动过程中不逐个调接口）
+    if (wasReorder && reorderDirty) syncReorderToServer();
+    updateSelectionUI();
+    renderAll();
+  }
+
+  // 绑定一次 pointer 拖拽（事件委托到 grid）+ 排序按钮
+  function initReorderDrag() {
+    if (!grid) return;
+    grid.addEventListener("pointerdown", onReorderDown);
+    grid.addEventListener("pointermove", onReorderMove);
+    grid.addEventListener("pointerup", onReorderUp);
+    grid.addEventListener("pointercancel", onReorderUp);
+    const rb = $("#reorderBtn");
+    if (rb) rb.onclick = toggleReorderMode;
+  }
+  initReorderDrag();
 
   function toggleSelectAll() {
     if (!selectionMode) { selectionMode = true; }
@@ -561,6 +836,7 @@
       i18nText(appCount, "app.count.showing", { n: apps.length, m: filtered.length });
     }
     grid.innerHTML = "";
+    grid.classList.toggle("reordering", reorderMode);
 
     if (filtered.length === 0) {
       emptyState.hidden = false;
@@ -582,8 +858,10 @@
       const card = document.createElement("a");
       card.className = "card";
       card.href = a.url;
+      card.draggable = false; // 禁用原生链接拖出（避免拖拽时把 URL 拖到新标签），排序由 reorderMode 下的 pointer 拖拽接管
       card.dataset.id = a.id;
       if (selectionMode && selectedIds.has(a.id)) card.classList.add("selected");
+      if (reorderMode) card.classList.add("reorderable");
       const aMode = a.openMode || (a.openNew === false ? "self" : "new");
       // 内嵌模式：链接仍保留 href 以便中键/组合键在新标签打开，普通左键交给 openApp 处理
       card.target = aMode === "iframe" ? "_self" : (a.openNew === false ? "_self" : "_blank");
@@ -593,17 +871,19 @@
       const iconVal = a.emoji || "";
       let iconHtml;
       if (isIconUrl(iconVal)) {
-        // 自定义 favicon 链接
+        // 自定义 favicon 链接（http(s) 走缓存优先代理；data: 原样）
+        const src = remoteIconProxy(iconVal);
         iconHtml =
-          `<div class="icon" style="background:${a.color}22"><img src="${escapeHtml(iconVal)}" alt="" ` +
+          `<div class="icon" style="background:${a.color}22"><img src="${escapeHtml(src)}" alt="" draggable="false" ` +
           `onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar(a.url))}'"/></div>`;
       } else if (iconVal) {
         // emoji 文本
         iconHtml = `<div class="icon" style="background:${a.color}22">${escapeHtml(iconVal)}</div>`;
       } else {
-        // 未设置 -> 用网站默认 favicon
+        // 未设置 -> 用网站默认 favicon（缓存优先）
+        const src = defaultFaviconProxy(a.url);
         iconHtml =
-          `<div class="icon" style="background:${a.color}22"><img src="${escapeHtml(faviconUrl(a.url))}" alt="" ` +
+          `<div class="icon" style="background:${a.color}22"><img src="${escapeHtml(src)}" alt="" draggable="false" ` +
           `onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar(a.url))}'"/></div>`;
       }
 
@@ -619,6 +899,7 @@
       let longFired = false;
       let lpTimer = null;
       const startLP = () => {
+        if (reorderMode) return; // 排序模式下不进入多选，避免与拖拽冲突
         longFired = false;
         lpTimer = setTimeout(() => {
           longFired = true;
@@ -634,13 +915,15 @@
       card.addEventListener("mousedown", (e) => { if (e.button === 0) startLP(); });
       card.addEventListener("mouseup", cancelLP);
       card.addEventListener("mouseleave", cancelLP);
-      card.addEventListener("dragstart", cancelLP);
+      // 阻止卡片内图片（favicon）的原生拖拽：避免排序拖动时浏览器抢走指针、弹出图片幽灵
+      card.addEventListener("dragstart", (e) => { e.preventDefault(); cancelLP(); });
 
       card.addEventListener("click", (e) => {
         if (e.target.closest(".card-menu")) { e.preventDefault(); return; }
         // 长按已触发：吞掉随后的 click，避免误打开或误取消选中
         if (longFired) { e.preventDefault(); longFired = false; return; }
-        // 多选模式下：点击卡片切换选中（不打开）
+        // 排序模式下：点击不打开（专注拖拽）；多选模式下：点击卡片切换选中（不打开）
+        if (reorderMode) { e.preventDefault(); return; }
         if (selectionMode) { e.preventDefault(); toggleSelect(a.id); return; }
         // 普通左键（非组合键）走 openApp，支持「内嵌窗口」等打开方式
         if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
@@ -1085,12 +1368,12 @@
     const color = selectedColor || COLORS[0];
     let inner = "";
     if (isIconUrl(val)) {
-      inner = `<img src="${escapeHtml(val)}" alt="" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar($("#fUrl").value))}'"/>`;
+      inner = `<img src="${escapeHtml(remoteIconProxy(val))}" alt="" draggable="false" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar($("#fUrl").value))}'"/>`;
     } else if (val) {
       inner = escapeHtml(val);
     } else if ($("#fUrl").value.trim()) {
-      const fv = faviconUrl($("#fUrl").value.trim());
-      inner = `<img src="${escapeHtml(fv)}" alt="" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar($("#fUrl").value))}'"/>`;
+      const fv = defaultFaviconProxy($("#fUrl").value.trim());
+      inner = `<img src="${escapeHtml(fv)}" alt="" draggable="false" onerror="this.style.display='none';this.parentNode.textContent='${escapeHtml(fallbackChar($("#fUrl").value))}'"/>`;
     } else {
       inner = "🌐";
     }
@@ -1349,6 +1632,9 @@
       "auth.sessionExpired": "登录已失效，请重新登录",
       "update.text": "已更新到新版本 v",
       "update.reload": "刷新",
+      "install.text": "安装到桌面，随时一键打开",
+      "install.now": "安装",
+      "install.later": "稍后",
       "settings.title": "设置",
       "settings.backup": "数据备份",
       "settings.import": "📥 从 JSON 文件导入",
@@ -1378,10 +1664,17 @@
       "settings.revoked": "已登出该设备",
       "settings.deviceActive": "活跃于",
       "topbar.search.ph": "搜索应用名称或网址…",
-      "topbar.add": "＋ 添加应用",
-      "topbar.chat": "💬 聊天",
-      "topbar.meeting": "📹 视频会议",
-      "topbar.settings": "⚙ 设置",
+      "topbar.add": "添加应用",
+      "topbar.market": "应用广场",
+      "topbar.market.title": "进入应用广场，发现并发布应用",
+      "topbar.chat": "聊天",
+      "topbar.meeting": "视频会议",
+      "topbar.settings": "设置",
+      "topbar.reorder": "排序",
+      "topbar.reorder.title": "拖动排序：开启后可拖动网站链接调整顺序",
+      "reorder.saved": "已保存排序",
+      "reorder.hint": "拖动卡片排序",
+      "reorder.done": "完成",
       "topbar.logout": "登出",
       "app.modal.add": "添加应用",
       "app.modal.edit": "编辑应用",
@@ -1401,10 +1694,10 @@
       "app.modal.openMode.iframe": "内嵌窗口（iframe）打开",
       "app.modal.cancel": "取消",
       "app.modal.save": "保存",
-      "app.empty.title": "还没有应用",
-      "app.empty.match": "没有匹配的应用",
-      "app.empty.hint": "点击右上角「＋ 添加应用」开始收集你的常用网站。",
-      "app.empty.try": "试试更换分类或搜索关键词。",
+      "app.empty.title": "这里还空空如也 ✨",
+      "app.empty.match": "没有找到匹配的应用",
+      "app.empty.hint": "点击右上角「＋ 添加应用」，把常用网站收进这一个面板，从此一击即达。",
+      "app.empty.try": "换个分类，或调整一下搜索关键词试试～",
       "app.count": "{n} 个应用",
       "app.count.showing": "{n} 个应用（显示 {m}）",
       "select.count": "已选 {n} 项",
@@ -1427,9 +1720,9 @@
       "chat.title": "聊天",
       "chat.close": "关闭",
       "chat.resizer": "拖动调整宽度",
-      "chat.tab.conversations": "💬 会话",
-      "chat.tab.friends": "👤 好友",
-      "chat.tab.groups": "👥 群组",
+      "chat.tab.conversations": "会话",
+      "chat.tab.friends": "好友",
+      "chat.tab.groups": "群组",
       "chat.conv.empty": "还没有会话，去「好友」或「群组」开始聊天吧",
       "chat.friend.search.ph": "输入用户名添加好友",
       "chat.friend.add": "添加",
@@ -1483,6 +1776,12 @@
       "call.incoming.voice": "语音通话邀请",
       "call.incoming.video": "视频通话邀请",
       "call.incoming.chat": "聊天请求",
+      "call.incoming.prefix": "来电：",
+      "call.notify.accept": "接听",
+      "call.notify.reject": "拒绝",
+      "notify.banner": "开启桌面通知，收到新消息与来电时及时提醒",
+      "notify.open": "开启",
+      "notify.denied": "通知已被浏览器拦截。点击地址栏左侧的 🔔 图标，将通知设为「允许」即可收到提醒",
       "call.state.calling": "呼叫中…",
       "call.state.ringing": "等待对方接听…",
       "call.state.connected": "通话中",
@@ -1583,7 +1882,28 @@
       "meeting.inviting": "已发起群会议，正在呼叫成员…",
       "meeting.inOther": "已在其它群会议中",
       "meeting.shareVideoOnly": "仅视频会议中可共享屏幕",
-      "chat.group.renameFail": "修改失败："
+      "chat.group.renameFail": "修改失败：",
+      "admin.entryTitle": "管理",
+      "admin.enter": "⚙️ 进入管理后台",
+      "admin.title": "管理后台",
+      "admin.users": "用户",
+      "admin.stat.users": "总用户",
+      "admin.stat.links": "总链接",
+      "admin.stat.recent": "近 7 天注册",
+      "admin.col.user": "用户",
+      "admin.col.role": "角色",
+      "admin.col.links": "链接数",
+      "admin.col.joined": "注册时间",
+      "admin.col.actions": "操作",
+      "admin.role.admin": "管理员",
+      "admin.role.user": "普通用户",
+      "admin.promote": "设为管理员",
+      "admin.demote": "设为普通用户",
+      "admin.self": "（当前账号）",
+      "admin.promoted": "已设为管理员",
+      "admin.demoted": "已降级为普通用户",
+      "admin.loadError": "加载管理数据失败",
+      "admin.opError": "操作失败，请重试"
     },
     en: {
       "app.title": "Web App Navigator",
@@ -1605,6 +1925,9 @@
       "auth.sessionExpired": "Session expired, please log in again",
       "update.text": "Updated to version v",
       "update.reload": "Reload",
+      "install.text": "Install to desktop for one-tap access",
+      "install.now": "Install",
+      "install.later": "Later",
       "settings.title": "Settings",
       "settings.backup": "Data Backup",
       "settings.import": "📥 Import from JSON",
@@ -1634,10 +1957,15 @@
       "settings.revoked": "Device signed out",
       "settings.deviceActive": "Active",
       "topbar.search.ph": "Search apps by name or URL…",
-      "topbar.add": "＋ Add App",
-      "topbar.chat": "💬 Chat",
-      "topbar.meeting": "📹 Video Meeting",
-      "topbar.settings": "⚙ Settings",
+      "topbar.add": "Add App",
+      "topbar.chat": "Chat",
+      "topbar.meeting": "Video Meeting",
+      "topbar.settings": "Settings",
+      "topbar.reorder": "Reorder",
+      "topbar.reorder.title": "Toggle drag-to-reorder for your links",
+      "reorder.saved": "Order saved",
+      "reorder.hint": "Drag cards to reorder",
+      "reorder.done": "Done",
       "topbar.logout": "Log Out",
       "app.modal.add": "Add App",
       "app.modal.edit": "Edit App",
@@ -1657,9 +1985,9 @@
       "app.modal.openMode.iframe": "Open in embedded iframe",
       "app.modal.cancel": "Cancel",
       "app.modal.save": "Save",
-      "app.empty.title": "No apps yet",
+      "app.empty.title": "It's empty in here ✨",
       "app.empty.match": "No matching apps",
-      "app.empty.hint": "Click \"＋ Add App\" in the top-right to collect your favorite sites.",
+      "app.empty.hint": "Hit \"＋ Add App\" in the top-right to gather your favorite sites into one tidy panel.",
       "app.empty.try": "Try a different category or search keyword.",
       "app.count": "{n} apps",
       "app.count.showing": "{n} apps (showing {m})",
@@ -1683,9 +2011,9 @@
       "chat.title": "Chat",
       "chat.close": "Close",
       "chat.resizer": "Drag to resize width",
-      "chat.tab.conversations": "💬 Chats",
-      "chat.tab.friends": "👤 Friends",
-      "chat.tab.groups": "👥 Groups",
+      "chat.tab.conversations": "Chats",
+      "chat.tab.friends": "Friends",
+      "chat.tab.groups": "Groups",
       "chat.conv.empty": "No chats yet. Start one from Friends or Groups.",
       "chat.friend.search.ph": "Enter username to add friend",
       "chat.friend.add": "Add",
@@ -1739,6 +2067,12 @@
       "call.incoming.voice": "Incoming voice call",
       "call.incoming.video": "Incoming video call",
       "call.incoming.chat": "Chat request",
+      "call.incoming.prefix": "Incoming call: ",
+      "call.notify.accept": "Accept",
+      "call.notify.reject": "Decline",
+      "notify.banner": "Enable desktop notifications to get alerted on new messages and calls",
+      "notify.open": "Enable",
+      "notify.denied": "Notifications are blocked. Click the 🔔 icon at the left of the address bar and set notifications to “Allow”",
       "call.state.calling": "Calling…",
       "call.state.ringing": "Waiting for answer…",
       "call.state.connected": "On call",
@@ -1839,7 +2173,28 @@
       "meeting.inviting": "Group meeting started, calling members…",
       "meeting.inOther": "Already in another group meeting",
       "meeting.shareVideoOnly": "Screen share only in video meeting",
-      "chat.group.renameFail": "Failed to rename: "
+      "chat.group.renameFail": "Failed to rename: ",
+      "admin.entryTitle": "Admin",
+      "admin.enter": "⚙️ Open Admin Panel",
+      "admin.title": "Admin Panel",
+      "admin.users": "Users",
+      "admin.stat.users": "Total Users",
+      "admin.stat.links": "Total Links",
+      "admin.stat.recent": "Registered (7d)",
+      "admin.col.user": "User",
+      "admin.col.role": "Role",
+      "admin.col.links": "Links",
+      "admin.col.joined": "Joined",
+      "admin.col.actions": "Actions",
+      "admin.role.admin": "Admin",
+      "admin.role.user": "User",
+      "admin.promote": "Make Admin",
+      "admin.demote": "Make User",
+      "admin.self": "(you)",
+      "admin.promoted": "Promoted to admin",
+      "admin.demoted": "Demoted to user",
+      "admin.loadError": "Failed to load admin data",
+      "admin.opError": "Operation failed, please retry"
     }
   };
   const LANG_KEY = "lang";
@@ -1922,6 +2277,7 @@
         }),
       });
       localStorage.setItem(TOKEN_KEY, data.token);
+      syncTokenCookie();
       $("#loginForm").reset();
       await enterApp(data.user);
     } catch (err) {
@@ -1945,6 +2301,7 @@
         }),
       });
       localStorage.setItem(TOKEN_KEY, data.token);
+      syncTokenCookie();
       $("#registerForm").reset();
       await enterApp(data.user);
     } catch (err) {
@@ -1973,6 +2330,7 @@
     disconnectSignaling();
     try { await api("/api/logout", { method: "POST" }); } catch {}
     localStorage.removeItem(TOKEN_KEY);
+    syncTokenCookie();
     if (typeof closeSettings === "function") closeSettings();
     showAuth();
   }
@@ -1986,7 +2344,7 @@
   $("#importChromeBtn").onclick = () => $("#importChromeFile").click();
   $("#importChromeFile").onchange = (e) => { if (e.target.files[0]) importChromeBookmarks(e.target.files[0]); e.target.value = ""; };
   // 多选 / 批量删除
-  $("#selCancel").onclick = exitSelection;
+  $("#selCancel").onclick = () => { if (reorderMode) toggleReorderMode(); else exitSelection(); };
   $("#selAll").onclick = toggleSelectAll;
   $("#selDelete").onclick = deleteSelected;
   $("#themeToggleBtn").onclick = () => {
@@ -2380,7 +2738,7 @@
   }
 
   // ---------- 事件 ----------
-  // $("#chatBtn").onclick = openChat;
+  $("#chatBtn").onclick = () => { ensureNotifyPermission(); openChat(); };
   chatClose.onclick = closeChat;
   chatSendBtn.onclick = sendChat;
   friendAddBtn.onclick = addFriend;
@@ -2506,6 +2864,10 @@
   let relayActive = false;       // 中继兜底开关（全局：只要任一好友可走中继即为 true）
   let enteringMsg = null;
   let renderedIds = new Set();   // 当前会话已渲染的消息 id，避免同步时重复渲染
+  // 实时私聊未读去重：按「标签页内存」记录已处理过的消息 id，跨标签不共享。
+  // 不能用共享的 IndexedDB.has() 判断——多个首页标签共用同一 IndexedDB，先处理到消息的标签
+  // 写入后，其余标签的 ChatDB.has 返回 true 而误跳过未读 +1，表现为「只有一个首页收到新消息」。
+  let rtUnreadDedup = new Set();
   let friends = [];              // [{id, username, online}]
   let friendRequests = [];       // [{id, userId, username}]
   let presenceFriends = new Set();
@@ -2647,6 +3009,71 @@
   if (settingsClose) settingsClose.onclick = closeSettings;
   const logoutBtn2 = $("#logoutBtn2");
   if (logoutBtn2) logoutBtn2.onclick = logout;
+
+  // ---------- 管理后台（仅管理员可见 / 可进入）----------
+  // ---------- 管理后台入口（已拆为独立页面 admin.html）----------
+  function isAdmin() { return currentUserRole === "admin"; }
+  // 根据当前角色显示 / 隐藏设置里的「管理」入口
+  function refreshAdminEntry() {
+    const el = $("#adminEntry");
+    if (el) el.hidden = !isAdmin();
+  }
+  const enterAdminBtn = $("#enterAdminBtn");
+  if (enterAdminBtn) {
+    // 预加载：鼠标悬停 / 键盘聚焦 / 触摸开始 时提前拉取管理后台页面与脚本，点击瞬间近乎秒开。
+    // 注意：admin.js 的版本号需与 admin.html 底部 <script> 的 ?v= 保持一致。
+    let adminPrefetched = false;
+    const prefetchAdmin = () => {
+      if (adminPrefetched) return;
+      adminPrefetched = true;
+      ["admin.html", "admin.js?v=6"].forEach((href) => {
+        const link = document.createElement("link");
+        link.rel = "prefetch";
+        link.href = href;
+        if (href.endsWith(".js")) link.as = "script";
+        document.head.appendChild(link);
+      });
+    };
+    enterAdminBtn.addEventListener("mouseenter", prefetchAdmin);
+    enterAdminBtn.addEventListener("focus", prefetchAdmin);
+    enterAdminBtn.addEventListener("pointerdown", prefetchAdmin);
+    enterAdminBtn.addEventListener("click", () => {
+      if (!isAdmin()) return;
+      prefetchAdmin();
+      // 在新标签页打开管理后台：原应用标签页保持登录态（不断开信令 WebSocket、不卸载），
+      // 因此返回时不会出现登录检查页面。弹窗被拦截时降级为同标签页跳转。
+      const w = window.open("admin.html", "_blank");
+      if (!w) location.href = "admin.html";
+    });
+  }
+  // 应用广场入口：顶栏「应用广场」按钮（所有登录用户可见）
+  const marketBtn = $("#marketBtn");
+  if (marketBtn) {
+    // 预加载：鼠标悬停 / 键盘聚焦 / 触摸开始 时提前拉取广场页面与脚本，点击瞬间近乎秒开。
+    // 注意：marketplace.js 的版本号需与 marketplace.html 底部 <script> 的 ?v= 保持一致。
+    let marketPrefetched = false;
+    const prefetchMarket = () => {
+      if (marketPrefetched) return;
+      marketPrefetched = true;
+      ["marketplace.html", "marketplace.js?v=12"].forEach((href) => {
+        const link = document.createElement("link");
+        link.rel = "prefetch";
+        link.href = href;
+        if (href.endsWith(".js")) link.as = "script";
+        document.head.appendChild(link);
+      });
+    };
+    marketBtn.addEventListener("mouseenter", prefetchMarket);
+    marketBtn.addEventListener("focus", prefetchMarket);
+    marketBtn.addEventListener("pointerdown", prefetchMarket);
+    marketBtn.addEventListener("click", () => {
+      prefetchMarket();
+      // 在新标签页打开应用广场：原应用标签页保持登录态（不断开信令 WebSocket、不卸载），
+      // 因此返回时不会出现登录检查页面。弹窗被拦截时降级为同标签页跳转。
+      const w = window.open("marketplace.html", "_blank");
+      if (!w) location.href = "marketplace.html";
+    });
+  }
 
   // 清空本地缓存：保留登录、语言、主题等偏好，清除界面布局等本地缓存
   const clearCacheBtn = $("#clearCacheBtn");
@@ -2898,6 +3325,7 @@
     switch (m.type) {
       case "welcome":
         myId = m.userId;
+        myDeviceId = m.deviceId || null;
         trySyncAll(); // 拿到 myId 后补算离线未读（好友列表可能尚未就绪，trySyncAll 内部会再判）
         break;
       case "presence":
@@ -2914,7 +3342,7 @@
         try { loadFriends(); } catch (e) { console.error("[SIG-CLIENT] loadFriends 失败:", e); }
         break;
       case "incoming-call":
-        handleIncomingCall(m.from, m.media);
+        handleIncomingCall(m.from, m.media, m.connId);
         break;
       case "call-offline":
         if (currentPeer === m.to) {
@@ -2924,14 +3352,18 @@
         }
         break;
       case "signal":
-        handleSignal(m.data, m.from);
+        handleSignal(m.data, m.from, m.fromDeviceId);
         break;
       case "chat":
         clearEntering();
         onChatReceived({
           id: m.id || crypto.randomUUID(),
           from: m.from,
-          to: myId,
+          // 服务端回显（同账号多端同步）的「to」就是真实收件人（好友 ID），
+          // 不要被强制写成 myId，否则 self-echo 会落到「自己↔自己」会话——
+          // 表现为列表里出现一个标题为「好友」、预览恰为消息文案的鬼会话。
+          // 仅当服务端没传 to（极旧版本）才退回 myId，保证向后兼容。
+          to: (m.to != null ? m.to : myId),
           text: m.text,
           ts: m.ts || Date.now(),
         });
@@ -3010,22 +3442,22 @@
         break;
       // ---- 独立会议房间信令（与群会议对称，key 为 roomId）----
       case "room-join":
-        onRoomJoin(m.from, m.name);
+        onRoomJoin(m.from, m.name, m.deviceId);
         break;
       case "room-leave":
-        onRoomLeave(m.from);
+        onRoomLeave(m.from, m.deviceId);
         break;
       case "room-roster":
         onRoomRoster(m.roomId, m.members);
         break;
       case "room-screen":
-        onRoomScreen(m.from, true);
+        onRoomScreen(m.from, true, m.deviceId);
         break;
       case "room-screen-stop":
-        onRoomScreen(m.from, false);
+        onRoomScreen(m.from, false, m.deviceId);
         break;
       case "room-cam":
-        onRoomCam(m.from, m.on);
+        onRoomCam(m.from, m.on, m.deviceId);
         break;
       case "room-chat":
         onRoomChat(m);
@@ -3113,6 +3545,17 @@
     updateUnreadTitle();
     patchConvUnread(peerId, unread[peerId]);
   }
+  // 覆盖式设置未读数（重算用）：n<=0 等同清红点。用于「其它端已读后本端对账」，
+  // 避免 unread 只增不减、旧红点永不消除。
+  function setUnread(peerId, n) {
+    peerId = Number(peerId); n = Number(n) || 0;
+    if (n <= 0) { clearUnread(peerId); return; }
+    unread[peerId] = n;
+    saveUnread();
+    updateUnreadTitle();
+    patchConvUnread(peerId, n);
+    renderFriends();
+  }
   function addUnread(peerId) {
     peerId = Number(peerId);
     console.log("[UNREAD-DEBUG] addUnread", { peerId, peerIdType: typeof peerId, unread: JSON.parse(JSON.stringify(unread)), friends: friends.map((f) => ({ id: f.id, t: typeof f.id, name: f.username })) });
@@ -3145,6 +3588,8 @@
     if (!gid || !ts) return;
     try { await api(`/api/groups/${gid}/read`, { method: "POST", body: JSON.stringify({ ts }) }); } catch {}
   }
+  // 各会话最近一次已知「已读游标」（来自服务端），供实时收到消息时判断是否为新未读。
+  const lastReadCache = {};
 
   // 仅在「已拿到 myId 且好友列表已加载」两个前置都满足时才补算离线未读/拉离线消息。
   // 解决：onopen 时 myId 尚未就绪（welcome 是后续 onmessage）、loadFriends 时 myId 可能尚未就绪，
@@ -3169,10 +3614,11 @@
         const conv = convKeyLocal(myId, f.id);
         const localMax = await ChatDB.maxTs(conv);
         const lastRead = await getLastRead(f.id);
+        lastReadCache[f.id] = Number(lastRead) || 0;   // 缓存游标，供实时收到消息时判断是否需要 bump
         // 未读计算基准：取「本地最新 ts」与「服务端已读游标」的较大者。
         // 换端时本地为空(localMax=0)但服务端已有 lastRead → 只拉未读部分，
         // 已读过的消息不再算未读；同设备则 localMax 更大，行为与旧逻辑一致。
-        const since = Math.max(localMax, lastRead || 0);
+        const since = Math.max(localMax, lastReadCache[f.id]);
         let msgs = [];
         let data = null;
         try {
@@ -3181,32 +3627,34 @@
         } catch (e) { console.log("[UNREAD-DEBUG] syncAllUnread GET fail", f.username, String(e && e.message || e)); continue; }
         console.log("[UNREAD-DEBUG] syncAllUnread pull", { peer: f.username, peerId: f.id, since, pulled: msgs.length, stored: (data && data.stored) });
         const newPeerMsgs = [];
-        let newCount = 0;
         for (const m of msgs) {
           if (m.from === myId) continue;            // 自己的消息不算未读
           if (await ChatDB.has(m.id)) continue;     // 本地已有，跳过（避免重复计）
           await ChatDB.put({ ...m, conv, synced: true }).catch(() => {});
-          newCount++;
           newPeerMsgs.push(m);
         }
-        if (newCount > 0) {
-          // 关键：无论聊天面板是否打开，只要该好友会话「当前没被打开查看」，就始终累计未读红点。
-          // 之前用 `!(chatVisible && currentPeer === f.id)` 作为 bump 的门槛，导致用户一打开该好友会话
-          // （currentPeer 已指向对方）时，离线补算被静默跳过 → 离线消息有、红点无。
-          const viewing = chatVisible && Number(currentPeer) === Number(f.id);
-          console.log("[UNREAD-DEBUG] syncAllUnread +unread", f.username, newCount, "viewing=", viewing);
-          if (viewing) {
-            // 该会话正打开：新消息立即渲染并标记为已读，不残留红点
-            for (const m of newPeerMsgs) {
-              if (!renderedIds.has(m.id)) {
-                renderedIds.add(m.id);
-                renderMessageRow("peer", m.text, m.ts);
-              }
+        const viewing = chatVisible && Number(currentPeer) === Number(f.id);
+        if (viewing) {
+          // 正在查看：新消息立即渲染为已读，并清红点
+          for (const m of newPeerMsgs) {
+            if (!renderedIds.has(m.id)) {
+              renderedIds.add(m.id);
+              renderMessageRow("peer", m.text, m.ts);
             }
-            clearUnread(f.id);
-          } else {
-            bumpUnread(f.id, newCount);   // 未打开该好友：累计未读红点（离线消息核心通知）
           }
+          clearUnread(f.id);
+        } else {
+          // 以「服务端已读游标」为基准重算真实未读（覆盖式，而非累加）。
+          // 解决：其它端已读后，本端刷新仍残留旧红点（旧逻辑只有 newCount>0 才动 unread，
+          // 而 since 已覆盖游标后 newCount 常为 0，导致已持久化的旧未读数永不清零）。
+          const all = await ChatDB.allForConv(conv).catch(() => []);
+          let trueUnread = 0;
+          for (const m of all) {
+            if (m.from === myId) continue;
+            if ((m.ts || 0) <= lastReadCache[f.id]) continue;
+            trueUnread++;
+          }
+          setUnread(f.id, trueUnread);
         }
       }
     } finally {
@@ -3222,6 +3670,14 @@
       updateUnreadTitle();
       renderFriends();
     }
+  }
+  // 跨标签页：其它首页标签把某私聊标记为已读后，本标签同步清零红点，并抬高本地已读游标，
+  // 使之后到达的、ts 不晚于该游标的消息不再被本标签计为未读（避免一处已读、另一处又弹红点）。
+  function applyRemotePeerRead(peerId, ts) {
+    peerId = Number(peerId); ts = Number(ts) || 0;
+    if (!peerId) return;
+    if (ts) lastReadCache[peerId] = Math.max(lastReadCache[peerId] || 0, ts);
+    clearUnread(peerId);
   }
   // 未读总数提醒：① 顶栏 💬 按钮上的红点徽标（抽屉关闭也始终可见）② 浏览器标签标题前缀
   const BASE_TITLE = "Web 应用导航面板";
@@ -3369,7 +3825,7 @@
     delete chatPeerName.dataset.i18nKey;
     renderAvatarInto($("#chatPeerAvatar"), f.avatar, f.username.charAt(0).toUpperCase());
     // 重置顶栏状态，避免从群聊切换过来时仍残留“群聊·X人”
-    const p = peers.get(Number(f.id));
+    const p = getPeerConn(f.id);
     if (p && (p.p2pReady || (p.pc && p.pc.connectionState === "connected"))) {
       setChatStatus("P2P 已直连 🔗", "ok");
     } else if (p && p.pc && p.pc.connectionState === "connecting") {
@@ -3398,6 +3854,8 @@
     // 实现「已读的消息切换新客户端不再显示未读」。
     const convMax = await ChatDB.maxTs(convKeyLocal(myId, f.id));
     if (convMax) markRead(f.id, convMax);
+    // 跨标签页：本标签已读此会话，通知其它首页标签同步清零红点
+    if (convMax) CrossTab.post({ type: "peer-read", peerId: f.id, ts: convMax });
     // 打开会话：确保该会话出现在列表（首次发起聊天时创建），不改已有排序
     ensureConversation("peer", f.id);
     updateCallButtons();
@@ -3409,32 +3867,92 @@
 
   // ---------- 每好友一条独立连接（网状）：A 可与 B 直连，同时后台与 C 建连 ----------
   // currentPeer 仅表示“当前显示的是哪个会话”，来电绝不再改动它（避免抢界面）。
-  function getPeerConn(id) { return peers.get(Number(id)); }
-  function ensurePeerConn(id) {
+  // 多设备同账号：每条 P2P 连接带一个连接级 connId，key 形如 `userId:connId`。
+  // 这样好友 A 可以同时持有「PC 连 A」和「手机连 A」两条独立连接，互不覆盖，
+  // 解决「同账号多设备同时与同一好友直连时协商卡死 / 互相撞掉」的问题。
+  // （媒体通话/会议仍按 userId 单键复用，不受影响；聊天连接用 connId 区分。）
+  function peerUserIdOf(key) { return Number(String(key).split(":")[0]); }
+  function peerConnKey(userId, connId) {
+    userId = Number(userId);
+    return connId ? (userId + ":" + connId) : String(userId);
+  }
+  // 会议对等体键：不同账号用 userId（与历史行为一致，避免回归）；同账号多设备用
+  // "selfdev:<deviceId>" 区分，使 PC 与手机各自成为独立会议成员、互不覆盖、能互相建连。
+  function meetingMemberKey(fromUserId, fromDeviceId) {
+    fromUserId = Number(fromUserId);
+    if (fromUserId === myId && fromDeviceId) return "selfdev:" + fromDeviceId;
+    return fromUserId;
+  }
+  // 确定性发起方：优先用设备 id 比较（每次连接唯一、两端必然一真一假），
+  // 避免 myId 缺失（访客 / 未就绪 / 同账号设备 id 未随信令带齐）时双方都默认判为发起方 →
+  // 双向同时发 offer 撞车（glare）→ 双方都 rollback 又都忽略对方 answer → 协商永不收敛、视频流黑屏。
+  // 仅当设备 id 缺失时回退到 userId 比较；两端都缺失的极端情况则本端做应答方（不主动发 offer），
+  // 宁可少建一条也不双向撞车死锁。
+  function meetingIAmOfferer(fromUserId, fromDeviceId) {
+    if (myDeviceId != null && fromDeviceId != null) return myDeviceId < fromDeviceId;
+    if (Number(fromUserId) === myId && fromDeviceId) return myDeviceId < fromDeviceId;
+    if (myId != null) return Number(myId) < Number(fromUserId);
+    return false;
+  }
+  // 判断一条收到的信令是否属于“会议中的某个对等体”，并返回其成员键（非会议则返回 null，按 1:1 处理）。
+  function meetingSignalKey(from, fromDeviceId) {
+    if (fromDeviceId == null) return meetingMembers.has(Number(from)) ? Number(from) : null;
+    if (fromDeviceId === myDeviceId) return null; // 自己的其它设备不会给自己发信令
+    if (meetingMembers.has("selfdev:" + fromDeviceId)) return "selfdev:" + fromDeviceId;
+    if (meetingMembers.has(Number(from))) return Number(from);
+    return null;
+  }
+  // 仅关闭某会议成员的全部 pc（按成员键精确匹配，不影响其它好友/通话连接）
+  function dropMeetingPeer(key) {
+    const prefix = String(key) + ":";
+    for (const [k, p] of [...peers]) {
+      if (k === String(key) || k.startsWith(prefix)) {
+        try { if (p.dc) p.dc.close(); } catch {}
+        try { if (p.pc) p.pc.close(); } catch {}
+        peers.delete(k);
+      }
+    }
+    peerStreams.delete(key);
+  }
+  function getPeerConn(id) {
     id = Number(id);
-    let p = peers.get(id);
-    if (!p) { p = { pc: null, dc: null, p2pReady: false, status: "new" }; peers.set(id, p); }
+    for (const [k, p] of peers) { if (peerUserIdOf(k) === id) return p; }
+    return undefined;
+  }
+  function getPeerConns(id) {
+    id = Number(id);
+    const out = [];
+    for (const [k, p] of peers) { if (peerUserIdOf(k) === id) out.push(p); }
+    return out;
+  }
+  // 入参可为数字(userId，媒体/会议复用)或字符串(userId:connId，聊天多设备)
+  function ensurePeerConn(key) {
+    let p = peers.get(key);
+    if (!p) { p = { pc: null, dc: null, p2pReady: false, status: "new", connId: null }; peers.set(key, p); }
     return p;
   }
-  // 关闭并移除某好友的连接（不影响其它好友）
+  // 关闭并移除某好友的全部连接（按 userId 匹配，含多设备 connId 键）
   function dropPeerConn(id) {
     id = Number(id);
-    const p = peers.get(id);
-    if (!p) return;
-    try { if (p.dc) p.dc.close(); } catch {}
-    try { if (p.pc) p.pc.close(); } catch {}
-    peers.delete(id);
-    peerStreams.delete(id); // 一并清理缓存的远端流，避免会议网格残留旧流
+    for (const [k, p] of [...peers]) {
+      if (peerUserIdOf(k) === id) {
+        try { if (p.dc) p.dc.close(); } catch {}
+        try { if (p.pc) p.pc.close(); } catch {}
+        peers.delete(k);
+        peerStreams.delete(id); // 一并清理缓存的远端流，避免会议网格残留旧流
+      }
+    }
   }
   // 仅清理某好友旧 pc/dc（用于重协商），保留 map 条目
   function teardownPeer(id) {
     id = Number(id);
-    const p = peers.get(id);
-    if (!p) return;
-    p.p2pReady = false;
-    try { if (p.dc) p.dc.close(); } catch {}
-    try { if (p.pc) p.pc.close(); } catch {}
-    p.pc = null; p.dc = null;
+    for (const [k, p] of [...peers]) {
+      if (peerUserIdOf(k) !== id) continue;
+      p.p2pReady = false;
+      try { if (p.dc) p.dc.close(); } catch {}
+      try { if (p.pc) p.pc.close(); } catch {}
+      p.pc = null; p.dc = null;
+    }
   }
   // 仅当该好友是当前显示会话时，才更新聊天状态栏（C 来电不得改动 B 的界面）
   function setPeerStatus(id, text, cls) {
@@ -3475,22 +3993,30 @@
   let meetingMode = "group";        // "group" | "room"
   let meetingRoomId = null;         // 房间模式下的会议 id（来自链接）
   let roomPeers = new Map();        // room 模式下 id -> { name, avatar }（用于瓦片/聊天昵称）
+  // 会议发起方为每个成员维护的“本次会话连接级 connId”（按 memberId 存），用于幂等：
+  // 同一成员重复触发 connectMeetingPeer 时复用同一 connId，避免每次新建 connId 导致
+  // 旧连接被反复 drop 重建、产生多个 offer，进而 answer 落在 stable 被忽略、视频出不来。
+  let meetingConnIds = new Map();
   let pendingSignals = [];          // 信令未连通时缓存的发送（如自动入会时房间 join）
   let pendingMeetingId = null;      // 启动/登录时从 URL ?meeting= 解析出的待加入会议 id
   let isGuest = false;              // 访客（未登录，通过 ?meeting= 链接 + 昵称入会）
   let guestName = "";               // 访客昵称
   let guestRoomId = null;           // 访客 WS 鉴权用的 room（拼到 ws url）
   let meetingJoinPending = false;   // 通过链接入会但尚在“点击加入”闸门（未取媒体）
+  let myDeviceId = null;           // 本连接的唯一设备标识（服务端 welcome 下发），用于同账号多设备会议区分设备
 
   function startCall(to, name, mediaType) {
     to = Number(to);
     enableChatInput();
-    const p = ensurePeerConn(to);
+    // 每条连接一个 connId：让好友端能把「PC 连」与「手机连」区分开，互不覆盖
+    const connId = "c_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const key = peerConnKey(to, connId);
+    const p = ensurePeerConn(key);
     const st = p.pc ? p.pc.connectionState : null;
     const hasLive = p.pc && (st === "connected" || st === "connecting" || st === "new");
     // 媒体呼叫：始终通知对方（即便已有连接），用于弹出接听界面
     if (mediaType && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
-      sigSocket.send(JSON.stringify({ type: "call", to, media: mediaType }));
+      sigSocket.send(JSON.stringify({ type: "call", to, media: mediaType, connId }));
     }
     if (hasLive) return; // 已有可用连接：不重复建连、不降级状态
     // 只有该好友是当前显示会话时，才显示“正在连接”
@@ -3500,35 +4026,37 @@
     }
     enableRelay(to);
     if (!mediaType && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
-      sigSocket.send(JSON.stringify({ type: "call", to }));
+      sigSocket.send(JSON.stringify({ type: "call", to, connId }));
     }
-    startOffer(to, name);
+    startOffer(to, name, connId);
   }
 
-  function handleIncomingCall(from, media) {
+  function handleIncomingCall(from, media, connId) {
     from = Number(from);
     const f = friends.find((x) => x.id === from) || { id: from, username: String(from), online: true, avatar: "" };
     const viewingThis = currentPeer != null && Number(currentPeer) === from && chatVisible;
     // 仅当正在查看该好友时才清未读；否则保留红点，由后续消息 onChatReceived 累加
     if (viewingThis) clearUnread(from);
+    const key = peerConnKey(from, connId);
     // 音视频来电：弹出接听界面（绝不改动 currentPeer，绝不抢当前显示的会话）
     if (media) {
       showIncomingCall(from, media, f);
       // 仍确保该好友 pc 就绪（应答方），便于后续协商媒体轨道
-      const p = ensurePeerConn(from);
-      if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); p.mediaAdded = false; }
+      const p = ensurePeerConn(key);
+      if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); p.mediaAdded = false; p.connId = connId || null; }
       enableRelay(from);
       return;
     }
-    const p = ensurePeerConn(from);
+    const p = ensurePeerConn(key);
     // 若本端已有 offer（我方也曾主动呼叫该好友），回退为应答方，避免双向 offer 死锁
-    if (p.pc && p.pc.signalingState === "have-local-offer") teardownPeer(from);
+    if (p.pc && p.pc.signalingState === "have-local-offer") { try { p.pc.close(); } catch {} p.pc = null; p.dc = null; p.p2pReady = false; }
     // 准备该好友的连接（应答方）；绝不改动 currentPeer，绝不抢界面
     if (!p.pc) {
       p.pc = new RTCPeerConnection(rtcConfig());
       p.pc._peerId = from;
       setupPc(p);
       p.mediaAdded = false;
+      p.connId = connId || null;
       if (viewingThis) {
         setChatStatus("", "warn", { key: "chat.status.chatReq", params: { name: f.username } });
         clearEntering();
@@ -3555,11 +4083,13 @@
   }
 
   // ---------- WebRTC（每好友独立 pc/dc）----------
-  function startOffer(to, name) {
+  function startOffer(to, name, connId) {
     to = Number(to);
-    const p = ensurePeerConn(to);
-    teardownPeer(to); // 清理该好友旧连接
+    const key = peerConnKey(to, connId);
+    const p = ensurePeerConn(key);
+    teardownPeer(to); // 清理该好友本机旧连接（按 userId 匹配，含旧 connId 键）
     try {
+      p.connId = connId || null;
       p.pc = new RTCPeerConnection(rtcConfig());
       p.pc._peerId = to;
       setupPc(p);
@@ -3571,20 +4101,30 @@
     } catch { enableRelay(to); }
   }
 
-  function setupPc(p) {
+  function setupPc(p, peerDeviceId) {
     const id = p.pc._peerId;
     // 完美协商（Perfect Negotiation）状态位：避免双向同时发 offer 造成 glare
     p.makingOffer = false;
     p.ignoreOffer = false;
-    // 由双方 userId 大小决定“礼貌方”，结果两端一致，可预判冲突归属
-    p.polite = (myId != null) ? (myId < id) : true;
-    p.pc.onicecandidate = (e) => { if (e.candidate) sendSignal(id, { candidate: e.candidate }); };
+    // “礼貌方”判定：会议连接优先用设备 id 比较（每次连接唯一、两端必然一真一假），
+    // 彻底规避双方都判为礼貌方导致的重协商 glare 死锁（对端 answer 在 stable 被忽略、无视频）。
+    // 1:1 连接（不传 peerDeviceId）沿用 userId 比较，与历史一致；myId 缺失兜底为礼貌方（1:1 场景极少缺失）。
+    p.polite = (peerDeviceId != null && myDeviceId != null)
+      ? (myDeviceId > peerDeviceId)
+      : ((myId != null) ? (myId < id) : true);
+    p.pc.onicecandidate = (e) => { if (e.candidate) sendSignal(id, { candidate: e.candidate, connId: p.connId || null }); };
     // 新增/移除媒体轨道（addTrack）会自动触发本事件 → 生成新 offer（含媒体），无需另建连接
     p.pc.onnegotiationneeded = async () => {
+      // 守卫：仅在本端处于 stable 时才发起 offer。若上一次协商仍在进行
+      // （have-local-offer / have-remote-offer），本次为冗余触发（glare 后或重协商竞态），
+      // 直接丢弃——否则会产生第二个 offer → 第二个 answer，旧 answer 在 stable 状态到达时
+      // 抛 “Called in wrong state: stable” 并中断连接。正常初始建连（stable）与
+      // 屏幕共享等重协商（连接已建立后为 stable）均不受影响。
+      if (p.pc.signalingState !== "stable") return;
       try {
         p.makingOffer = true;
         await p.pc.setLocalDescription();
-        sendSignal(id, { sdp: p.pc.localDescription });
+        sendSignal(id, { sdp: p.pc.localDescription, connId: p.connId || null });
       } catch (err) {
         console.error("[WEBRTC] negotiationneeded error:", (err && err.message) || err);
       } finally {
@@ -3644,7 +4184,21 @@
     };
   }
 
-  async function handleSignal(data, from) {
+  // 把“远端描述尚未设置前到达”的 ICE 候选先排队，等 setRemoteDescription 之后 flush，
+  // 否则 localhost/LAN 下候选可能先于 SDP 到达，addIceCandidate 抛 “remote description not
+  // set” 被静默丢弃，导致 ICE 永远无法连通、对端视频流不渲染。
+  function flushCandidates(p) {
+    if (!p || !p.pendingCandidates || !p.pendingCandidates.length) return;
+    const list = p.pendingCandidates;
+    p.pendingCandidates = [];
+    for (const c of list) {
+      p.pc.addIceCandidate(c).catch((err) => {
+        if (!p.ignoreOffer) console.warn("[WEBRTC] addIceCandidate failed:", (err && err.message) || err);
+      });
+    }
+  }
+
+  async function handleSignal(data, from, fromDeviceId) {
     from = Number(from);
     if (!data) return;
     // 媒体控制信令（接听 / 拒绝 / 挂断）走独立通道，不参与 SDP/ICE 协商
@@ -3655,26 +4209,50 @@
       if (remoteVideo) remoteVideo.classList.toggle("screen", remoteIsSharingScreen);
       return;
     }
-    const p = ensurePeerConn(from);
-    if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); }
+    // 多设备同账号：每条连接带 connId，按 (userId:connId) 区分，避免 PC/手机共用 userId 时互相撞连接。
+    // 仅对「收到的 offer」或「本机已存在对应连接」的答案/候选进行处理；其余
+    // （同账号其它设备间的连接答案被广播到本机）直接忽略，避免产生互不相关的垃圾连接。
+    const connId = data.connId || null;
+    // 该信令若属于会议中的某个对等体（含同账号另一台设备），则按设备键处理；否则按 1:1 好友连接处理。
+    // 不要用 `fromDeviceId != null` 二次门控——会议中即使服务端没转发 deviceId，只要 from 在 meetingMembers 里就是会议对等体；
+    // 此前误把无 deviceId 的会议信令判为 1:1，导致流送到 #remoteVideo 而非会议瓦片，画面全黑。
+    const mtKey = meetingActive ? meetingSignalKey(from, fromDeviceId) : null;
+    const isMeeting = mtKey != null;
+    const key = isMeeting ? peerConnKey(mtKey, connId) : peerConnKey(from, connId);
+    const isOffer = !!(data.sdp && data.sdp.type === "offer");
+    let p;
+    if (isOffer || peers.has(key)) p = ensurePeerConn(key);
+    else { p = peers.get(key); if (!p) return; }
+    p.connId = connId || p.connId;
+    if (!p.pc) {
+      p.pc = new RTCPeerConnection(rtcConfig());
+      // 会议连接：用成员键（同账号为 selfdev:<deviceId>）作为 _peerId，保证 ontrack/信令投递一致；
+      // 1:1 连接：沿用 userId（与历史一致）。
+      p.pc._peerId = isMeeting ? mtKey : from;
+      // 会议连接传入对端设备 id，使 polite 判定按设备 id 比较（两端必然一真一假），规避 glare 死锁
+      setupPc(p, isMeeting ? fromDeviceId : null);
+      // 同账号多设备：用 deviceId 决定 polite（应答方 polite），避免重协商 glare 无法解冲突
+      if (isMeeting && from === myId && fromDeviceId) p.polite = (myDeviceId > fromDeviceId);
+    }
     try {
       if (data.sdp) {
         const desc = new RTCSessionDescription(data.sdp);
-        // 完美协商：检测 offer 冲突（本端正在发 offer 或连接非稳定态）
-        const offerCollision = (desc.type === "offer") && (p.makingOffer || p.pc.signalingState !== "stable");
-        p.ignoreOffer = !p.polite && offerCollision;
-        if (p.ignoreOffer) {
-          console.log("[WEBRTC] 忽略冲突 offer（impolite 方）", from);
-          return;
-        }
-        try {
-          // polite 方遇到冲突时，必须先回滚本地 offer 再接受对方 offer；
-          // 否则 setRemoteDescription 在 have-local-offer 状态抛错，最终协商只保留一方媒体轨道（单向流）。
-          if (offerCollision) {
-            await p.pc.setLocalDescription({ type: "rollback" });
+        if (desc.type === "offer") {
+          // 完美协商：检测 offer 冲突（本端正在发 offer 或连接非稳定态）
+          const offerCollision = (p.makingOffer || p.pc.signalingState !== "stable");
+          p.ignoreOffer = !p.polite && offerCollision;
+          if (p.ignoreOffer) {
+            console.log("[WEBRTC] 忽略冲突 offer（impolite 方）", from, connId);
+            return;
           }
-          await p.pc.setRemoteDescription(desc);
-          if (desc.type === "offer") {
+          try {
+            // polite 方遇到冲突时，必须先回滚本地 offer 再接受对方 offer；
+            // 否则 setRemoteDescription 在 have-local-offer 状态抛错，最终协商只保留一方媒体轨道（单向流）。
+            if (offerCollision) {
+              await p.pc.setLocalDescription({ type: "rollback" });
+            }
+            await p.pc.setRemoteDescription(desc);
+            flushCandidates(p); // 远端描述已设置，补投递此前排队到的 ICE 候选
             // 关键：主叫在收到“被叫已接听并 addTrack”的 offer 时，才补加本端媒体，
             // 使本次 answer 即携带主叫音视频。双方媒体在“单次协商(OFFER_B)”内完成，
             // 避免主叫先发 OFFER_A 含媒体、被叫接听又 OFFER_B 重复协商，导致主叫媒体流
@@ -3682,13 +4260,40 @@
             // 被叫侧此时 localStream 尚为 null（未接听），因此不会在此误加。
             if (localStream && !p.mediaAdded) addLocalMediaTracks(p);
             await p.pc.setLocalDescription(); // 自动生成 answer（含本端媒体）
-            sendSignal(from, { sdp: p.pc.localDescription });
+            // 回带 connId：答案只被发起的那台设备消费，同账号其它设备忽略（避免撞连接）
+            // 会议连接用成员键投递（同账号为 selfdev:<deviceId>），避免回环到本端所有同账号设备
+            sendSignal(isMeeting ? mtKey : from, { sdp: p.pc.localDescription, connId: p.connId || null });
+          } catch (err) {
+            console.error("[WEBRTC] setRemoteDescription(offer) error:", (err && err.message) || err);
+            if (!p.ignoreOffer) enableRelay(from);
           }
-        } catch (err) {
-          console.error("[WEBRTC] setRemoteDescription error:", (err && err.message) || err);
-          if (!p.ignoreOffer) enableRelay(from);
+        } else if (desc.type === "answer") {
+          // 仅当本端确有挂起 offer 时才应用 answer；否则为过期/重复 answer
+          // （glare 后旧 answer 迟到、或服务端重复投递），直接忽略——
+          // 否则会在 stable 状态下抛 “Called in wrong state: stable”，使本次协商中断、
+          // ontrack 永不触发、对端视频流无法渲染。
+          if (p.pc.signalingState !== "have-local-offer") {
+            console.warn("[WEBRTC] 收到过期/重复 answer（状态=" + p.pc.signalingState + "），忽略", { from, connId });
+            return;
+          }
+          try {
+            await p.pc.setRemoteDescription(desc);
+            flushCandidates(p); // 远端描述已设置，补投递此前排队到的 ICE 候选
+          } catch (err) {
+            console.error("[WEBRTC] setRemoteDescription(answer) error:", (err && err.message) || err);
+            if (!p.ignoreOffer) enableRelay(from);
+          }
         }
       } else if (data.candidate) {
+        // 候选可能在 offer/answer 之前到达：远端描述尚未设置时 addIceCandidate 会抛
+        // “remote description not set” 被静默丢弃，导致 ICE 永远无法连通。
+        // 因此先排队，等 setRemoteDescription 之后 flushCandidates 统一补投递。
+        if (p.pc.signalingState === "closed") return;
+        if (!p.pc.remoteDescription) {
+          p.pendingCandidates = p.pendingCandidates || [];
+          p.pendingCandidates.push(data.candidate);
+          return;
+        }
         p.pc.addIceCandidate(data.candidate).catch((err) => {
           if (!p.ignoreOffer) console.warn("[WEBRTC] addIceCandidate failed:", (err && err.message) || err);
         });
@@ -3700,7 +4305,7 @@
 
   function setupDataChannel(ch) {
     const id = ch._peerId;
-    const p = peers.get(Number(id));
+    const p = getPeerConn(id);
     ch.onopen = () => {
       if (p) p.p2pReady = true;
       clearEntering();
@@ -3723,16 +4328,20 @@
   }
 
   function sendSignal(to, data) {
-    to = Number(to);
-    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
-      sigSocket.send(JSON.stringify({ type: "signal", to, data }));
+    if (!sigSocket || sigSocket.readyState !== WebSocket.OPEN) return;
+    // 同账号多设备会议：目标为 "selfdev:<deviceId>"，按设备精准投递，避免回环到本端所有同账号设备
+    if (typeof to === "string" && to.indexOf("selfdev:") === 0) {
+      const deviceId = to.slice("selfdev:".length);
+      sigSocket.send(JSON.stringify({ type: "signal", toDeviceId: deviceId, data }));
+    } else {
+      sigSocket.send(JSON.stringify({ type: "signal", to: Number(to), data }));
     }
   }
 
   function enableRelay(to) {
     relayActive = true;
     if (to != null) {
-      const p = peers.get(Number(to));
+      const p = getPeerConn(Number(to));
       if (p) p.p2pReady = false;
       setPeerStatus(to, "中继模式（服务器转发）", "warn");
     } else {
@@ -3852,6 +4461,8 @@
       remoteVideo.hidden = false;
       if (callRemoteAvatar) callRemoteAvatar.hidden = true;
     }
+    // 显式触发播放，避免自动播放策略拦截导致黑屏（拦截时静默忽略）
+    remoteVideo.play().catch(() => {});
     if (callState !== "active") {
       callState = "active";
       setCallStateLabel("通话中");
@@ -3877,6 +4488,21 @@
     if (incomingAvatar) renderAvatarInto(incomingAvatar, f && f.avatar, ((f && f.username) || "?").charAt(0).toUpperCase());
     callIncoming.hidden = false;
     try { playRingtone(); } catch {}
+    // 页面隐藏时，来电必须靠系统通知才能被注意到（页面内接听界面不可见）
+    if (document.hidden) {
+      ensureNotifyPermission();
+      showSystemNotification(t("call.incoming.prefix") + ((f && f.username) || String(from)), {
+        body: t(type === "video" ? "call.incoming.videoMsg" : "call.incoming.voiceMsg"),
+        tag: "incoming-call",
+        requireInteraction: true,
+        renotify: true,
+        data: { kind: "call", from, type },
+        actions: [
+          { action: "accept", title: t("call.notify.accept") },
+          { action: "reject", title: t("call.notify.reject") },
+        ],
+      }).then(function (ok) { if (!ok) handleNotifyBlocked(); });
+    }
   }
 
   function hideIncomingCall() {
@@ -4101,6 +4727,7 @@
     meetingGroupId = groupId;
     meetingType = type;
     meetingMembers = new Set([myId]);
+    meetingConnIds = new Map(); // 新会议：重置连接级 connId
     micMuted = false; camOff = false;
     bindMeetingLocal();
     showMeetingPanel(g);
@@ -4161,44 +4788,66 @@
     attachMeetingStream(id, null);
   }
 
-  async function connectMeetingPeer(memberId) {
-    memberId = Number(memberId);
-    if (memberId === myId || !meetingActive) return;
-    const p = ensurePeerConn(memberId);
-    const st = p.pc ? p.pc.connectionState : null;
-    // 已连接 / 连接中：无需重建，仅兼容“迟到补加媒体”，并补渲染已缓存的远端流
-    if (p.pc && (st === "connected" || st === "connecting" || st === "new")) {
-      if (localStream && !p.mediaAdded) addLocalMediaTracks(p);
-      maybeApplyScreenShare(p); // 共享中：迟到成员也立即发送屏幕轨道
-      // 已存在的连接也要登记为会议成员（如会议前已存在 1:1 pc，早期返回没加过），
-      // 否则该成员流到达时因不在 meetingMembers 而不渲染，造成瓦片缺失。
-      meetingMembers.add(memberId);
-      if (meetingActive) ensureMeetingTile(memberId);
-      if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
+  async function connectMeetingPeer(fromUserId, fromDeviceId) {
+    const key = meetingMemberKey(fromUserId, fromDeviceId);
+    // 同账号且恰为本机设备：跳过（服务端已排除发起者自身设备，这里兜底）
+    if (Number(fromUserId) === myId && (fromDeviceId || null) === myDeviceId) return;
+    if (!meetingActive) return;
+    // 登记会议成员 + 瓦片占位（发起方/应答方都需要，便于“已加入”可见与流到达即渲染）
+    meetingMembers.add(key);
+    if (meetingActive) ensureMeetingTile(key);
+    // 确定性发起方：不同账号用 userId 比较；同账号（共用 userId）用 deviceId 比较，
+    // 否则双方 userId 相等、都不发起 → 永远建不了连接。deviceId 全局唯一，恰好一方为发起方。
+    const iAmOfferer = meetingIAmOfferer(fromUserId, fromDeviceId);
+    if (!iAmOfferer) {
+      // 应答方：本函数不建连、不发 offer，等对方（较小 id/deviceId）的 offer 到达后由 handleSignal
+      // 用其中的 connId 建连并应答；本端已有缓存流则直接补渲染到网格。
+      if (peerStreams.has(key)) attachMeetingStream(key, peerStreams.get(key));
       return;
     }
-    teardownPeer(memberId);
+    // 发起方：复用“本次会话”已生成的 connId（按成员键持久化），保证幂等 + 与对方上一次
+    // offer 对应；仅在无 connId 或旧连接已死时才生成新 connId 并重建，避免反复 drop 重建。
+    let connId = meetingConnIds.get(key);
+    const pcKey = peerConnKey(key, connId);
+    const existing = connId ? peers.get(pcKey) : undefined;
+    if (existing && existing.pc) {
+      const st = existing.pc.connectionState;
+      if (st === "connected" || st === "connecting" || st === "new") {
+        // 已连/连中：不重建、不重发 offer；仅迟到补加媒体与渲染已缓存流
+        if (localStream && !existing.mediaAdded) addLocalMediaTracks(existing);
+        maybeApplyScreenShare(existing);
+        if (peerStreams.has(key)) attachMeetingStream(key, peerStreams.get(key));
+        return;
+      }
+      // 旧连接已失败/关闭：清掉旧键，下面用新 connId 重建
+      dropMeetingPeer(key);
+    }
+    // 真正需要新建：生成并持久化新 connId（同会话内复用）
+    connId = crypto.randomUUID();
+    meetingConnIds.set(key, connId);
     try {
+      const p = ensurePeerConn(peerConnKey(key, connId));
+      p.connId = connId;
       p.pc = new RTCPeerConnection(rtcConfig());
-      p.pc._peerId = memberId;
-      setupPc(p);
+      p.pc._peerId = key; // 成员键（同账号为 selfdev:<deviceId>），保证 ontrack/信令一致
+      // 传入对端设备 id，使 polite 判定按设备 id 比较（两端必然一真一假），规避 glare 死锁
+      setupPc(p, fromDeviceId);
+      // 同账号多设备：用 deviceId 决定 polite（应答方 polite），避免重协商 glare 无法解冲突
+      if (Number(fromUserId) === myId && fromDeviceId) p.polite = (myDeviceId > fromDeviceId);
       p.mediaAdded = false;
-      meetingMembers.add(memberId);
-      if (meetingActive) ensureMeetingTile(memberId); // 立即出现头像占位，确保“已加入”可见
-      // 群会议：立即携带本端媒体（mesh 每人各自带媒体，无需等对方先发 offer），触发协商
+      // 群会议：立即携带本端媒体（mesh 每人各自带媒体），触发 onnegotiationneeded 发带 connId 的 offer；
+      // 无本地媒体时仍发送“空 offer”以建立连接（确定性模型下由应答方在 answer 中补媒体），避免双方互等。
       if (localStream) {
         addLocalMediaTracks(p);
       } else {
-        // 无本地媒体（无摄像头 / insecure context）：【不要】发“空协商（空 offer）”。
-        // 空 offer 不含任何媒体 m-line，会使本次协商中对方即便有摄像头也无法下行视频（最终黑屏）。
-        // 这里仅建立 RTCPeerConnection，等待有媒体的一方发起 offer；对方 answer 后视频正常下行。
-        // （若双方都无媒体则不建立连接，但头像占位瓦片已显示，符合预期。）
+        await p.pc.setLocalDescription();
+        sendSignal(key, { sdp: p.pc.localDescription, connId });
       }
       maybeApplyScreenShare(p); // 共享中：新连接也立即发送屏幕轨道
-      // 若该成员此前已发来流（先于本端加入会议到达），补渲染到网格
-      if (peerStreams.has(memberId)) attachMeetingStream(memberId, peerStreams.get(memberId));
+      if (peerStreams.has(key)) attachMeetingStream(key, peerStreams.get(key));
     } catch (e) {
-      console.error("[MEETING] connectMeetingPeer 失败", memberId, e);
+      console.error("[MEETING] connectMeetingPeer 失败", key, e);
+      meetingConnIds.delete(key); // 建连失败：清掉 connId，下次重试可新建
     }
   }
 
@@ -4328,7 +4977,7 @@
       const init = (info.name || String(id)).trim().charAt(0).toUpperCase();
       tile.dataset.initial = init || "?";
       // 若该成员正在共享屏幕，直接标记为 contain 显示（避免后续才收到广播导致先被裁切）
-      if (screenSharingMembers.has(Number(id))) tile.classList.add("screen");
+      if (screenSharingMembers.has(id)) tile.classList.add("screen");
       // 聚焦模式且不是被聚焦者 → 进胶片条；否则进主网格
       const intoStrip = spotlightUid != null && String(spotlightUid) !== String(id);
       const container = (intoStrip && meetingFilmstrip) ? meetingFilmstrip : meetingGrid;
@@ -4340,6 +4989,9 @@
     }
     const v = tile.querySelector("video");
     if (v.srcObject !== stream) v.srcObject = stream;
+    // 显式触发播放：部分浏览器对动态设置 srcObject 的自动播放策略较严，
+    // 若不显式 play()，视频可能停在首帧（黑屏）。拦截时静默忽略（用户首次交互后会恢复）。
+    v.play().catch(() => {});
     updateTileVideoState(id); // 同步头像占位显示（摄像头关 / 未共享时）
   }
 
@@ -4493,6 +5145,7 @@
     meetingActive = true;
     meetingType = type;
     meetingMembers = new Set([myId]);
+    meetingConnIds = new Map(); // 新会议：重置连接级 connId
     meetingLeft = false;
     meetingJoinPending = false;
     roomPeers = new Map();
@@ -4525,7 +5178,7 @@
     if (meetingActive && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "room-leave", roomId: meetingRoomId }));
     }
-    for (const id of meetingMembers) { if (id !== myId) dropPeerConn(id); }
+    for (const id of meetingMembers) { if (id !== myId) dropMeetingPeer(id); }
     clearMeetingTiles();
     spotlightUid = null; screenSharingMembers = new Set();
     if (meetingPanel) meetingPanel.classList.remove("spotlight");
@@ -4542,6 +5195,7 @@
       meetingLeft = true; showMeetingLeft();
     } else {
       meetingLeft = false; meetingRoomId = null; meetingMembers = new Set();
+      meetingConnIds = new Map(); // 清掉陈旧 connId，下次入会重新协商
       meetingJoinPending = false;
       hideMeetingLeft();
       if (meetingPanel) meetingPanel.hidden = true;
@@ -4632,62 +5286,78 @@
 
   // 房间模式下：按 id 取昵称/头像（优先 roomPeers，其次回退 id）
   function meetingPeerInfo(id) {
-    id = Number(id);
+    // 房间模式的成员键可能是数字（不同账号）或 "selfdev:<deviceId>"（同账号多设备）。
+    // 切勿在最外层 Number()——会把 "selfdev:xxx" 变成 NaN，导致 String(id) 兜底显示成 "NaN"。
+    // 先按原始键查，再降级到数字键；最后兜底用原始 id 字符串化（"selfdev:xxx" 仍可读）。
     if (meetingMode === "room") {
-      const r = roomPeers.get(id);
+      const r = roomPeers.get(id) || roomPeers.get(Number(id));
       if (r) return { name: r.name || String(id), avatar: r.avatar || "" };
       return { name: String(id), avatar: "" };
     }
-    return groupMemberName(meetingGroupId, id);
+    return groupMemberName(meetingGroupId, Number(id));
   }
 
   // ---- 房间信令处理（与群会议对称，仅 key 为 roomId）----
-  function onRoomJoin(from, name) {
+  function onRoomJoin(from, name, deviceId) {
     from = Number(from);
     if (!meetingActive || meetingRoomId == null) return;
+    const key = meetingMemberKey(from, deviceId);
+    // 同账号且恰为本机设备：跳过（兜底，服务端已排除发起者自身设备）
+    if (key === myId) return;
     // 记录新加入者昵称（服务端 room-join 已携带），供瓦片/聊天显示
-    if (name) roomPeers.set(from, { name, avatar: "" });
-    teardownPeer(from);
-    connectMeetingPeer(from);
+    if (name) roomPeers.set(key, { name, avatar: "", userId: from, deviceId: deviceId || null });
+    // 注意：不要无条件 teardownPeer(from)。room-join 可能被服务端重复下发（同一成员多次到达），
+    // 每次 teardown 都会拆掉正在协商的连接并重建，产生多个 offer；本端最后一代 pc 只持有最后一次
+    // 的 offer，对方回的其余 answer 全部落在 stable 窗口，被“过期 answer”守卫忽略 → 协商错乱、
+    // 对端流 ontrack 不触发、视频流无法渲染。连接建立/重连交由 connectMeetingPeer 幂等处理：
+    // 已连接/连接中直接返回，失败或关闭才重建。
+    connectMeetingPeer(from, deviceId);
+    // 我正在共享屏幕/关摄像头时，晚加入的成员没收到过广播，主动定向补发一次（按设备精准投递）。
     if (isSharingScreen && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
-      emitSignal({ type: "room-screen", roomId: meetingRoomId, to: from });
+      emitSignal({ type: "room-screen", roomId: meetingRoomId, toDeviceId: deviceId });
     }
     if (camOff && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
-      emitSignal({ type: "room-cam", roomId: meetingRoomId, on: false, to: from });
+      emitSignal({ type: "room-cam", roomId: meetingRoomId, on: false, toDeviceId: deviceId });
     }
   }
-  function onRoomLeave(from) {
+  function onRoomLeave(from, deviceId) {
     from = Number(from);
     if (!meetingActive) return;
-    meetingMembers.delete(from); roomPeers.delete(from);
-    screenSharingMembers.delete(from); camOffMembers.delete(from);
-    removeMeetingTile(from); dropPeerConn(from); updateMeetingCount();
+    const key = meetingMemberKey(from, deviceId);
+    meetingMembers.delete(key); roomPeers.delete(key);
+    screenSharingMembers.delete(key); camOffMembers.delete(key);
+    removeMeetingTile(key); dropMeetingPeer(key); updateMeetingCount();
   }
   function onRoomRoster(roomId, members) {
     roomId = String(roomId);
     if (!meetingActive || String(meetingRoomId) !== roomId) return;
     roomPeers = new Map();
     meetingMembers = new Set([myId]);
+    meetingConnIds = new Map(); // 名册重建：清陈旧 connId，避免复用已失效的连接键
     (members || []).forEach((m) => {
       const id = Number(m.id);
-      roomPeers.set(id, { name: m.name || String(id), avatar: m.avatar || "" });
-      if (id === myId) return;
-      meetingMembers.add(id);
-      connectMeetingPeer(id);
+      const key = meetingMemberKey(id, m.deviceId);
+      // 跳过本机自己的设备（同账号多设备时名册会含本机设备，但无需与它自身建连）
+      if (id === myId && (m.deviceId || null) === myDeviceId) return;
+      roomPeers.set(key, { name: m.name || String(id), avatar: m.avatar || "", userId: id, deviceId: m.deviceId || null });
+      meetingMembers.add(key);
+      connectMeetingPeer(id, m.deviceId);
     });
     updateMeetingCount();
   }
-  function onRoomScreen(from, on) {
+  function onRoomScreen(from, on, deviceId) {
     from = Number(from);
     if (!meetingActive) return;
-    if (on) { screenSharingMembers.add(from); setTileScreenFlag(from, true); }
-    else { screenSharingMembers.delete(from); setTileScreenFlag(from, false); updateTileVideoState(from); }
+    const key = meetingMemberKey(from, deviceId);
+    if (on) { screenSharingMembers.add(key); setTileScreenFlag(key, true); }
+    else { screenSharingMembers.delete(key); setTileScreenFlag(key, false); updateTileVideoState(key); }
   }
-  function onRoomCam(from, on) {
+  function onRoomCam(from, on, deviceId) {
     from = Number(from);
     if (!meetingActive) return;
-    if (on) camOffMembers.delete(from); else camOffMembers.add(from);
-    updateTileVideoState(from);
+    const key = meetingMemberKey(from, deviceId);
+    if (on) camOffMembers.delete(key); else camOffMembers.add(key);
+    updateTileVideoState(key);
   }
   function onRoomChat(m) {
     if (!meetingActive && !meetingLeft) return;
@@ -4910,7 +5580,7 @@
       noVideo = meetingType === "audio" ? true : (camOff && !isSharingScreen);
       if (!localStream) noVideo = true;
     } else {
-      const id = Number(uid);
+      const id = uid; // 成员键可能是数字（不同账号）或 "selfdev:<deviceId>"（同账号多设备）
       noVideo = meetingType === "audio" ? true : (camOffMembers.has(id) && !screenSharingMembers.has(id));
     }
     tile.classList.toggle("no-video", !!noVideo);
@@ -5062,21 +5732,60 @@
     }
   }
 
-  // 用 WebAudio 生成短促提示音，避免依赖外部音频文件
-  function playRingtone() {
+  // ---------- 提示音（Web Audio 合成，无需外部音频文件，离线可用）----------
+  // 复用单一 AudioContext：避免每次事件都重建/关闭；浏览器要求在用户手势后才可 resume 解锁。
+  let _audioCtx = null;
+  function getAudioCtx() {
     try {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) return;
-      const ctx = new Ctx();
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.connect(g); g.connect(ctx.destination);
-      o.frequency.value = 660;
-      g.gain.value = 0.05;
-      o.start();
-      setTimeout(() => { try { o.stop(); ctx.close(); } catch {} }, 600);
+      if (!_audioCtx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return null;
+        _audioCtx = new Ctx();
+      }
+      if (_audioCtx.state === "suspended") _audioCtx.resume().catch(() => {});
+      return _audioCtx;
+    } catch { return null; }
+  }
+  // 单个柔和音符：sine + 快速起音 + 指数衰减，听感不刺耳
+  function playTone(ctx, freq, startAt, dur, peak) {
+    try {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, startAt);
+      gain.gain.setValueAtTime(0.0001, startAt);
+      gain.gain.exponentialRampToValueAtTime(peak, startAt + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + dur);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(startAt);
+      osc.stop(startAt + dur + 0.02);
     } catch {}
   }
+  // 新消息提示音：温馨「叮—咚」两声（B5 → E6），比来电更轻，避免打扰
+  function playMessageChime() {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const t0 = ctx.currentTime;
+    playTone(ctx, 988, t0, 0.15, 0.14);
+    playTone(ctx, 1319, t0 + 0.12, 0.22, 0.14);
+  }
+  // 来电铃声：三声上行「叮叮叮」（A5 → C#6 → E6），辨识度高、节奏轻快
+  function playCallRing() {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const t0 = ctx.currentTime;
+    const seq = [880, 1109, 1319];
+    for (let i = 0; i < seq.length; i++) playTone(ctx, seq[i], t0 + i * 0.2, 0.16, 0.16);
+  }
+  // 兼容旧调用点（showIncomingCall 仍调用 playRingtone）
+  function playRingtone() { playCallRing(); }
+  // 首个用户手势后解锁 AudioContext（满足浏览器 autoplay 策略），确保隐藏态也能出声
+  function unlockAudioOnce() {
+    const ctx = getAudioCtx();
+    if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
+  }
+  window.addEventListener("pointerdown", unlockAudioOnce, { once: true });
+  window.addEventListener("keydown", unlockAudioOnce, { once: true });
 
   function sendChat() {
     const text = chatInput.value.trim();
@@ -5097,12 +5806,21 @@
     const peer = friends.find((f) => f.id === currentPeer);
     let delivered = false;
     const p = getPeerConn(currentPeer);
-    if (p && p.p2pReady && p.dc && p.dc.readyState === "open") {
-      p.dc.send(JSON.stringify({ type: "chat", id, ts, text }));
-      delivered = true;
-    } else if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+    // 实时通道：优先经服务端中继转发 —— routeTo 会把消息 fan-out 给接收方的全部设备
+    // （含后登录的手机端），保证同一账号多设备都能收到。已与本端建立 P2P 直连的设备
+    // 仍额外走 DataChannel 作为快速通道；接收端按消息 id 去重，不会重复渲染/计未读。
+    // 修复：原来一旦 DataChannel 可用就「只走 P2P、绕过中继」，导致接收方后登录的设备
+    // （没有 DataChannel）收不到消息。
+    if (sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "chat", to: currentPeer, id, ts, text }));
       delivered = true;
+    }
+    // P2P 快速通道：发给该好友本机已就绪的全部设备连接（多设备同账号时可能有多条），
+    // 接收端按消息 id 去重，不会重复渲染/计未读。中继仍照常 fan-out，保证可达。
+    for (const [k, p] of peers) {
+      if (peerUserIdOf(k) === Number(currentPeer) && p.p2pReady && p.dc && p.dc.readyState === "open") {
+        try { p.dc.send(JSON.stringify({ type: "chat", id, ts, text })); } catch {}
+      }
     }
     // 在线则实时已送达；离线（通道不可用）则消息已存服务端，对方上线后接收
     if (delivered) {
@@ -5181,11 +5899,21 @@
   // ---------- 本地缓存 + 与服务端同步 ----------
   // 收到一条消息（中继或 P2P）：写本地 IndexedDB，必要时渲染，并补推到服务端
   async function onChatReceived(m) {
+    // 先于落库判断本条消息是否已存在：当消息经 DataChannel + 服务端中继双通道到达时，
+    // 仅首次（existed=false）计入未读，避免未读红点被重复 +1。
+    // 注意：去重基于「标签页内存集合」rtUnreadDedup，而非共享的 IndexedDB.has()——
+    // 多首页标签共用同一 IndexedDB，若用 has() 会因其它标签先写库而误判“已存在”，
+    // 导致其它标签漏计未读（仅一个首页弹红点）。见 rtUnreadDedup 定义处注释。
+    const existed = rtUnreadDedup.has(m.id);
+    rtUnreadDedup.add(m.id);
     m.synced = false;
     await ChatDB.put(m).catch(() => {});
     flushPending();
-    const viewing = chatVisible && currentPeer != null && Number(currentPeer) === Number(m.from);
-    console.log("[UNREAD-DEBUG] onChatReceived", { from: m.from, fromType: typeof m.from, myId, currentPeer, chatVisible, viewing, text: String(m.text || "").slice(0, 20) });
+    // 会话对方：自己发出的消息，会话对方是 m.to；收到他人消息，会话对方是 m.from。
+    // （服务端回显的「同账号其它设备发的消息」会带 to 字段，据此归到正确会话。）
+    const peerOfMsg = (Number(m.from) === Number(myId)) ? Number(m.to) : Number(m.from);
+    const viewing = chatVisible && currentPeer != null && Number(currentPeer) === Number(peerOfMsg);
+    console.log("[UNREAD-DEBUG] onChatReceived", { from: m.from, fromType: typeof m.from, myId, currentPeer, peerOfMsg, chatVisible, viewing, text: String(m.text || "").slice(0, 20) });
     if (viewing) {
       // 正在看这个好友的对话：直接渲染为已读
       if (!renderedIds.has(m.id)) {
@@ -5193,13 +5921,36 @@
         renderMessageRow(m.from === myId ? "me" : "peer", m.text, m.ts);
       }
       // 正在看此会话收到新消息：已读游标跟随最新，避免换端后这些又算未读
-      markRead(m.from, m.ts);
+      markRead(peerOfMsg, m.ts);
+      // 跨标签页：本标签已读此会话，通知其它首页标签同步清零红点
+      CrossTab.post({ type: "peer-read", peerId: peerOfMsg, ts: m.ts });
       // 新消息把会话前置（更新预览与排序）
-      upsertConversation("peer", m.from, m.ts, m.text, false);
+      upsertConversation("peer", peerOfMsg, m.ts, m.text, false);
     } else if (m.from !== myId) {
-      // 未选中该好友：累加未读红点提醒（持久化），并把会话前置
-      addUnread(m.from);
-      upsertConversation("peer", m.from, m.ts, m.text, false);
+      // 未选中该好友：累加未读红点提醒（持久化），并把会话前置。
+      // 若该消息 ts 不晚于本端已知的最近已读游标（已在其它端读过），则不重复 bump。
+      // existed 防止「DataChannel + 中继」双通道重复计未读。
+      if (!existed && (m.ts || 0) > (lastReadCache[m.from] || 0)) {
+        addUnread(m.from);
+      }
+      upsertConversation("peer", peerOfMsg, m.ts, m.text, false);
+    } else {
+      // 同一账号其它设备发来的消息（跨端同步）：不弹未读、不通知，
+      // 但照样把会话前置并刷新预览，让本端会话列表实时反映「我在另一台设备发了消息」。
+      upsertConversation("peer", peerOfMsg, m.ts, m.text, false);
+    }
+    // 页面隐藏时（最小化 / 切到其它标签）：弹系统通知提醒新私聊消息
+    if (document.hidden && m.from !== myId) {
+      const f = friends.find((x) => x.id === m.from);
+      // 仅在通知真正弹出时才响提示音；权限不足时不响铃（避免「响铃却没卡片」的误导），改为引导开启
+      showSystemNotification((f && f.username) || String(m.from), {
+        body: String(m.text || ""),
+        tag: "msg-" + m.from,
+        data: { kind: "message", from: m.from },
+      }).then(function (ok) {
+        if (ok) { try { playMessageChime(); } catch {} }
+        else handleNotifyBlocked();
+      });
     }
   }
   // 打开会话时：先渲染本地缓存（即时、离线可用），再增量同步服务端
@@ -5317,6 +6068,21 @@
       renderGroups();
     }
   }
+  // 跨标签页：其它首页标签把某群标记为已读后，本标签同步清零群红点。
+  function applyRemoteGroupRead(gid, ts) {
+    gid = Number(gid); ts = Number(ts) || 0;
+    if (!gid) return;
+    clearGroupUnread(gid);
+  }
+  // 覆盖式设置群未读数（重算用）。
+  function setGroupUnread(gid, n) {
+    gid = Number(gid); n = Number(n) || 0;
+    if (n <= 0) { clearGroupUnread(gid); return; }
+    groupUnread[gid] = n;
+    saveGroupUnread();
+    updateUnreadTitle();
+    renderGroups();
+  }
 
   // ---- 群列表加载 / 渲染 ----
   async function loadGroups() {
@@ -5390,6 +6156,8 @@
     // 打开群会话即上报「已读」到服务端（用会话最新 ts），供其它端计算未读基准
     const gMax = await ChatDB.maxTs(groupConvKey(g.id));
     if (gMax) markGroupRead(g.id, gMax);
+    // 跨标签页：本标签已读此群，通知其它首页标签同步清零群红点
+    if (gMax) CrossTab.post({ type: "group-read", gid: g.id, ts: gMax });
     // 打开群会话：确保该会话出现在列表（首次发起聊天时创建），不改已有排序
     ensureConversation("group", g.id);
   }
@@ -5824,6 +6592,23 @@
     } else if (m.from !== myId) {
       bumpGroupUnread(gid);
       upsertConversation("group", gid, m.ts, m.text, false);
+    } else {
+      // 同一账号其它设备发来的群消息（跨端同步）：不弹未读/通知，但前置会话刷新预览
+      upsertConversation("group", gid, m.ts, m.text, false);
+    }
+    // 页面隐藏时：弹系统通知提醒新群消息（标题群名，正文「发送者：文本」）
+    if (document.hidden && m.from !== myId) {
+      const g = groups.find((x) => x.id === m.groupId);
+      const gname = (g && g.name) || ("群 " + m.groupId);
+      const sm = groupMemberName(m.groupId, m.from);
+      showSystemNotification(gname, {
+        body: sm.name + "：" + String(m.text || ""),
+        tag: "grp-" + m.groupId,
+        data: { kind: "group", groupId: m.groupId },
+      }).then(function (ok) {
+        if (ok) { try { playMessageChime(); } catch {} }
+        else handleNotifyBlocked();
+      });
     }
   }
 
@@ -5873,21 +6658,33 @@
         msgs = data.messages || [];
       } catch (e) { continue; }
       const viewing = chatMode === "group" && currentGroup === gid && chatVisible;
+      const newMsgs = [];
       for (const m of msgs) {
         if (m.from === myId) continue;
         if (await ChatDB.has(m.id)) continue;
         await ChatDB.put({ ...m, to: groupConvKey(gid), groupId: gid, conv: groupConvKey(gid), synced: true }).catch(() => {});
-        if (viewing) {
+        newMsgs.push(m);
+      }
+      if (viewing) {
+        for (const m of newMsgs) {
           if (!groupRenderedIds.has(m.id)) {
             groupRenderedIds.add(m.id);
             const sm = groupMemberName(gid, m.from);
             renderMessageRow(m.from === myId ? "me" : "peer", m.text, m.ts, sm.name, sm.avatar);
           }
-        } else {
-          bumpGroupUnread(gid);
         }
+        clearGroupUnread(gid);
+      } else {
+        // 覆盖式重算群未读，避免其它端已读后本端旧红点残留
+        const all = await ChatDB.allForConv(groupConvKey(gid)).catch(() => []);
+        let trueUnread = 0;
+        for (const m of all) {
+          if (m.from === myId) continue;
+          if ((m.ts || 0) <= (lastRead || 0)) continue;
+          trueUnread++;
+        }
+        setGroupUnread(gid, trueUnread);
       }
-      if (viewing) clearGroupUnread(gid);
     }
   }
 
@@ -5936,6 +6733,40 @@
     if (last && last !== cur && cur !== "unknown") showUpdateBanner(cur);
     localStorage.setItem("app-version", cur);
   }
+
+  // ---------- 安装到桌面（PWA）：捕获 beforeinstallprompt，展示轻量提示条 ----------
+  function setupInstallPrompt() {
+    const banner = $("#installBanner");
+    const btn = $("#installBtn");
+    const dismiss = $("#installDismiss");
+    // 已安装或曾主动忽略则不再打扰；不支持捕获安装事件的环境（如 iOS Safari）走系统“添加到主屏幕”
+    if (localStorage.getItem("app-installed") === "1") return;
+    const canPrompt = "BeforeInstallPromptEvent" in window || "onbeforeinstallprompt" in window;
+    if (!canPrompt) return;
+
+    let deferred = null;
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();              // 阻止浏览器默认迷你信息条，改用我们自己的提示条
+      deferred = e;
+      if (localStorage.getItem("app-install-dismissed") !== "1" && banner) banner.hidden = false;
+    });
+
+    if (btn) btn.addEventListener("click", async () => {
+      if (!deferred) return;
+      deferred.prompt();
+      try { await deferred.userChoice; } catch (e) {}
+      deferred = null;
+      if (banner) banner.hidden = true;
+    });
+    if (dismiss) dismiss.addEventListener("click", () => {
+      if (banner) banner.hidden = true;
+      localStorage.setItem("app-install-dismissed", "1");
+    });
+    window.addEventListener("appinstalled", () => {
+      if (banner) banner.hidden = true;
+      localStorage.setItem("app-installed", "1");
+    });
+  }
   // 接收 Service Worker 的版本通知，并主动查询，确保本端优先（旧缓存）场景下更新“及时上报”。
   // 两种来源：
   //  ① SW_VERSION_UPDATE —— SW 后台拉到新 HTML 时主动推送（快速路径，可能因竞态早于本监听而丢失）；
@@ -5949,13 +6780,113 @@
       localStorage.setItem("app-version", ver);
     }
   }
+  // ---- 系统通知（页面隐藏时提醒新消息 / 来电）----
+  // 仅当 Notification 权限已授予且页面处于隐藏态（document.hidden）时，由 JS 主动通过 Service
+  // Worker 弹出系统通知。注意：这是「页面存活时主动弹通知」，并非依赖 Push API 的服务端推送，
+  // 因此不依赖 Google FCM —— 国内 Android / iOS / 桌面浏览器全平台可用（这正是 Web Push 在国内最大的坑）。
+  function notificationsSupported() { return typeof Notification !== "undefined"; }
+
+  async function ensureNotifyPermission() {
+    if (!notificationsSupported()) return "unsupported";
+    const cur = Notification.permission;
+    if (cur === "granted" || cur === "denied") return cur;
+    // 仅在用户手势上下文调用（点击聊天 / 通话），否则浏览器会忽略请求
+    try { return await Notification.requestPermission(); } catch (e) { return Notification.permission; }
+  }
+
+  // 统一走 SW.showNotification：支持 notificationclick 聚焦回应用 + 来电「接听 / 拒绝」按钮；
+  // 失败回退到页面内 new Notification（点击聚焦能力受限，但提醒仍有效）。
+  async function showSystemNotification(title, options) {
+    if (!notificationsSupported() || Notification.permission !== "granted") return false;
+    options = options || {};
+    if (!options.icon) options.icon = "/icon-192.png";
+    try {
+      if ("serviceWorker" in navigator) {
+        const reg = await navigator.serviceWorker.ready;
+        await reg.showNotification(title, options);
+        return true;
+      }
+    } catch (e) { /* 回退到页面内通知 */ }
+    try { new Notification(title, options); return true; } catch (e) {}
+    return false;
+  }
+
+  // 通知因权限不足未能弹出：显示「开启桌面通知」引导条。
+  // 仅当权限非 granted 时显示；granted 却没卡片通常是系统勿扰/专注模式，不再打扰，仅记录。
+  function handleNotifyBlocked() {
+    if (!notificationsSupported()) return;
+    if (Notification.permission === "granted") return;
+    showNotifyPermBanner();
+  }
+
+  function showNotifyPermBanner() {
+    const b = document.getElementById("notifyPermBanner");
+    if (!b) return;
+    // 本次会话内用户主动关闭过 → 不再自动打扰
+    try { if (sessionStorage.getItem("notify-banner-dismissed") === "1") { b.hidden = true; return; } } catch {}
+    const perm = notificationsSupported() ? Notification.permission : "unsupported";
+    if (perm === "granted") { b.hidden = true; return; }
+    const txt = b.querySelector("[data-role=txt]");
+    const btn = b.querySelector("[data-role=btn]");
+    const closeBtn = b.querySelector("[data-role=close]");
+    if (closeBtn) closeBtn.onclick = function () {
+      b.hidden = true;
+      try { sessionStorage.setItem("notify-banner-dismissed", "1"); } catch {}
+    };
+    if (perm === "denied" || perm === "unsupported") {
+      // 已拒绝 / 浏览器不支持：提示去系统或浏览器设置开启（Mac 在地址栏左侧 🔔 处）
+      if (txt) txt.textContent = t("notify.denied");
+      if (btn) btn.hidden = true;
+    } else {
+      // default：温和引导一键开启
+      if (txt) txt.textContent = t("notify.banner");
+      if (btn) { btn.hidden = false; btn.textContent = t("notify.open"); btn.onclick = onEnableNotify; }
+    }
+    b.hidden = false;
+  }
+
+  async function onEnableNotify() {
+    const r = await ensureNotifyPermission();
+    const b = document.getElementById("notifyPermBanner");
+    if (r === "granted") { if (b) b.hidden = true; }
+    else showNotifyPermBanner(); // denied → 切到「去设置开启」文案
+  }
+
+  // 页面重新可见时，若通知权限仍未开启，温和提示一次（隐藏态没收到的卡片，回来补个引导）
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) showNotifyPermBanner();
+    });
+  }
+
+  // 调试 / 测试钩子（无害，便于排查通知权限与触发）
+  if (typeof window !== "undefined") {
+    window.__notify = {
+      show: showSystemNotification,
+      ensure: ensureNotifyPermission,
+      supported: notificationsSupported,
+      permission: () => (notificationsSupported() ? Notification.permission : "none"),
+      chime: () => { playMessageChime(); return true; },
+      ring: () => { playCallRing(); return true; },
+      audioState: () => (_audioCtx ? _audioCtx.state : "none"),
+    };
+  }
+
   function setupSWUpdateListener() {
     if (!("serviceWorker" in navigator)) return;
     navigator.serviceWorker.addEventListener("message", (event) => {
       const data = (event && event.data) || {};
-      if (data.type === "SW_VERSION_UPDATE" && data.version) handleServerVersion(data.version);
+      // SW_VERSION_UPDATE 现在带 url（仅对应页面应弹更新提示）；其余页面忽略，避免误报
+      if (data.type === "SW_VERSION_UPDATE" && data.version) {
+        if (!data.url || data.url === location.pathname) handleServerVersion(data.version);
+      }
       else if (data.type === "HTML_VERSION" && data.version) handleServerVersion(data.version);
       else if (data.type === "SW_READY" && data.htmlVersion) handleServerVersion(data.htmlVersion);
+      // 来电通知的「接听 / 拒绝」按钮：由 SW notificationclick 回传，这里转交给通话模块
+      else if (data.type === "NOTIFY_CALL_ACTION") {
+        if (data.action === "accept") { try { acceptCall(); } catch (e) {} }
+        else if (data.action === "reject") { try { declineCall(); } catch (e) {} }
+      }
     });
     // 向已激活的 SW 查询“服务端最新 HTML 版本”。SW 会直接问服务端（绕过本端缓存），
     // 因此无论 SW 本端优先返回的是否为旧缓存、后台 revalidation 是否已完成，都能拿到真实最新版本。
@@ -5990,6 +6921,7 @@
     registerServiceWorker();
     setupSWUpdateListener();
     setupUpdateBanner();
+    setupInstallPrompt();
     checkAuth();
   }
   init();

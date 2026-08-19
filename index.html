@@ -4,13 +4,101 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web 应用导航面板</title>
-  <link rel="stylesheet" href="styles.css?v=76" />
+  <link rel="icon" type="image/x-icon" href="favicon.ico?v=1" />
+  <link rel="shortcut icon" href="favicon.ico?v=1" />
+  <link rel="manifest" href="manifest.webmanifest?v=1" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=1" />
+  <meta name="theme-color" content="#4f6ef7" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="应用导航" />
+  <link rel="stylesheet" href="styles.css?v=89" />
 </head>
 <body>
+  <!-- 内联 SVG 图标雪碧图：品牌/访客用极光渐变填充，其余 UI 图标用 currentColor 描边随主题色变化 -->
+  <svg class="icon-sprite" width="0" height="0" aria-hidden="true" focusable="false">
+    <defs>
+      <linearGradient id="gradBrand" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#4f6ef7"/>
+        <stop offset="0.5" stop-color="#8b5cf6"/>
+        <stop offset="1" stop-color="#f472b6"/>
+      </linearGradient>
+    </defs>
+    <!-- 品牌标记：应用启动台（极光渐变） -->
+    <symbol id="sym-brand" viewBox="0 0 48 48">
+      <rect x="4" y="4" width="40" height="40" rx="13" fill="url(#gradBrand)"/>
+      <g fill="#fff">
+        <rect x="13" y="13" width="10" height="10" rx="3"/>
+        <rect x="25" y="13" width="10" height="10" rx="3"/>
+        <rect x="13" y="25" width="10" height="10" rx="3"/>
+        <rect x="25" y="25" width="10" height="10" rx="3" opacity="0.5"/>
+      </g>
+    </symbol>
+    <!-- 访客/会议标记：摄像机（极光渐变） -->
+    <symbol id="sym-video-mark" viewBox="0 0 48 48">
+      <rect x="4" y="4" width="40" height="40" rx="13" fill="url(#gradBrand)"/>
+      <g fill="#fff">
+        <rect x="11" y="16" width="20" height="16" rx="4"/>
+        <path d="M33 21l8-4.5v15l-8-4.5z"/>
+      </g>
+    </symbol>
+    <!-- 会话 -->
+    <symbol id="sym-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.9-.9L3 21l1.9-5.6A8.5 8.5 0 0 1 12 3a8.38 8.38 0 0 1 9 8.5z"/>
+    </symbol>
+    <!-- 好友 -->
+    <symbol id="sym-user" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+      <circle cx="12" cy="7" r="4"/>
+    </symbol>
+    <!-- 群组 -->
+    <symbol id="sym-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+      <circle cx="9" cy="7" r="4"/>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+    </symbol>
+    <!-- 视频 -->
+    <symbol id="sym-video" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M23 7l-7 5 7 5V7z"/>
+      <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+    </symbol>
+    <!-- 设置 -->
+    <symbol id="sym-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </symbol>
+    <!-- 添加 -->
+    <symbol id="sym-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 5v14"/><path d="M5 12h14"/>
+    </symbol>
+    <!-- 应用广场 / 商店 -->
+    <symbol id="sym-market" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M6 7h12l-1 13H7L6 7z"/><path d="M9 7V5a3 3 0 0 1 6 0v2"/>
+    </symbol>
+    <!-- 排序拖拽手柄 -->
+    <symbol id="sym-reorder" viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/>
+      <circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/>
+      <circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/>
+    </symbol>
+    <!-- 更新/庆祝 -->
+    <symbol id="sym-sparkle" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 2l1.9 5.6L19.5 9.5 13.9 11.4 12 17l-1.9-5.6L4.5 9.5l5.6-1.9z"/>
+      <path d="M19 14l.8 2.4L22 17l-2.2.6L19 20l-.8-2.4L16 17l2.2-.6z" opacity="0.7"/>
+    </symbol>
+    <!-- 通知铃铛 -->
+    <symbol id="sym-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
+      <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+    </symbol>
+  </svg>
+
   <!-- 登录 / 注册 -->
   <div id="authView" class="auth-view">
     <div class="auth-card">
-      <div class="auth-logo">🚀</div>
+      <svg class="auth-logo" viewBox="0 0 48 48" role="img" aria-label="Web 应用导航"><use href="#sym-brand"/></svg>
       <h1 data-i18n="auth.title">Web 应用导航</h1>
       <p class="auth-sub" id="authSub" data-i18n="auth.sub">登录以同步你的应用</p>
 
@@ -41,7 +129,7 @@
   <!-- 访客通过会议链接入会（无需登录） -->
   <div id="guestJoinView" class="auth-view" hidden>
     <div class="auth-card">
-      <div class="auth-logo">📹</div>
+      <svg class="auth-logo" viewBox="0 0 48 48" role="img" aria-label="加入视频会议"><use href="#sym-video-mark"/></svg>
       <h1 data-i18n="meeting.guest.title">加入视频会议</h1>
       <p class="auth-sub" id="guestSub" data-i18n="meeting.guest.sub">输入昵称即可加入，无需注册</p>
       <form id="guestJoinForm" class="auth-form">
@@ -54,16 +142,32 @@
 
   <!-- 版本更新提示条（检测到新版本时由 app.js 显示） -->
   <div id="updateBanner" class="update-banner" hidden>
-    <span class="update-icon">🎉</span>
+    <span class="update-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-sparkle"/></svg></span>
     <span id="updateText" class="update-text">已更新到新版本</span>
     <button id="updateReload" class="btn small" type="button" data-i18n="update.reload">刷新</button>
+  </div>
+
+  <!-- 安装到桌面提示条（浏览器允许安装且未安装/未忽略时由 app.js 显示） -->
+  <div id="installBanner" class="install-banner" hidden>
+    <span class="install-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><use href="#sym-brand"/></svg></span>
+    <span id="installText" class="install-text" data-i18n="install.text">安装到桌面，随时一键打开</span>
+    <button id="installBtn" class="btn primary small" type="button" data-i18n="install.now">安装</button>
+    <button id="installDismiss" class="btn ghost small" type="button" data-i18n="install.later">稍后</button>
+  </div>
+
+  <!-- 桌面通知引导条（通知权限未授予时由 app.js 显示） -->
+  <div id="notifyPermBanner" class="notify-banner" hidden>
+    <span class="notify-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-bell"/></svg></span>
+    <span class="notify-text" data-role="txt"></span>
+    <button class="btn primary small" data-role="btn" type="button"></button>
+    <button class="notify-close" data-role="close" type="button" aria-label="关闭">✕</button>
   </div>
 
   <!-- 主应用 -->
   <div id="appView" hidden>
     <header class="topbar">
       <div class="brand">
-        <span class="brand-logo">🚀</span>
+        <svg class="brand-logo" viewBox="0 0 48 48" role="img" aria-label="Web 应用导航"><use href="#sym-brand"/></svg>
         <div class="brand-text">
           <h1 data-i18n="app.title">Web 应用导航</h1>
           <p id="appCount">0 个应用</p>
@@ -79,8 +183,11 @@
           <span id="userAvatar" class="avatar"></span>
         </button>
         <span id="userName" class="user-name"></span>
-        <button id="addBtn" class="btn primary" data-i18n="topbar.add">＋ 添加应用</button>
-        <button id="settingsBtn" class="btn ghost" title="设置" data-i18n="topbar.settings">⚙ 设置</button>
+        <button id="addBtn" class="btn primary"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-plus"/></svg><span data-i18n="topbar.add">添加应用</span></button>
+        <button id="marketBtn" class="btn ghost" title="应用广场" data-i18n-title="topbar.market.title"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-market"/></svg><span data-i18n="topbar.market">应用广场</span></button>
+        <button id="chatBtn" class="btn ghost" title="P2P 聊天"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-chat"/></svg><span data-i18n="topbar.chat">聊天</span><span id="chatUnreadBadge" class="nav-badge" hidden></span></button>
+        <button id="meetingStartBtn" class="btn ghost" title="视频会议"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-video"/></svg><span data-i18n="topbar.meeting">视频会议</span></button>
+        <button id="settingsBtn" class="btn ghost" title="设置"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-gear"/></svg><span data-i18n="topbar.settings">设置</span></button>
       </div>
     </header>
 
@@ -88,6 +195,7 @@
       <button id="selCancel" class="btn ghost" data-i18n="select.cancel">取消</button>
       <span id="selCount" class="sel-count"></span>
       <span class="sel-spacer"></span>
+      <button id="reorderBtn" class="btn ghost" title="拖动排序：开启后可拖动网站链接调整顺序" data-i18n-title="topbar.reorder.title" aria-pressed="false"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-reorder"/></svg><span data-i18n="topbar.reorder">排序</span></button>
       <button id="selAll" class="btn ghost"></button>
       <button id="selDelete" class="btn danger" data-i18n="select.delete">🗑️ 批量删除</button>
     </div>
@@ -230,9 +338,9 @@
 
       <!-- Tab 栏：会话 / 好友 / 群组 -->
       <div class="chat-tabs">
-        <button class="chat-tab active" data-tab="conversations"><span data-i18n="chat.tab.conversations">💬 会话</span><span id="tabConvBadge" class="tab-badge" hidden></span></button>
-        <button class="chat-tab" data-tab="friends"><span data-i18n="chat.tab.friends">👤 好友</span><span id="tabFriendBadge" class="tab-badge" hidden></span></button>
-        <button class="chat-tab" data-tab="groups"><span data-i18n="chat.tab.groups">👥 群组</span></button>
+        <button class="chat-tab active" data-tab="conversations"><svg class="ico tab-ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-chat"/></svg><span data-i18n="chat.tab.conversations">会话</span><span id="tabConvBadge" class="tab-badge" hidden></span></button>
+        <button class="chat-tab" data-tab="friends"><svg class="ico tab-ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-user"/></svg><span data-i18n="chat.tab.friends">好友</span><span id="tabFriendBadge" class="tab-badge" hidden></span></button>
+        <button class="chat-tab" data-tab="groups"><svg class="ico tab-ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-users"/></svg><span data-i18n="chat.tab.groups">群组</span></button>
       </div>
 
       <!-- 会话面板：统一展示 私聊 + 群聊，按最近活动排序，可关闭 -->
@@ -480,6 +588,10 @@
           <button id="logoutOthersBtn" class="btn ghost block" data-i18n="settings.logoutOthers">登出其他设备</button>
           <p class="settings-hint" data-i18n="settings.devicesHint">这里列出当前账号登录过的所有设备，可单独登出某台或一键登出其他设备。</p>
         </div>
+        <div class="settings-section" id="adminEntry" hidden>
+          <div class="settings-section-title" data-i18n="admin.entryTitle">管理</div>
+          <button id="enterAdminBtn" class="btn ghost block" data-i18n="admin.enter">⚙️ 进入管理后台</button>
+        </div>
         <div class="settings-section">
           <button id="logoutBtn2" class="btn ghost block danger" data-i18n="topbar.logout">登出</button>
         </div>
@@ -489,6 +601,9 @@
     <input id="importChromeFile" type="file" accept=".html,text/html" hidden />
   </div>
 
-  <script src="app.js?v=123"></script>
+  <!-- 管理后台已拆为独立页面 admin.html（从设置的「管理」入口打开） -->
+
+  <script src="app.js?v=161"></script>
+  <script src="delight.js?v=4"></script>
 </body>
 </html>

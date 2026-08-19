@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>管理后台 · Web 应用导航面板</title>
+  <link rel="stylesheet" href="styles.css?v=89" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <script>
+    // 避免主题闪烁：在渲染前应用已保存的主题
+    try {
+      if (localStorage.getItem("web-app-launcher:theme") === "dark") {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    } catch (e) {}
+  </script>
+  <style>
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif);
+    }
+    .padmin-wrap { max-width: 960px; margin: 0 auto; padding: 22px 18px 56px; }
+    .padmin-top {
+      display: flex; align-items: center; gap: 12px;
+      padding: 6px 0 14px; border-bottom: 1px solid var(--border);
+    }
+    .padmin-back {
+      color: var(--text-2); text-decoration: none; font-size: 14px;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .padmin-back:hover { color: var(--text); }
+    .padmin-top h1 { font-size: 18px; font-weight: 600; margin: 0; flex: 1; }
+    .padmin-who { font-size: 13px; color: var(--text-2); }
+    .padmin-who b { color: var(--primary); font-weight: 600; }
+    #notice {
+      margin-top: 18px; padding: 16px 18px; border: 1px solid var(--border);
+      border-radius: 14px; background: var(--surface); color: var(--text-2); font-size: 14px;
+    }
+    #notice a { color: var(--primary); }
+    .avatar-img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; display: block; }
+    .badge-count { font-size: 12px; color: #b7791f; font-weight: 600; margin-left: 6px; }
+    .mk-status { font-size: 12px; padding: 2px 9px; border-radius: 999px; }
+    .mk-status.pending { color: #b7791f; background: rgba(183,121,31,.12); }
+    .mk-status.approved { color: #1a7f37; background: rgba(26,127,55,.12); }
+    .mk-status.rejected { color: #d23; background: rgba(221,34,51,.12); }
+
+    /* 应用详情弹窗 */
+    .padmin-modal {
+      position: fixed; inset: 0; background: rgba(0,0,0,.45);
+      display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 200;
+    }
+    .padmin-modal[hidden] { display: none; }
+    .padmin-modal-card {
+      width: 100%; max-width: 480px; max-height: 90vh; overflow: auto;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 16px; padding: 18px;
+    }
+    .padmin-modal-head { display: flex; align-items: center; font-weight: 600; font-size: 16px; margin-bottom: 12px; }
+    .padmin-modal-head button { margin-left: auto; border: none; background: none; color: var(--text-2); font-size: 18px; cursor: pointer; }
+    .detail-head { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+    .detail-icon {
+      width: 48px; height: 48px; border-radius: 12px; overflow: hidden; flex: 0 0 auto;
+      background: var(--bg); display: flex; align-items: center; justify-content: center;
+      font-weight: 700; color: var(--primary); font-size: 18px;
+    }
+    .detail-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .detail-name { font-weight: 600; font-size: 16px; }
+    .detail-url { font-size: 13px; color: var(--primary); word-break: break-all; }
+    .detail-row { display: flex; gap: 12px; padding: 9px 0; border-top: 1px solid var(--border); font-size: 14px; }
+    .detail-label { color: var(--text-2); flex: 0 0 108px; }
+    .detail-val { flex: 1; word-break: break-all; }
+    .detail-desc { line-height: 1.5; white-space: pre-wrap; }
+    .padmin-modal-foot { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+  /* 版本更新提示条（与首页一致） */
+  .update-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 300;
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 16px; background: var(--primary); color: #fff;
+    font-size: 14px; box-shadow: var(--shadow);
+  }
+  .update-banner[hidden] { display: none; }
+  .update-banner .update-icon { display: inline-flex; line-height: 1; }
+  .update-banner .update-icon svg { width: 18px; height: 18px; display: block; }
+  .update-banner .update-text { flex: 1 1 auto; }
+  .update-banner .btn.small {
+    background: rgba(255, 255, 255, 0.22); color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.55); padding: 5px 12px;
+  }
+  .update-banner .btn.small:hover { background: rgba(255, 255, 255, 0.34); }
+  </style>
+</head>
+<body>
+  <!-- 版本更新提示条（检测到新版本时由 admin.js 显示） -->
+  <div id="updateBanner" class="update-banner" hidden>
+    <span class="update-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.4 6.9H22l-6 4.3 2.3 7-6.3-4.4L5.7 20.2 8 13.2 2 8.9h7.6z" fill="currentColor"/></svg></span>
+    <span id="updateText" class="update-text">已更新到新版本</span>
+    <button id="updateReload" class="btn small" type="button">刷新</button>
+  </div>
+  <div class="padmin-wrap">
+    <div class="padmin-top">
+      <a class="padmin-back" id="adminBack" href="index.html">← 返回应用</a>
+      <h1>管理后台</h1>
+      <div class="padmin-who">当前管理员：<b id="adminWho">…</b></div>
+    </div>
+
+    <div id="notice" hidden></div>
+
+    <div id="adminMain">
+      <div class="admin-stats" id="adminStats"></div>
+      <div class="admin-section-title">用户</div>
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>用户</th>
+              <th>角色</th>
+              <th>链接数</th>
+              <th>注册时间</th>
+              <th>最近活跃</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="adminUserRows"></tbody>
+        </table>
+      </div>
+
+      <div class="admin-section-title">应用审核<span id="pendingCount" class="badge-count"></span></div>
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>应用</th>
+              <th>提交者</th>
+              <th>境内可访问</th>
+              <th>支持 PWA</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="adminAppRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 应用详情弹窗 -->
+  <div id="appDetailModal" class="padmin-modal" hidden>
+    <div class="padmin-modal-card">
+      <div class="padmin-modal-head">应用详情 <button id="appDetailClose" title="关闭">✕</button></div>
+      <div id="appDetailBody"></div>
+      <div class="padmin-modal-foot" id="appDetailActions"></div>
+    </div>
+  </div>
+
+  <script src="admin.js?v=6"></script>
+</body>
+</html>
