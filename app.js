@@ -4024,10 +4024,11 @@
       sigSocket.send(JSON.stringify({ type: "call", to, media: mediaType, connId }));
     }
     if (hasLive) return; // 已有可用连接：不重复建连、不降级状态
-    // 只有该好友是当前显示会话时，才显示“正在连接”
+    // 仅在顶栏显示「正在连接」（setChatStatus），不在聊天面板里贴一条 system 消息：
+    // 之前在面板中央加 `正在连接 踏浪 …` 会被人误以为"历史消息消失了"，
+    // 实际历史已渲染在它上面，只是被这条 system 消息挡住/混淆视觉。
     if (currentPeer != null && Number(currentPeer) === to) {
       setChatStatus("", "warn", { key: "chat.status.connectingName", params: { name } });
-      enteringMsg = addChatMessage("system", `正在连接 ${name} …`);
     }
     if (!mediaType && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
       sigSocket.send(JSON.stringify({ type: "call", to, connId }));
