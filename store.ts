@@ -151,6 +151,14 @@ const APPS_DDL = `CREATE TABLE IF NOT EXISTS apps (
   approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL
 )`;
 
+// 应用点赞表：哪位用户对哪个应用点过赞（主键去重，天然防止重复点赞）
+const APP_LIKES_DDL = `CREATE TABLE IF NOT EXISTS app_likes (
+  app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (app_id, user_id)
+)`;
+
 // 运行时懒创建 apps 表：首次访问任一应用广场接口时确保表存在（DB 可达即创建，
 // 与读同走重试连接；失败则下次重试）。这样即便启动期 DB 抖动导致建表被跳过，
 // 也能在 DB 恢复后自愈，不依赖重启。
@@ -158,7 +166,10 @@ let appsTableEnsured: Promise<void> | null = null;
 async function ensureAppsTable(): Promise<void> {
   if (!appsTableEnsured) {
     appsTableEnsured = (async () => {
-      await withClient(async (c) => { await c.queryObject(APPS_DDL); });
+      await withClient(async (c) => {
+        await c.queryObject(APPS_DDL);
+        await c.queryObject(APP_LIKES_DDL);
+      });
     })().catch((e) => {
       appsTableEnsured = null; // 失败则清空，下次访问重试
       throw e;
@@ -621,6 +632,8 @@ export interface AppStatus {
   approved_at: string | null;
   username?: string;
   approved_by?: number | null;
+  like_count?: number;
+  liked?: boolean;
 }
 
 // 发布应用（用户）
@@ -651,17 +664,27 @@ export async function createApp(
 }
 
 // 广场公开展示：仅已审核通过的应用；支持按「境内可访问 / 支持 PWA」过滤
-export async function listApprovedApps(opts: { china?: boolean; pwa?: boolean } = {}): Promise<AppStatus[]> {
+// currentUserId 非空时，额外返回 liked（当前用户是否已赞该应用）
+export async function listApprovedApps(
+  opts: { china?: boolean; pwa?: boolean } = {},
+  currentUserId?: number,
+): Promise<AppStatus[]> {
   ensureDb();
   await ensureAppsTable();
   const conds: string[] = ["a.status = 'approved'"];
   const params: unknown[] = [];
   if (opts.china) { params.push(true); conds.push(`a.supports_china = $${params.length}`); }
   if (opts.pwa) { params.push(true); conds.push(`a.supports_pwa = $${params.length}`); }
+  const likeSub = `(SELECT COUNT(*) FROM app_likes al WHERE al.app_id = a.id)::int AS like_count`;
+  let likedSub = `false AS liked`;
+  if (currentUserId) {
+    params.push(currentUserId);
+    likedSub = `(EXISTS (SELECT 1 FROM app_likes al WHERE al.app_id = a.id AND al.user_id = $${params.length})) AS liked`;
+  }
   const rows = await query<AppStatus>(
     `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
             a.supports_china, a.supports_pwa, a.status, a.reject_reason, a.created_at,
-            a.approved_at, u.username
+            a.approved_at, u.username, ${likeSub}, ${likedSub}
      FROM apps a JOIN users u ON u.id = a.user_id
      WHERE ${conds.join(" AND ")}
      ORDER BY a.approved_at DESC NULLS LAST, a.created_at DESC`,
@@ -671,17 +694,22 @@ export async function listApprovedApps(opts: { china?: boolean; pwa?: boolean } 
 }
 
 // 我的发布（含状态 / 拒绝原因）
-export async function listMyApps(userId: number): Promise<AppStatus[]> {
+export async function listMyApps(userId: number, currentUserId?: number): Promise<AppStatus[]> {
   ensureDb();
   await ensureAppsTable();
+  const likeSub = `(SELECT COUNT(*) FROM app_likes al WHERE al.app_id = a.id)::int AS like_count`;
+  const likedSub = currentUserId
+    ? `(EXISTS (SELECT 1 FROM app_likes al WHERE al.app_id = a.id AND al.user_id = $2)) AS liked`
+    : `false AS liked`;
+  const params = currentUserId ? [userId, currentUserId] : [userId];
   const rows = await query<AppStatus>(
     `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
             a.supports_china, a.supports_pwa, a.status, a.reject_reason, a.created_at,
-            a.approved_at, u.username
+            a.approved_at, u.username, ${likeSub}, ${likedSub}
      FROM apps a JOIN users u ON u.id = a.user_id
      WHERE a.user_id = $1
      ORDER BY a.created_at DESC`,
-    [userId],
+    params,
   );
   return rows;
 }
@@ -693,7 +721,9 @@ export async function listAllApps(): Promise<AppStatus[]> {
   const rows = await query<AppStatus>(
     `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
             a.supports_china, a.supports_pwa, a.status, a.reject_reason, a.created_at,
-            a.approved_at, a.approved_by, u.username
+            a.approved_at, a.approved_by, u.username,
+            (SELECT COUNT(*) FROM app_likes al WHERE al.app_id = a.id)::int AS like_count,
+            false AS liked
      FROM apps a JOIN users u ON u.id = a.user_id
      ORDER BY
        CASE a.status WHEN 'pending' THEN 0 ELSE 1 END,
@@ -762,6 +792,53 @@ export async function updateApp(
     ],
   );
   return rows.length > 0;
+}
+
+// 切换点赞状态：已赞则取消，未赞则添加。返回最新 liked 与 like_count。
+// 在【同一条连接】上完成「读当前是否赞 → 增/删 → 重新计数」，避免池化代理在
+// flaky 时把读/写打散到不同连接导致计数不一致。
+export async function toggleAppLike(
+  appId: number,
+  userId: number,
+): Promise<{ liked: boolean; like_count: number }> {
+  ensureDb();
+  await ensureAppsTable();
+  return withClient(async (c: any) => {
+    const exist = await c.queryObject<{ app_id: number }>(
+      `SELECT app_id FROM app_likes WHERE app_id = $1 AND user_id = $2`,
+      [appId, userId],
+    );
+    let liked: boolean;
+    if (exist.rows.length) {
+      await c.queryObject(`DELETE FROM app_likes WHERE app_id = $1 AND user_id = $2`, [appId, userId]);
+      liked = false;
+    } else {
+      await c.queryObject(
+        `INSERT INTO app_likes (app_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [appId, userId],
+      );
+      liked = true;
+    }
+    const cnt = await c.queryObject<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM app_likes WHERE app_id = $1`,
+      [appId],
+    );
+    return { liked, like_count: cnt.rows[0]?.n ?? 0 };
+  });
+}
+
+// 批量返回某用户对已给出 appId 列表的点赞态集合（前端水合 / 我的发布等场景用）
+export async function getLikedAppIds(userId: number, appIds: number[]): Promise<Set<number>> {
+  const set = new Set<number>();
+  if (!appIds.length) return set;
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ app_id: number }>(
+    `SELECT app_id FROM app_likes WHERE user_id = $1 AND app_id = ANY($2::int[])`,
+    [userId, appIds],
+  );
+  for (const r of rows) set.add(r.app_id);
+  return set;
 }
 
 // ---------------- 链接 ----------------

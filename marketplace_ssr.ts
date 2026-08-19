@@ -64,6 +64,13 @@ function plazaCardHtml(app: AppStatus, savedSet: Set<string>): string {
   const save = alreadySaved
     ? '<button class="mk-save" data-save="' + app.id + '" disabled>✓ 已保存</button>'
     : '<button class="mk-save" data-save="' + app.id + '">＋ 保存</button>';
+  const liked = app.liked ? " liked" : "";
+  const like =
+    '<button class="mk-like' + liked + '" data-like="' + app.id + '" type="button" ' +
+    'aria-pressed="' + (app.liked ? "true" : "false") + '" title="点赞">' +
+      '<span class="mk-like-heart">' + (app.liked ? "♥" : "♡") + "</span>" +
+      '<span class="mk-like-count">' + (app.like_count || 0) + "</span>" +
+    "</button>";
   return (
     '<div class="mk-card">' +
       '<div class="mk-card-head">' +
@@ -78,6 +85,7 @@ function plazaCardHtml(app: AppStatus, savedSet: Set<string>): string {
       '<div class="mk-card-foot">' +
         '<a class="mk-open" href="' + escapeHtml(app.url) + '" target="_blank" rel="noopener">打开</a>' +
         save +
+        like +
       "</div>" +
     "</div>"
   );
@@ -89,15 +97,16 @@ const PLACEHOLDER = '<div class="mk-grid" id="mkGrid"><div class="mk-msg">加载
 export async function renderMarketplaceHtml(req?: Request): Promise<string> {
   const tmpl = await Deno.readTextFile("./marketplace.html");
   try {
-    const apps = await listApprovedApps({});
-    // 解析登录用户：从 Cookie 读取 token（前端登录时写入），用于判断「是否已保存」
+    // 解析登录用户：从 Cookie 读取 token（前端登录时写入），用于判断「是否已保存」与「是否已赞」
     let savedSet = new Set<string>();
+    let currentUserId: number | undefined;
     if (req) {
       const token = parseCookies(req)[TOKEN_COOKIE];
       if (token) {
         try {
           const user = await getUserByToken(token);
           if (user) {
+            currentUserId = user.id;
             const links = await listLinks(user.id) as Array<{ url?: string }>;
             for (const l of links) {
               const u = normUrl(l.url || "");
@@ -107,6 +116,7 @@ export async function renderMarketplaceHtml(req?: Request): Promise<string> {
         } catch { /* 解析失败则按匿名处理，不影响卡片渲染 */ }
       }
     }
+    const apps = await listApprovedApps({}, currentUserId);
     // 防止应用数据中嵌入 </script> 提前闭合脚本标签
     const payload = JSON.stringify({ apps, savedUrls: [...savedSet] }).replace(/</g, "\\u003c");
     const cards = apps.length

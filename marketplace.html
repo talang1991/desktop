@@ -87,6 +87,19 @@
     }
     .mk-save:hover { background: var(--primary); color: #fff; }
     .mk-save:disabled { opacity: .65; cursor: default; border-color: var(--border); color: var(--text-2); background: var(--surface); }
+    .mk-like {
+      display: inline-flex; align-items: center; gap: 5px;
+      border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; font-size: 13px;
+      background: var(--surface); color: var(--text-2); cursor: pointer; white-space: nowrap;
+      transition: color .15s, border-color .15s, background .15s;
+    }
+    .mk-like:hover { border-color: #e2556e; color: #e2556e; }
+    .mk-like .mk-like-heart { font-size: 15px; line-height: 1; }
+    .mk-like.liked {
+      color: #e2556e; border-color: rgba(226,85,110,.45); background: rgba(226,85,110,.10);
+    }
+    .mk-like.liked:hover { color: #e2556e; }
+    .mk-like .mk-like-count { font-variant-numeric: tabular-nums; min-width: 8px; text-align: center; }
     .mk-edit {
       border: 1px solid rgba(183,121,31,.5); border-radius: 10px; padding: 8px 12px; font-size: 13px;
       background: rgba(183,121,31,.10); color: #b7791f; cursor: pointer; white-space: nowrap;

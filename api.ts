@@ -9,7 +9,7 @@ import {
   createGroup, addGroupMember, listUserGroups, getGroupBasic, isGroupMember, leaveGroup,
   renameGroup, getGroupMemberIds,
   listAllUsers, updateUserRole, countUsers, countLinks, recentRegistrations,
-  createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, updateApp, countPendingApps,
+  createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, updateApp, countPendingApps, toggleAppLike,
   DbUnavailableError,
 } from "./store.ts";
 
@@ -180,7 +180,9 @@ export async function handleApi(req: Request): Promise<Response> {
     if (path === "/api/apps" && method === "GET") {
       const china = url.searchParams.get("china") === "1";
       const pwa = url.searchParams.get("pwa") === "1";
-      const apps = await listApprovedApps({ china, pwa });
+      // 已登录则带上 userId，让列表返回「当前用户是否已赞」标记
+      const me = await requireUser(req);
+      const apps = await listApprovedApps({ china, pwa }, me?.id);
       return json({ apps });
     }
 
@@ -207,7 +209,7 @@ export async function handleApi(req: Request): Promise<Response> {
     if (path === "/api/apps/mine" && method === "GET") {
       const user = await requireUser(req);
       if (!user) return json({ error: "请先登录" }, 401);
-      const apps = await listMyApps(user.id);
+      const apps = await listMyApps(user.id, user.id);
       return json({ apps });
     }
 
@@ -240,6 +242,20 @@ export async function handleApi(req: Request): Promise<Response> {
         });
         if (!ok) return json({ error: "应用不存在或无权修改" }, 404);
         return json({ ok: true, status: "pending" });
+      }
+    }
+
+    // ---- 应用广场：点赞 / 取消点赞（需登录）----
+    const likeRes = path.match(/^\/api\/apps\/(\d+)\/like$/);
+    if (likeRes && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "请先登录" }, 401);
+      const id = Number(likeRes[1]);
+      try {
+        const r = await toggleAppLike(id, user.id);
+        return json({ ok: true, liked: r.liked, like_count: r.like_count });
+      } catch (e) {
+        return json({ error: (e as Error).message || "操作失败" }, 500);
       }
     }
 

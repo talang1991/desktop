@@ -146,6 +146,30 @@
     return b;
   }
 
+  // 点赞按钮：已赞态用实心心形 + 主题色高亮；计数实时反映
+  function likeHtml(app) {
+    const liked = app.liked ? " liked" : "";
+    const count = (app.like_count || 0);
+    return (
+      '<button class="mk-like' + liked + '" data-like="' + app.id + '" ' +
+      'type="button" aria-pressed="' + (app.liked ? "true" : "false") + '" ' +
+      'title="点赞">' +
+        '<span class="mk-like-heart">' + (app.liked ? "♥" : "♡") + "</span>" +
+        '<span class="mk-like-count">' + count + "</span>" +
+      "</button>"
+    );
+  }
+  // 同步一个点赞按钮的视觉状态（乐观更新 / 服务端回写都用它）
+  function renderLikeBtn(btn, app) {
+    const liked = !!(app && app.liked);
+    const count = app ? (app.like_count || 0) : 0;
+    btn.classList.toggle("liked", liked);
+    btn.setAttribute("aria-pressed", liked ? "true" : "false");
+    btn.innerHTML =
+      '<span class="mk-like-heart">' + (liked ? "♥" : "♡") + "</span>" +
+      '<span class="mk-like-count">' + count + "</span>";
+  }
+
   function cardHtml(app, mine) {
     const statusMap = { pending: "待审核", approved: "已上架", rejected: "已拒绝" };
     const status = mine
@@ -172,6 +196,8 @@
     const reason = (mine && app.status === "rejected" && app.reject_reason)
       ? '<div class="mk-sub" style="color:#d23">拒绝原因：' + escapeHtml(app.reject_reason) + "</div>"
       : "";
+    // 被拒绝的应用不展示点赞（该卡已无公开意义，避免按钮过载）
+    const like = hideOpenAndSave ? "" : likeHtml(app);
     return (
       '<div class="mk-card">' +
         '<div class="mk-card-head">' +
@@ -188,6 +214,7 @@
         '<div class="mk-card-foot">' +
           open +
           save +
+          like +
           edit +
           del +
         "</div>" +
@@ -235,6 +262,12 @@
   function bindSaveButtons(grid) {
     grid.querySelectorAll("[data-save]").forEach((btn) => {
       btn.addEventListener("click", () => saveToMyApps(Number(btn.getAttribute("data-save"))));
+    });
+  }
+  // 给当前渲染出的卡片绑定「点赞」按钮
+  function bindLikeButtons(grid) {
+    grid.querySelectorAll("[data-like]").forEach((btn) => {
+      btn.addEventListener("click", () => toggleLike(Number(btn.getAttribute("data-like"))));
     });
   }
 
@@ -287,6 +320,36 @@
     });
   }
 
+  // 点赞 / 取消点赞：先乐观更新 UI，再请求服务端；失败回滚并提示
+  async function toggleLike(id) {
+    const tk = localStorage.getItem(TOKEN_KEY);
+    if (!tk) {
+      toast("请先在应用中登录后再点赞", "err");
+      return;
+    }
+    const app = appIndex[id];
+    const btn = document.querySelector('[data-like="' + id + '"]');
+    if (!app) return;
+    const prevLiked = !!app.liked;
+    const prevCount = app.like_count || 0;
+    // 乐观更新
+    app.liked = !prevLiked;
+    app.like_count = prevCount + (app.liked ? 1 : -1);
+    if (btn) renderLikeBtn(btn, app);
+    try {
+      const r = await api("/api/apps/" + id + "/like", { method: "POST" });
+      app.liked = r.liked;
+      app.like_count = r.like_count;
+      if (btn) renderLikeBtn(btn, app);
+    } catch (e) {
+      // 回滚到操作前状态
+      app.liked = prevLiked;
+      app.like_count = prevCount;
+      if (btn) renderLikeBtn(btn, app);
+      toast((e && e.message) || "点赞失败", "err");
+    }
+  }
+
   // ---------- 渲染 ----------
   async function loadPlaza() {
     const grid = document.getElementById("mkGrid");
@@ -303,6 +366,7 @@
       }
       grid.innerHTML = apps.map((a) => cardHtml(a, false)).join("");
       bindSaveButtons(grid);
+      bindLikeButtons(grid);
     } catch (e) {
       grid.innerHTML = '<div class="mk-msg">加载失败：' + escapeHtml((e && e.message) || "未知错误") + "</div>";
     }
@@ -326,6 +390,7 @@
       }
       grid.innerHTML = apps.map((a) => cardHtml(a, true)).join("");
       bindSaveButtons(grid);
+      bindLikeButtons(grid);
       grid.querySelectorAll("[data-del]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const id = Number(btn.getAttribute("data-del"));
@@ -463,6 +528,7 @@
     apps.forEach((a) => { appIndex[a.id] = a; });
     grid.innerHTML = apps.map((a) => cardHtml(a, false)).join("");
     bindSaveButtons(grid);
+    bindLikeButtons(grid);
     return true;
   }
 
