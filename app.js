@@ -4367,11 +4367,33 @@
       });
     } catch (e) { /* 取不到统计时保守按直连提示，不影响可用性 */ }
     p.isRelay = relay;
+    applyBitrateForRelay(p, relay);
     if (relay) {
       relayActive = true;
       setPeerStatus(id, "中继模式（服务器转发）", "warn");
     } else {
       setPeerStatus(id, "P2P 已直连 🔗", "ok");
+    }
+  }
+
+  // 中继时把视频发送码率降到 ~450kbps（缓解云主机 1M 出口带宽压力），
+  // P2P 时解除限制恢复高清。只对 video sender 生效；音频轨不受影响。
+  // 会议（mesh）与 1:1 连接共用 refreshConnRelayStatus，因此两者都会自动套用。
+  function applyBitrateForRelay(p, isRelay, force) {
+    if (!p || !p.pc) return;
+    if (!force && p._bitrateRelay === isRelay) return;   // 状态未变则不下发，避免抖动
+    p._bitrateRelay = isRelay;
+    const cap = isRelay ? 450000 : null;        // 450kbps ∈ [400,500]；null=解除上限
+    for (const sender of p.pc.getSenders()) {
+      const track = sender.track;
+      if (!track || track.kind !== "video") continue;   // 仅限视频轨（含屏幕共享）
+      try {
+        const params = sender.getParameters();
+        if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+        if (cap == null) delete params.encodings[0].maxBitrate;  // 恢复高清：去除上限
+        else params.encodings[0].maxBitrate = cap;
+        sender.setParameters(params);
+      } catch (e) { console.warn("[WEBRTC] setParameters(maxBitrate) failed", e); }
     }
   }
 
@@ -4448,6 +4470,9 @@
       try { p.pc.addTrack(track, localStream); } catch (e) { console.error("[WEBRTC] addTrack failed", e); }
     }
     p.mediaAdded = true;
+    // 轨道是后加入的（先聊天再开视频/屏幕共享），新的 video sender 不会自动继承
+    // 已有的码率上限，这里按当前中继状态强制重套一次。
+    applyBitrateForRelay(p, !!p.isRelay, true);
   }
 
   function bindLocalVideo() {
