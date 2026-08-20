@@ -3930,6 +3930,18 @@
     for (const [k, p] of peers) { if (peerUserIdOf(k) === id) out.push(p); }
     return out;
   }
+  // 精确定位「当前通话」使用的连接条目：优先 callPeerKey（通话建立时记录的 userId:connId 键），
+  // 其次任一存活 pc，最后回退首条。直接用 getPeerConn(userId) 会命中该好友最旧的条目——
+  // 它常常是历史聊天/失败残留（pc 已关闭置 null），把媒体轨道加进去等于没加，双方都无音视频。
+  function getCallPeerConn(id) {
+    id = Number(id);
+    const keyed = callPeerKey != null ? peers.get(callPeerKey) : null;
+    if (keyed && keyed.pc && keyed.pc.connectionState !== "closed") return keyed;
+    const live = getPeerConns(id).find(
+      (p) => p.pc && !["failed", "closed", "disconnected"].includes(p.pc.connectionState),
+    );
+    return live || getPeerConn(id);
+  }
   // 入参可为数字(userId，媒体/会议复用)或字符串(userId:connId，聊天多设备)
   function ensurePeerConn(key) {
     let p = peers.get(key);
@@ -3980,6 +3992,9 @@
   let isSharingScreen = false;     // 是否正在共享屏幕
   let incomingCallFrom = null;     // 正在响铃的来电对象
   let incomingCallType = null;
+  let incomingCallConnId = null;   // 来电携带的连接级 connId（接听时精确定位 pc）
+  let callPeerKey = null;          // 本次通话使用的 peers map 键（userId:connId）；接听/挂断/共享屏幕都按它取 pc，
+                                   // 避免该好友存在多条连接（历史聊天/失败残留条目）时 getPeerConn 取到死条目导致无音视频
 
   // ===================== 群会议（多人 WebRTC 全网状）=====================
   // 每个成员与群内其他在线成员各建一条 RTCPeerConnection（复用 peers map 与完美协商），
@@ -4026,6 +4041,7 @@
     const hasLive = p.pc && (st === "connected" || st === "connecting" || st === "new");
     // 媒体呼叫：始终通知对方（即便已有连接），用于弹出接听界面
     if (mediaType && sigSocket && sigSocket.readyState === WebSocket.OPEN) {
+      callPeerKey = key; // 记录本次通话绑定的连接键：接听/挂断/共享屏幕均按此键取 pc
       sigSocket.send(JSON.stringify({ type: "call", to, media: mediaType, connId }));
     }
     if (hasLive) return; // 已有可用连接：不重复建连、不降级状态
@@ -4051,6 +4067,9 @@
     // 音视频来电：弹出接听界面（绝不改动 currentPeer，绝不抢当前显示的会话）
     if (media) {
       showIncomingCall(from, media, f);
+      // 记录来电连接键：acceptCall 按它精确 addTrack（getPeerConn 首条命中可能是残留死条目）
+      incomingCallConnId = connId || null;
+      callPeerKey = key;
       // 仍确保该好友 pc 就绪（应答方），便于后续协商媒体轨道
       const p = ensurePeerConn(key);
       if (!p.pc) { p.pc = new RTCPeerConnection(rtcConfig()); p.pc._peerId = from; setupPc(p); p.mediaAdded = false; p.connId = connId || null; }
@@ -4606,8 +4625,23 @@
     // 来电前已协商下来的远端流，接听后立刻呈现
     if (pendingRemoteStream) { attachRemoteStream(pendingRemoteStream); pendingRemoteStream = null; }
     // 向已有 pc 加入本端轨道 → 触发重协商（完美协商处理 glare）
-    const p = getPeerConn(from);
-    if (p && p.pc) addLocalMediaTracks(p);
+    // 必须按来电 connId 精确定位 pc：getPeerConn(from) 命中该好友最旧条目，
+    // 常为历史聊天/失败残留（pc=null 或已 closed），媒体轨道加不进去 → 双方无音视频。
+    const p = getCallPeerConn(from);
+    if (p && p.pc && p.pc.connectionState !== "closed") {
+      // 若 pc 上残留上一次通话的旧发送轨道（异常路径未清理），先移除再重加，确保轨道新鲜
+      p.pc.getSenders().forEach((s) => { try { if (s.track) p.pc.removeTrack(s); } catch {} });
+      p.mediaAdded = false;
+      addLocalMediaTracks(p);
+    } else if (p) {
+      // 目标条目没有可用 pc（极端情况）：按应答方重建，再补媒体
+      p.pc = new RTCPeerConnection(rtcConfig());
+      p.pc._peerId = from;
+      setupPc(p);
+      p.mediaAdded = false;
+      p.connId = incomingCallConnId || p.connId;
+      addLocalMediaTracks(p);
+    }
   }
 
   function declineCall() {
@@ -4639,9 +4673,12 @@
     }
     isSharingScreen = false;
     if (callPeerId != null) {
-      const p = getPeerConn(callPeerId);
-      if (p && p.pc) {
-        p.pc.getSenders().forEach((s) => { try { if (s.track) p.pc.removeTrack(s); } catch {} });
+      // 遍历该好友的全部连接清理发送轨道：只清首条会在其它 pc 上残留「已停止的旧轨道 +
+      // mediaAdded=true」，下次通话 addLocalMediaTracks 直接跳过 → 无音视频
+      for (const p of getPeerConns(callPeerId)) {
+        if (p && p.pc && p.pc.connectionState !== "closed") {
+          p.pc.getSenders().forEach((s) => { try { if (s.track) p.pc.removeTrack(s); } catch {} });
+        }
         p.mediaAdded = false;
       }
     }
@@ -4664,6 +4701,8 @@
     micMuted = false; camOff = false;
     incomingCallFrom = null;
     incomingCallType = null;
+    incomingCallConnId = null;
+    callPeerKey = null;
     updateCallButtons();
   }
 
@@ -4719,7 +4758,7 @@
       toast(t("call.shareFail") + ((err && err.message) || err.name || err));
       return;
     }
-    const p = ensurePeerConn(callPeerId);
+    const p = getCallPeerConn(callPeerId);
     const sender = p && p.pc ? p.pc.getSenders().find((s) => s.track && s.track.kind === "video") : null;
     if (!sender) {
       screen.getTracks().forEach((t) => t.stop());
@@ -4739,7 +4778,7 @@
 
   async function stopScreenShare() {
     if (!isSharingScreen || !screenStream) return;
-    const p = ensurePeerConn(callPeerId);
+    const p = getCallPeerConn(callPeerId);
     const camTrack = localStream ? localStream.getVideoTracks()[0] : null;
     if (p && p.pc && camTrack) {
       const sender = p.pc.getSenders().find((s) => s.track && s.track.kind === "video");
