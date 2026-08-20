@@ -282,6 +282,9 @@
     if (!app) return;
     const btn = document.querySelector('[data-save="' + id + '"]');
     if (btn) btn.disabled = true;
+    // 带上图标：与广场展示一致（自定义图标 URL，否则回退完整 URL 的 favicon 代理）。
+    // 否则保存后链接 icon 为空，首页会退化为 origin/favicon.ico，往往抓不到图标。
+    const icon = (app.icon && isIconUrl(app.icon)) ? app.icon : faviconFor(app.url);
     try {
       await api("/api/links", {
         method: "POST",
@@ -289,6 +292,7 @@
           name: app.name,
           url: app.url,
           category: (app.category && app.category !== "其它") ? app.category : "应用广场",
+          emoji: icon,
         }),
       });
       toast("已保存到「我的应用」");
