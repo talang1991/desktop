@@ -3649,10 +3649,18 @@
           // 而 since 已覆盖游标后 newCount 常为 0，导致已持久化的旧未读数永不清零）。
           const all = await ChatDB.allForConv(conv).catch(() => []);
           let trueUnread = 0;
+          let lastTs = 0, lastText = "";
           for (const m of all) {
             if (m.from === myId) continue;
+            if ((m.ts || 0) > lastTs) { lastTs = m.ts || 0; lastText = m.text || ""; }
             if ((m.ts || 0) <= lastReadCache[f.id]) continue;
             trueUnread++;
+          }
+          // 修复：换端/离线同步时，若该好友有未读但本端会话列表（localStorage）尚未收录此会话
+          // （例如从未在本端打开过、或会话在其它端产生），必须补建会话行，否则顶栏未读徽标有计数、
+          // 会话列表却找不到对应会话，用户无法点进去读未读。
+          if (trueUnread > 0) {
+            upsertConversation("peer", f.id, lastTs, lastText, false);
           }
           setUnread(f.id, trueUnread);
         }
@@ -6785,10 +6793,16 @@
         // 覆盖式重算群未读，避免其它端已读后本端旧红点残留
         const all = await ChatDB.allForConv(groupConvKey(gid)).catch(() => []);
         let trueUnread = 0;
+        let lastTs = 0, lastText = "";
         for (const m of all) {
           if (m.from === myId) continue;
+          if ((m.ts || 0) > lastTs) { lastTs = m.ts || 0; lastText = m.text || ""; }
           if ((m.ts || 0) <= (lastRead || 0)) continue;
           trueUnread++;
+        }
+        // 修复：同私聊逻辑，群有未读但本端会话列表未收录该群时，补建会话行
+        if (trueUnread > 0) {
+          upsertConversation("group", gid, lastTs, lastText, false);
         }
         setGroupUnread(gid, trueUnread);
       }
