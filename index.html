@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="应用导航" />
-  <link rel="stylesheet" href="styles.css?v=90" />
+  <link rel="stylesheet" href="styles.css?v=91" />
 </head>
 <body>
   <!-- 内联 SVG 图标雪碧图：品牌/访客用极光渐变填充，其余 UI 图标用 currentColor 描边随主题色变化 -->
@@ -592,8 +592,10 @@
             <button id="emailUnbindBtn" class="btn ghost block danger" data-i18n="settings.emailUnbind">解绑邮箱</button>
           </div>
           <div id="emailFormBox">
-            <input id="emailInput" type="email" class="input" placeholder="you@example.com" data-i18n-ph="settings.emailPh" autocomplete="off" />
-            <button id="emailSendCodeBtn" class="btn ghost block" data-i18n="settings.emailSendCode">发送验证码</button>
+            <div class="row email-row">
+              <input id="emailInput" type="email" class="input" placeholder="you@example.com" data-i18n-ph="settings.emailPh" autocomplete="off" />
+              <button id="emailSendCodeBtn" class="btn ghost" data-i18n="settings.emailSendCode">发送验证码</button>
+            </div>
             <div id="emailCodeRow" hidden class="email-code-row">
               <input id="emailCodeInput" type="text" inputmode="numeric" maxlength="6" class="input" placeholder="6 位验证码" data-i18n-ph="settings.emailCodePh" autocomplete="off" />
               <button id="emailBindBtn" class="btn primary block" data-i18n="settings.emailBind">绑定</button>
