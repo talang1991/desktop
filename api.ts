@@ -10,7 +10,7 @@ import {
   renameGroup, getGroupMemberIds,
   listAllUsers, updateUserRole, countUsers, countLinks, recentRegistrations,
   createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, updateApp, countPendingApps, toggleAppLike,
-  findUserByEmail, setUserEmail, saveEmailOtp, verifyEmailOtp,
+  findUserByEmail, setUserEmail, updatePassword, saveEmailOtp, verifyEmailOtp,
   DbUnavailableError,
 } from "./store.ts";
 
@@ -69,7 +69,7 @@ function isEmail(s: unknown): boolean {
 }
 
 // 通过第三方邮件服务发送绑定验证码（密钥从环境变量读取，不硬编码）
-async function sendBindCodeEmail(to: string, code: string): Promise<void> {
+async function sendBindCodeEmail(to: string, code: string, purpose = '邮箱绑定'): Promise<void> {
   const auth = Deno.env.get("MAIL_AUTH");
   const templateId = Deno.env.get("MAIL_TEMPLATE_ID");
   const appId = Deno.env.get("MAIL_APP_ID");
@@ -85,7 +85,7 @@ async function sendBindCodeEmail(to: string, code: string): Promise<void> {
     },
     body: JSON.stringify({
       templateId,
-      vars: { code },
+      vars: { code , purpose },
       appId,
       appSecret,
       to,
@@ -225,6 +225,78 @@ export async function handleApi(req: Request): Promise<Response> {
       if (!user) return json({ error: "未登录" }, 401);
       if (!user.email) return json({ error: "尚未绑定邮箱" }, 400);
       await setUserEmail(user.id, "");
+      return json({ ok: true });
+    }
+
+    // ---- 修改密码：向已绑定的邮箱发送验证码（需登录）----
+    if (path === "/api/password/change-code" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      if (!user.email) return json({ error: "请先绑定邮箱再修改密码" }, 400);
+      const code = String(Math.floor(100000 + Math.random() * 900000)); // 6 位纯数字
+      await saveEmailOtp(user.id, user.email, code, "change");
+      try {
+        await sendBindCodeEmail(user.email, code, '修改密码');
+      } catch (e) {
+        return json({ error: (e as Error).message || "验证码发送失败" }, 502);
+      }
+      return json({ ok: true });
+    }
+
+    // ---- 修改密码：校验验证码 + 原密码后更新（需登录）----
+    if (path === "/api/password/change" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      if (!user.email) return json({ error: "请先绑定邮箱" }, 400);
+      const b = await req.json().catch(() => ({}));
+      const oldPassword = String(b.oldPassword || "");
+      const newPassword = String(b.newPassword || "");
+      const code = String(b.code || "").trim();
+      if (newPassword.length < 6) return json({ error: "新密码至少 6 位" }, 400);
+      if (!/^\d{6}$/.test(code)) return json({ error: "请输入 6 位验证码" }, 400);
+      const ok = await verifyEmailOtp(user.id, user.email, code, "change");
+      if (!ok) return json({ error: "验证码错误或已过期" }, 400);
+      const full = await findUserByUsername(user.username);
+      if (!full || !(await verifyPassword(oldPassword, full.password_hash))) {
+        return json({ error: "原密码不正确" }, 400);
+      }
+      await updatePassword(user.id, newPassword);
+      return json({ ok: true });
+    }
+
+    // ---- 忘记密码：向邮箱发送验证码（未登录；防枚举一律返回 ok）----
+    if (path === "/api/password/reset-code" && method === "POST") {
+      const b = await req.json().catch(() => ({}));
+      const email = String(b.email || "").trim();
+      if (!isEmail(email)) return json({ error: "邮箱格式不正确" }, 400);
+      const owner = await findUserByEmail(email);
+      // 仅当邮箱确实绑定过账号时才发码；不存在也返回 ok，避免账号枚举
+      if (owner) {
+        const code = String(Math.floor(100000 + Math.random() * 900000));
+        await saveEmailOtp(owner.id, email, code, "reset");
+        try {
+          await sendBindCodeEmail(email, code, '忘记密码');
+        } catch (e) {
+          return json({ error: (e as Error).message || "验证码发送失败" }, 502);
+        }
+      }
+      return json({ ok: true });
+    }
+
+    // ---- 忘记密码：校验验证码后设置新密码（未登录）----
+    if (path === "/api/password/reset" && method === "POST") {
+      const b = await req.json().catch(() => ({}));
+      const email = String(b.email || "").trim();
+      const newPassword = String(b.newPassword || "");
+      const code = String(b.code || "").trim();
+      if (!isEmail(email)) return json({ error: "邮箱格式不正确" }, 400);
+      if (newPassword.length < 6) return json({ error: "新密码至少 6 位" }, 400);
+      if (!/^\d{6}$/.test(code)) return json({ error: "请输入 6 位验证码" }, 400);
+      const owner = await findUserByEmail(email);
+      if (!owner) return json({ error: "该邮箱未绑定任何账号" }, 404);
+      const ok = await verifyEmailOtp(owner.id, email, code, "reset");
+      if (!ok) return json({ error: "验证码错误或已过期" }, 400);
+      await updatePassword(owner.id, newPassword);
       return json({ ok: true });
     }
 

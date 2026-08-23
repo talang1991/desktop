@@ -1631,6 +1631,14 @@
       "auth.logging": "登录中…",
       "auth.registering": "注册中…",
       "auth.verifying": "正在验证登录态…",
+      "auth.forgot": "忘记密码？",
+      "auth.forgot.hint": "通过绑定邮箱的验证码重置密码",
+      "auth.forgot.emailPh": "绑定邮箱",
+      "auth.forgot.codePh": "6 位验证码",
+      "auth.forgot.newPassPh": "新密码（至少 6 位）",
+      "auth.forgot.sendCode": "发送验证码",
+      "auth.forgot.submit": "重置密码",
+      "auth.forgot.back": "返回登录",
       "auth.sessionExpired": "登录已失效，请重新登录",
       "update.text": "已更新到新版本 v",
       "update.reload": "刷新",
@@ -1663,6 +1671,16 @@
       "settings.emailSendErr": "发送失败：",
       "settings.emailBindErr": "绑定失败：",
       "settings.emailUnbindDone": "已解绑邮箱",
+      "settings.changePassword": "修改密码",
+      "settings.change.hint": "需通过绑定邮箱的验证码验证身份",
+      "settings.change.oldPh": "原密码",
+      "settings.change.newPh": "新密码（至少 6 位）",
+      "settings.change.codePh": "6 位验证码",
+      "settings.change.sendCode": "发送验证码",
+      "settings.change.submit": "修改密码",
+      "settings.change.sendErr": "发送失败：",
+      "settings.change.done": "密码已修改",
+      "settings.change.noEmail": "请先在上方绑定邮箱再修改密码",
       "settings.devices": "登录设备",
       "settings.logoutOthers": "登出其他设备",
       "settings.devicesHint": "这里列出当前账号登录过的所有设备，可单独登出某台或一键登出其他设备。",
@@ -1936,6 +1954,14 @@
       "auth.registering": "Signing up…",
       "auth.verifying": "Verifying your session…",
       "auth.sessionExpired": "Session expired, please log in again",
+      "auth.forgot": "Forgot password?",
+      "auth.forgot.hint": "Reset password via a code sent to your bound email",
+      "auth.forgot.emailPh": "Bound email",
+      "auth.forgot.codePh": "6-digit code",
+      "auth.forgot.newPassPh": "New password (min 6 chars)",
+      "auth.forgot.sendCode": "Send code",
+      "auth.forgot.submit": "Reset password",
+      "auth.forgot.back": "Back to sign in",
       "update.text": "Updated to version v",
       "update.reload": "Reload",
       "install.text": "Install to desktop for one-tap access",
@@ -1967,6 +1993,16 @@
       "settings.emailSendErr": "Send failed: ",
       "settings.emailBindErr": "Bind failed: ",
       "settings.emailUnbindDone": "Email unbound",
+      "settings.changePassword": "Change Password",
+      "settings.change.hint": "Verify via a code sent to your bound email",
+      "settings.change.oldPh": "Current password",
+      "settings.change.newPh": "New password (min 6 chars)",
+      "settings.change.codePh": "6-digit code",
+      "settings.change.sendCode": "Send code",
+      "settings.change.submit": "Change password",
+      "settings.change.sendErr": "Send failed: ",
+      "settings.change.done": "Password changed",
+      "settings.change.noEmail": "Bind your email first before changing password",
       "settings.devices": "Devices",
       "settings.logoutOthers": "Log out other devices",
       "settings.devicesHint": "Lists all devices signed in to this account. You can sign out a single device or all others at once.",
@@ -2350,6 +2386,67 @@
     $("#authSub").textContent = "登录以同步你的应用";
     clearAuthError();
   };
+
+  // ---------- 忘记密码（未登录，邮箱验证码重置）----------
+  $("#toForgot").onclick = (e) => {
+    e.preventDefault();
+    hideAuthSpinner();
+    $("#loginForm").hidden = true;
+    $("#forgotForm").hidden = false;
+    $("#authSub").textContent = "重置密码";
+    clearAuthError();
+  };
+  $("#forgotBack").onclick = (e) => {
+    e.preventDefault();
+    $("#forgotForm").hidden = true;
+    $("#loginForm").hidden = false;
+    $("#authSub").textContent = "登录以同步你的应用";
+    clearAuthError();
+  };
+  $("#forgotSendCode").onclick = async (e) => {
+    const btn = e.currentTarget;
+    const email = $("#forgotEmail").value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showAuthError("请输入正确的邮箱"); return; }
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = t("auth.forgot.sendCode") + "…";
+    try {
+      await api("/api/password/reset-code", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      toast(t("auth.forgot.sendCode") + " ✓", "ok");
+    } catch (err) {
+      showAuthError(err.message || "发送失败");
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
+  };
+  $("#forgotForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector("button[type=submit]");
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = t("auth.forgot.submit") + "…";
+    try {
+      await api("/api/password/reset", {
+        method: "POST",
+        body: JSON.stringify({
+          email: $("#forgotEmail").value.trim(),
+          code: $("#forgotCode").value.trim(),
+          newPassword: $("#forgotPass").value,
+        }),
+      });
+      toast("密码已重置，请登录", "ok");
+      $("#forgotForm").reset();
+      $("#forgotForm").hidden = true;
+      $("#loginForm").hidden = false;
+      $("#authSub").textContent = "登录以同步你的应用";
+      clearAuthError();
+    } catch (err) {
+      showAuthError(err.message || "重置失败");
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
+  });
   async function logout() {
     disconnectSignaling();
     try { await api("/api/logout", { method: "POST" }); } catch {}
@@ -3109,6 +3206,48 @@
   if (emailBindBtn) emailBindBtn.onclick = emailBind;
   const emailUnbindBtn = $("#emailUnbindBtn");
   if (emailUnbindBtn) emailUnbindBtn.onclick = emailUnbind;
+
+  // ---------- 修改密码（需通过绑定邮箱验证码）----------
+  const changeSendCode = $("#changeSendCode");
+  if (changeSendCode) changeSendCode.onclick = async () => {
+    if (!currentUserEmail) { toast(t("settings.change.noEmail"), "err"); return; }
+    const btn = changeSendCode;
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = t("settings.change.sendCode") + "…";
+    try {
+      await api("/api/password/change-code", { method: "POST" });
+      toast(t("settings.change.sendCode") + " ✓", "ok");
+    } catch (err) {
+      toast(t("settings.change.sendErr") + (err.message || err), "err");
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
+  };
+  const changeSubmit = $("#changeSubmit");
+  if (changeSubmit) changeSubmit.onclick = async () => {
+    const oldPass = $("#changeOldPass").value;
+    const newPass = $("#changeNewPass").value;
+    const code = $("#changeCode").value.trim();
+    if (newPass.length < 6) { toast("新密码至少 6 位", "err"); return; }
+    if (!/^\d{6}$/.test(code)) { toast("请输入 6 位验证码", "err"); return; }
+    const btn = changeSubmit;
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = t("settings.change.submit") + "…";
+    try {
+      await api("/api/password/change", {
+        method: "POST",
+        body: JSON.stringify({ oldPassword: oldPass, newPassword: newPass, code }),
+      });
+      toast(t("settings.change.done"), "ok");
+      $("#changeOldPass").value = "";
+      $("#changeNewPass").value = "";
+      $("#changeCode").value = "";
+    } catch (err) {
+      toast(t("settings.change.sendErr") + (err.message || err), "err");
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
+  };
 
   // ---------- 管理后台（仅管理员可见 / 可进入）----------
   // ---------- 管理后台入口（已拆为独立页面 admin.html）----------

@@ -480,6 +480,17 @@ export async function setUserEmail(userId: number, email: string): Promise<boole
   return rows.length > 0;
 }
 
+// 修改 / 重置密码：重新派生 PBKDF2 哈希（盐随机），避免沿用旧哈希算法参数
+export async function updatePassword(userId: number, newPassword: string): Promise<boolean> {
+  ensureDb();
+  const hash = await hashPassword(newPassword);
+  const rows = await query<{ id: number }>(
+    `UPDATE users SET password_hash = $2 WHERE id = $1 RETURNING id`,
+    [userId, hash],
+  );
+  return rows.length > 0;
+}
+
 // 保存邮箱验证码（先清旧再插入，保证每个用户每种用途只有一条有效验证码）
 export async function saveEmailOtp(
   userId: number,

@@ -603,6 +603,19 @@ body.selection-mode .card:hover { transform: none; }
 }
 .settings-panel .btn.block { display: block; width: 100%; margin-bottom: 10px; text-align: left; }
 .settings-hint { font-size: 12px; color: var(--text-2); line-height: 1.5; margin: 6px 0 0; }
+/* 设置面板内的文本输入框：统一边框/圆角/内边距（避免浏览器默认 inset 风格） */
+.settings-section .input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  box-sizing: border-box;
+  margin-bottom: 10px;
+}
+.settings-section .input:focus { outline: none; border-color: var(--primary); }
 
 /* ---------- 绑定邮箱 ---------- */
 .email-bound-row {

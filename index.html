@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="应用导航" />
-  <link rel="stylesheet" href="styles.css?v=91" />
+  <link rel="stylesheet" href="styles.css?v=93" />
 </head>
 <body>
   <!-- 内联 SVG 图标雪碧图：品牌/访客用极光渐变填充，其余 UI 图标用 currentColor 描边随主题色变化 -->
@@ -106,6 +106,7 @@
         <input id="loginUser" type="text" placeholder="用户名" data-i18n-ph="auth.username.ph" autocomplete="username" required />
         <input id="loginPass" type="password" placeholder="密码" data-i18n-ph="auth.password.ph" autocomplete="current-password" required />
         <button class="btn primary block" type="submit" data-i18n="auth.login">登录</button>
+        <p class="auth-toggle"><a id="toForgot" href="#" data-i18n="auth.forgot">忘记密码？</a></p>
         <p class="auth-toggle"><span data-i18n="auth.noAccount.pre">还没有账号？</span><a id="toRegister" href="#" data-i18n="auth.register.link">注册一个</a></p>
       </form>
 
@@ -114,6 +115,19 @@
         <input id="regPass" type="password" placeholder="密码（至少 6 位）" data-i18n-ph="auth.regPassword.ph" autocomplete="new-password" required />
         <button class="btn primary block" type="submit" data-i18n="auth.register">注册</button>
         <p class="auth-toggle"><span data-i18n="auth.hasAccount.pre">已有账号？</span><a id="toLogin" href="#" data-i18n="auth.login.link">去登录</a></p>
+      </form>
+
+      <!-- 忘记密码：邮箱验证码重置（未登录） -->
+      <form id="forgotForm" class="auth-form" hidden>
+        <p class="auth-sub" data-i18n="auth.forgot.hint">通过绑定邮箱的验证码重置密码</p>
+        <input id="forgotEmail" type="email" placeholder="绑定邮箱" data-i18n-ph="auth.forgot.emailPh" autocomplete="email" required />
+        <div class="row email-row">
+          <input id="forgotCode" type="text" inputmode="numeric" maxlength="6" placeholder="6 位验证码" data-i18n-ph="auth.forgot.codePh" autocomplete="off" />
+          <button id="forgotSendCode" type="button" class="btn ghost" data-i18n="auth.forgot.sendCode">发送验证码</button>
+        </div>
+        <input id="forgotPass" type="password" placeholder="新密码（至少 6 位）" data-i18n-ph="auth.forgot.newPassPh" autocomplete="new-password" required />
+        <button class="btn primary block" type="submit" data-i18n="auth.forgot.submit">重置密码</button>
+        <p class="auth-toggle"><a id="forgotBack" href="#" data-i18n="auth.forgot.back">返回登录</a></p>
       </form>
 
       <!-- 本端已有登录态：展示转圈等待服务端校验，隐藏账号密码输入框 -->
@@ -604,6 +618,17 @@
           </div>
         </div>
         <div class="settings-section">
+          <div class="settings-section-title" data-i18n="settings.changePassword">修改密码</div>
+          <p class="settings-hint" data-i18n="settings.change.hint">需通过绑定邮箱的验证码验证身份</p>
+          <input id="changeOldPass" type="password" class="input" placeholder="原密码" data-i18n-ph="settings.change.oldPh" autocomplete="current-password" />
+          <input id="changeNewPass" type="password" class="input" placeholder="新密码（至少 6 位）" data-i18n-ph="settings.change.newPh" autocomplete="new-password" />
+          <div class="row email-row">
+            <input id="changeCode" type="text" inputmode="numeric" maxlength="6" class="input" placeholder="6 位验证码" data-i18n-ph="settings.change.codePh" autocomplete="off" />
+            <button id="changeSendCode" type="button" class="btn ghost" data-i18n="settings.change.sendCode">发送验证码</button>
+          </div>
+          <button id="changeSubmit" class="btn primary block" data-i18n="settings.change.submit">修改密码</button>
+        </div>
+        <div class="settings-section">
           <div class="settings-section-title" data-i18n="settings.devices">登录设备</div>
           <div id="sessionsList" class="sessions-list"></div>
           <button id="logoutOthersBtn" class="btn ghost block" data-i18n="settings.logoutOthers">登出其他设备</button>
@@ -624,7 +649,7 @@
 
   <!-- 管理后台已拆为独立页面 admin.html（从设置的「管理」入口打开） -->
 
-  <script src="app.js?v=169"></script>
+  <script src="app.js?v=170"></script>
   <script src="delight.js?v=4"></script>
 </body>
 </html>
