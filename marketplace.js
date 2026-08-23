@@ -1,7 +1,7 @@
 // marketplace.js —— 应用广场独立页面（marketplace.html）逻辑，独立于 app.js
 // 复用与主应用相同的 token 存储：
 //   - token: localStorage["web-app-launcher:token"]
-//   - GET  /api/apps            -> { apps: [...] }（公开，已上架；支持 ?china=1&pwa=1 过滤）
+//   - GET  /api/apps            -> { apps: [...] }（公开，已上架；支持 ?pc=1&mobile=1&pwa=1 过滤）
 //   - POST /api/apps            -> { id, status:"pending" }（需登录，发布）
 //   - GET  /api/apps/mine       -> { apps: [...] }（需登录；含状态）
 //   - DELETE /api/apps/:id      -> { ok:true }（需登录；删除自己的）
@@ -141,7 +141,8 @@
     if (app.category && app.category !== "其它") {
       b += '<span class="mk-badge">' + escapeHtml(app.category) + "</span>";
     }
-    if (app.supports_china) b += '<span class="mk-badge on-china">境内可访问</span>';
+    if (app.supports_pc) b += '<span class="mk-badge on-pc">PC</span>';
+    if (app.supports_mobile) b += '<span class="mk-badge on-mobile">📱手机</span>';
     if (app.supports_pwa) b += '<span class="mk-badge on-pwa">支持 PWA</span>';
     return b;
   }
@@ -357,11 +358,12 @@
   // ---------- 渲染 ----------
   async function loadPlaza() {
     const grid = document.getElementById("mkGrid");
-    const china = document.getElementById("fChina").checked ? 1 : 0;
+    const pc = document.getElementById("fPc").checked ? 1 : 0;
+    const mobile = document.getElementById("fMobile").checked ? 1 : 0;
     const pwa = document.getElementById("fPwa").checked ? 1 : 0;
     showSkeleton(grid);
     try {
-      const { apps } = await api("/api/apps?china=" + china + "&pwa=" + pwa);
+      const { apps } = await api("/api/apps?pc=" + pc + "&mobile=" + mobile + "&pwa=" + pwa);
       appIndex = {};
       apps.forEach((a) => { appIndex[a.id] = a; });
       if (!apps.length) {
@@ -459,7 +461,8 @@
     document.getElementById("fCategory").value = app.category || "";
     document.getElementById("fIcon").value = app.icon || "";
     document.getElementById("fDesc").value = app.description || "";
-    document.getElementById("fChina2").checked = !!app.supports_china;
+    document.getElementById("fPc2").checked = !!app.supports_pc;
+    document.getElementById("fMobile2").checked = !!app.supports_mobile;
     document.getElementById("fPwa2").checked = !!app.supports_pwa;
     setPublishMode();
     document.getElementById("publishModal").hidden = false;
@@ -476,7 +479,8 @@
     const category = document.getElementById("fCategory").value.trim();
     const icon = document.getElementById("fIcon").value.trim();
     const description = document.getElementById("fDesc").value.trim();
-    const supports_china = document.getElementById("fChina2").checked;
+    const supports_pc = document.getElementById("fPc2").checked;
+    const supports_mobile = document.getElementById("fMobile2").checked;
     const supports_pwa = document.getElementById("fPwa2").checked;
     if (!name) { toast("请填写应用名称", "err"); return; }
     if (!/^https?:\/\//i.test(url)) { toast("请填写合法的 http(s) 链接", "err"); return; }
@@ -487,13 +491,13 @@
         // 修改模式：PUT 更新字段，后端重置状态为 pending
         await api("/api/apps/" + editingId, {
           method: "PUT",
-          body: JSON.stringify({ name, url, category, icon, description, supports_china, supports_pwa }),
+          body: JSON.stringify({ name, url, category, icon, description, supports_pc, supports_mobile, supports_pwa }),
         });
         toast("已保存并重新提交，等待管理员审核");
       } else {
         await api("/api/apps", {
           method: "POST",
-          body: JSON.stringify({ name, url, category, icon, description, supports_china, supports_pwa }),
+          body: JSON.stringify({ name, url, category, icon, description, supports_pc, supports_mobile, supports_pwa }),
         });
         toast("已提交，等待管理员审核");
       }
@@ -644,7 +648,8 @@
         else location.href = "index.html";
       });
     }
-    document.getElementById("fChina").addEventListener("change", loadPlaza);
+    document.getElementById("fPc").addEventListener("change", loadPlaza);
+    document.getElementById("fMobile").addEventListener("change", loadPlaza);
     document.getElementById("fPwa").addEventListener("change", loadPlaza);
     document.getElementById("publishBtn").addEventListener("click", openPublish);
     document.getElementById("publishClose").addEventListener("click", closePublish);

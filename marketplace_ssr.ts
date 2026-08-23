@@ -54,7 +54,8 @@ function badgeHtml(app: AppStatus): string {
   if (app.category && app.category !== "其它") {
     b += '<span class="mk-badge">' + escapeHtml(app.category) + "</span>";
   }
-  if (app.supports_china) b += '<span class="mk-badge on-china">境内可访问</span>';
+  if (app.supports_pc) b += '<span class="mk-badge on-pc">PC</span>';
+  if (app.supports_mobile) b += '<span class="mk-badge on-mobile">📱手机</span>';
   if (app.supports_pwa) b += '<span class="mk-badge on-pwa">支持 PWA</span>';
   return b;
 }

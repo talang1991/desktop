@@ -176,13 +176,14 @@ export async function handleApi(req: Request): Promise<Response> {
       return json({ stats: { users, links, recentUsers } });
     }
 
-    // ---- 应用广场：公开列表（已上架；支持 china / pwa 过滤；无需登录）----
+    // ---- 应用广场：公开列表（已上架；支持 pc / mobile / pwa 过滤；无需登录）----
     if (path === "/api/apps" && method === "GET") {
-      const china = url.searchParams.get("china") === "1";
+      const pc = url.searchParams.get("pc") === "1";
+      const mobile = url.searchParams.get("mobile") === "1";
       const pwa = url.searchParams.get("pwa") === "1";
       // 已登录则带上 userId，让列表返回「当前用户是否已赞」标记
       const me = await requireUser(req);
-      const apps = await listApprovedApps({ china, pwa }, me?.id);
+      const apps = await listApprovedApps({ pc, mobile, pwa }, me?.id);
       return json({ apps });
     }
 
@@ -199,9 +200,10 @@ export async function handleApi(req: Request): Promise<Response> {
       const description = String(b.description || "").slice(0, 500);
       const icon = String(b.icon || "").slice(0, 2048);
       const category = (String(b.category || "其它").trim() || "其它").slice(0, 20);
-      const supports_china = b.supports_china === true || b.supports_china === "true";
+      const supports_pc = b.supports_pc === true || b.supports_pc === "true";
+      const supports_mobile = b.supports_mobile === true || b.supports_mobile === "true";
       const supports_pwa = b.supports_pwa === true || b.supports_pwa === "true";
-      const r = await createApp(user.id, { name, url: rawUrl, description, icon, category, supports_china, supports_pwa });
+      const r = await createApp(user.id, { name, url: rawUrl, description, icon, category, supports_pc, supports_mobile, supports_pwa });
       return json({ id: r.id, status: "pending" }, 201);
     }
 
@@ -235,10 +237,11 @@ export async function handleApi(req: Request): Promise<Response> {
         const description = String(b.description || "").slice(0, 500);
         const icon = String(b.icon || "").slice(0, 2048);
         const category = (String(b.category || "其它").trim() || "其它").slice(0, 20);
-        const supports_china = b.supports_china === true || b.supports_china === "true";
+        const supports_pc = b.supports_pc === true || b.supports_pc === "true";
+        const supports_mobile = b.supports_mobile === true || b.supports_mobile === "true";
         const supports_pwa = b.supports_pwa === true || b.supports_pwa === "true";
         const ok = await updateApp(id, user.id, {
-          name, url: rawUrl, description, icon, category, supports_china, supports_pwa,
+          name, url: rawUrl, description, icon, category, supports_pc, supports_mobile, supports_pwa,
         });
         if (!ok) return json({ error: "应用不存在或无权修改" }, 404);
         return json({ ok: true, status: "pending" });

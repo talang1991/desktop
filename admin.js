@@ -217,8 +217,10 @@
         escapeHtml(a.url) + "</a>";
       const userTd = document.createElement("td");
       userTd.textContent = a.username || "未知";
-      const chinaTd = document.createElement("td");
-      chinaTd.textContent = a.supports_china ? "是" : "否";
+      const pcTd = document.createElement("td");
+      pcTd.textContent = a.supports_pc ? "是" : "否";
+      const mobileTd = document.createElement("td");
+      mobileTd.textContent = a.supports_mobile ? "是" : "否";
       const pwaTd = document.createElement("td");
       pwaTd.textContent = a.supports_pwa ? "是" : "否";
       const statusTd = document.createElement("td");
@@ -231,7 +233,8 @@
       actTd.innerHTML = html;
       tr.appendChild(nameTd);
       tr.appendChild(userTd);
-      tr.appendChild(chinaTd);
+      tr.appendChild(pcTd);
+      tr.appendChild(mobileTd);
       tr.appendChild(pwaTd);
       tr.appendChild(statusTd);
       tr.appendChild(actTd);
@@ -294,7 +297,8 @@
       "</div>" +
       row("提交者", escapeHtml(a.username || "未知")) +
       row("分类", escapeHtml(a.category || "—")) +
-      row("支持中国境内访问", a.supports_china ? "是" : "否") +
+      row("支持 PC", a.supports_pc ? "是" : "否") +
+      row("支持手机", a.supports_mobile ? "是" : "否") +
       row("支持 PWA", a.supports_pwa ? "是" : "否") +
       row("状态", '<span class="mk-status ' + escapeHtml(a.status) + '">' + (stMap[a.status] || a.status) + "</span>") +
       row("创建时间", escapeHtml(fmtDate(a.created_at))) +

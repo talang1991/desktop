@@ -142,7 +142,8 @@ const APPS_DDL = `CREATE TABLE IF NOT EXISTS apps (
   description TEXT NOT NULL DEFAULT '',
   icon TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL DEFAULT '其它',
-  supports_china BOOLEAN NOT NULL DEFAULT false,  -- 是否支持中国境内访问
+  supports_pc BOOLEAN NOT NULL DEFAULT false,     -- 是否支持 PC（电脑端）
+  supports_mobile BOOLEAN NOT NULL DEFAULT false, -- 是否支持手机端
   supports_pwa BOOLEAN NOT NULL DEFAULT false,    -- 是否支持 PWA
   status TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | rejected
   reject_reason TEXT NOT NULL DEFAULT '',
@@ -162,6 +163,7 @@ const APP_LIKES_DDL = `CREATE TABLE IF NOT EXISTS app_likes (
 // 运行时懒创建 apps 表：首次访问任一应用广场接口时确保表存在（DB 可达即创建，
 // 与读同走重试连接；失败则下次重试）。这样即便启动期 DB 抖动导致建表被跳过，
 // 也能在 DB 恢复后自愈，不依赖重启。
+// 对【已存在的旧表】额外做幂等迁移：补加新增的列（CREATE TABLE IF NOT EXISTS 不会给旧表加列）。
 let appsTableEnsured: Promise<void> | null = null;
 async function ensureAppsTable(): Promise<void> {
   if (!appsTableEnsured) {
@@ -169,6 +171,21 @@ async function ensureAppsTable(): Promise<void> {
       await withClient(async (c) => {
         await c.queryObject(APPS_DDL);
         await c.queryObject(APP_LIKES_DDL);
+        // 幂等补列：CREATE TABLE IF NOT EXISTS 对旧表无效，需显式 ALTER
+        const existing = await c.queryObject<{ column_name: string }>(
+          `SELECT column_name FROM information_schema.columns
+           WHERE table_name = 'apps' AND column_name IN ('supports_pc','supports_mobile','supports_pwa')`,
+        );
+        const have = new Set(existing.map((r) => r.column_name));
+        if (!have.has("supports_pc")) {
+          await c.queryObject(`ALTER TABLE apps ADD COLUMN supports_pc BOOLEAN NOT NULL DEFAULT false`);
+        }
+        if (!have.has("supports_mobile")) {
+          await c.queryObject(`ALTER TABLE apps ADD COLUMN supports_mobile BOOLEAN NOT NULL DEFAULT false`);
+        }
+        if (!have.has("supports_pwa")) {
+          await c.queryObject(`ALTER TABLE apps ADD COLUMN supports_pwa BOOLEAN NOT NULL DEFAULT false`);
+        }
       });
     })().catch((e) => {
       appsTableEnsured = null; // 失败则清空，下次访问重试
@@ -624,7 +641,8 @@ export interface AppStatus {
   description: string;
   icon: string;
   category: string;
-  supports_china: boolean;
+  supports_pc: boolean;
+  supports_mobile: boolean;
   supports_pwa: boolean;
   status: "pending" | "approved" | "rejected";
   reject_reason: string;
@@ -641,14 +659,14 @@ export async function createApp(
   userId: number,
   data: {
     name: string; url: string; description?: string; icon?: string;
-    category?: string; supports_china?: boolean; supports_pwa?: boolean;
+    category?: string; supports_pc?: boolean; supports_mobile?: boolean; supports_pwa?: boolean;
   },
 ): Promise<{ id: number }> {
   ensureDb();
   await ensureAppsTable();
   const rows = await query<{ id: number }>(
-    `INSERT INTO apps (user_id, name, url, description, icon, category, supports_china, supports_pwa)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    `INSERT INTO apps (user_id, name, url, description, icon, category, supports_pc, supports_mobile, supports_pwa)
+     VALUES ($1, $2,, $3, $4, $5, $6, $7, $8, $9) RETURNING id`.replace(",$3", ", $3"),
     [
       userId,
       data.name,
@@ -656,24 +674,26 @@ export async function createApp(
       data.description || "",
       data.icon || "",
       data.category || "其它",
-      !!data.supports_china,
+      !!data.supports_pc,
+      !!data.supports_mobile,
       !!data.supports_pwa,
     ],
   );
   return rows[0];
 }
 
-// 广场公开展示：仅已审核通过的应用；支持按「境内可访问 / 支持 PWA」过滤
+// 广场公开展示：仅已审核通过的应用；支持按「PC / 手机 / PWA」过滤
 // currentUserId 非空时，额外返回 liked（当前用户是否已赞该应用）
 export async function listApprovedApps(
-  opts: { china?: boolean; pwa?: boolean } = {},
+  opts: { pc?: boolean; mobile?: boolean; pwa?: boolean } = {},
   currentUserId?: number,
 ): Promise<AppStatus[]> {
   ensureDb();
   await ensureAppsTable();
   const conds: string[] = ["a.status = 'approved'"];
   const params: unknown[] = [];
-  if (opts.china) { params.push(true); conds.push(`a.supports_china = $${params.length}`); }
+  if (opts.pc) { params.push(true); conds.push(`a.supports_pc = $${params.length}`); }
+  if (opts.mobile) { params.push(true); conds.push(`a.supports_mobile = $${params.length}`); }
   if (opts.pwa) { params.push(true); conds.push(`a.supports_pwa = $${params.length}`); }
   const likeSub = `(SELECT COUNT(*) FROM app_likes al WHERE al.app_id = a.id)::int AS like_count`;
   let likedSub = `false AS liked`;
@@ -683,7 +703,7 @@ export async function listApprovedApps(
   }
   const rows = await query<AppStatus>(
     `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
-            a.supports_china, a.supports_pwa, a.status, a.reject_reason, a.created_at,
+            a.supports_pc, a.supports_mobile, a.supports_pwa, a.status, a.reject_reason, a.created_at,
             a.approved_at, u.username, ${likeSub}, ${likedSub}
      FROM apps a JOIN users u ON u.id = a.user_id
      WHERE ${conds.join(" AND ")}
@@ -704,7 +724,7 @@ export async function listMyApps(userId: number, currentUserId?: number): Promis
   const params = currentUserId ? [userId, currentUserId] : [userId];
   const rows = await query<AppStatus>(
     `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
-            a.supports_china, a.supports_pwa, a.status, a.reject_reason, a.created_at,
+            a.supports_pc, a.supports_mobile, a.supports_pwa, a.status, a.reject_reason, a.created_at,
             a.approved_at, u.username, ${likeSub}, ${likedSub}
      FROM apps a JOIN users u ON u.id = a.user_id
      WHERE a.user_id = $1
@@ -720,7 +740,7 @@ export async function listAllApps(): Promise<AppStatus[]> {
   await ensureAppsTable();
   const rows = await query<AppStatus>(
     `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
-            a.supports_china, a.supports_pwa, a.status, a.reject_reason, a.created_at,
+            a.supports_pc, a.supports_mobile, a.supports_pwa, a.status, a.reject_reason, a.created_at,
             a.approved_at, a.approved_by, u.username,
             (SELECT COUNT(*) FROM app_likes al WHERE al.app_id = a.id)::int AS like_count,
             false AS liked
@@ -774,7 +794,7 @@ export async function updateApp(
   userId: number,
   data: {
     name: string; url: string; description?: string; icon?: string;
-    category?: string; supports_china?: boolean; supports_pwa?: boolean;
+    category?: string; supports_pc?: boolean; supports_mobile?: boolean; supports_pwa?: boolean;
   },
 ): Promise<boolean> {
   ensureDb();
@@ -782,13 +802,13 @@ export async function updateApp(
   const rows = await query<{ id: number }>(
     `UPDATE apps
      SET name = $3, url = $4, description = $5, icon = $6, category = $7,
-         supports_china = $8, supports_pwa = $9,
+         supports_pc = $8, supports_mobile = $9, supports_pwa = $10,
          status = 'pending', reject_reason = '', approved_at = NULL, approved_by = NULL
      WHERE id = $1 AND user_id = $2 RETURNING id`,
     [
       id, userId,
       data.name, data.url, data.description || "", data.icon || "",
-      data.category || "其它", !!data.supports_china, !!data.supports_pwa,
+      data.category || "其它", !!data.supports_pc, !!data.supports_mobile, !!data.supports_pwa,
     ],
   );
   return rows.length > 0;
