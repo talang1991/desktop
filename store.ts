@@ -176,7 +176,7 @@ async function ensureAppsTable(): Promise<void> {
           `SELECT column_name FROM information_schema.columns
            WHERE table_name = 'apps' AND column_name IN ('supports_pc','supports_mobile','supports_pwa')`,
         );
-        const have = new Set(existing.map((r) => r.column_name));
+        const have = new Set((existing.rows ?? []).map((r) => r.column_name));
         if (!have.has("supports_pc")) {
           await c.queryObject(`ALTER TABLE apps ADD COLUMN supports_pc BOOLEAN NOT NULL DEFAULT false`);
         }
