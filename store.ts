@@ -24,6 +24,7 @@ export interface StoredUser {
   password_hash: string;
   avatar: string;
   role: string;
+  email: string;
   created_at: string;
 }
 export type UserRole = "user" | "admin";
@@ -259,12 +260,17 @@ export async function initStore(): Promise<void> {
               username TEXT NOT NULL UNIQUE,
               password_hash TEXT NOT NULL,
               avatar TEXT NOT NULL DEFAULT '',
+              email TEXT NOT NULL DEFAULT '',
               created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )`,
           );
           // 兼容已存在的 users 表（线上生产库）：非破坏性补充 avatar 列
           await c.queryObject(
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT NOT NULL DEFAULT ''`,
+          );
+          // 兼容已存在的 users 表：补充 email 列（绑定邮箱用）
+          await c.queryObject(
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''`,
           );
           // 角色：普通用户 user / 管理员 admin（默认 user）；CHECK 约束保证取值合法，DO 块幂等可重复执行
           await c.queryObject(
@@ -295,6 +301,18 @@ export async function initStore(): Promise<void> {
               token TEXT PRIMARY KEY,
               user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
               expires_at TIMESTAMPTZ NOT NULL
+            )`,
+          );
+          // 邮箱验证码：绑定邮箱时临时存放（验证码 + 过期时间）；绑定成功后清理
+          await c.queryObject(
+            `CREATE TABLE IF NOT EXISTS email_otp (
+              id SERIAL PRIMARY KEY,
+              user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              email TEXT NOT NULL,
+              code TEXT NOT NULL,
+              purpose TEXT NOT NULL DEFAULT 'bind', -- bind | rebind
+              expires_at TIMESTAMPTZ NOT NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )`,
           );
           // 兼容已存在的 sessions 表：补充多端登录所需的设备/UA/时间列
@@ -439,10 +457,67 @@ export async function registerUser(username: string, password: string, avatar = 
 export async function findUserByUsername(username: string): Promise<StoredUser | null> {
   ensureDb();
   const rows = await query<StoredUser>(
-    `SELECT id, username, password_hash, avatar, role, created_at FROM users WHERE username = $1`,
+    `SELECT id, username, password_hash, avatar, role, email, created_at FROM users WHERE username = $1`,
     [username],
   );
   return rows[0] ?? null;
+}
+
+// 按邮箱查找用户（绑定邮箱时用于「邮箱不可重复绑定到其它账号」校验）
+export async function findUserByEmail(email: string): Promise<{ id: number } | null> {
+  ensureDb();
+  const rows = await query<{ id: number }>(`SELECT id FROM users WHERE email = $1`, [email]);
+  return rows[0] ?? null;
+}
+
+// 写入 / 更新当前用户邮箱（绑定成功后调用）
+export async function setUserEmail(userId: number, email: string): Promise<boolean> {
+  ensureDb();
+  const rows = await query<{ id: number }>(
+    `UPDATE users SET email = $2 WHERE id = $1 RETURNING id`,
+    [userId, email],
+  );
+  return rows.length > 0;
+}
+
+// 保存邮箱验证码（先清旧再插入，保证每个用户每种用途只有一条有效验证码）
+export async function saveEmailOtp(
+  userId: number,
+  email: string,
+  code: string,
+  purpose = "bind",
+  ttlMs = 10 * 60 * 1000,
+): Promise<void> {
+  ensureDb();
+  await query(`DELETE FROM email_otp WHERE user_id = $1 AND purpose = $2`, [userId, purpose]);
+  const expires = new Date(Date.now() + ttlMs).toISOString();
+  await query(
+    `INSERT INTO email_otp (user_id, email, code, purpose, expires_at) VALUES ($1,$2,$3,$4,$5)`,
+    [userId, email, code, purpose, expires],
+  );
+}
+
+// 校验邮箱验证码：匹配则返回 true 并清理该验证码；不匹配/过期/不存在返回 false
+export async function verifyEmailOtp(
+  userId: number,
+  email: string,
+  code: string,
+  purpose = "bind",
+): Promise<boolean> {
+  ensureDb();
+  const rows = await query<{ id: number; expires_at: string; code: string }>(
+    `SELECT id, expires_at, code FROM email_otp WHERE user_id = $1 AND email = $2 AND purpose = $3`,
+    [userId, email, purpose],
+  );
+  if (!rows.length) return false;
+  const rec = rows[0];
+  if (new Date(rec.expires_at).getTime() < Date.now()) {
+    await query(`DELETE FROM email_otp WHERE id = $1`, [rec.id]);
+    return false;
+  }
+  if (rec.code !== code) return false;
+  await query(`DELETE FROM email_otp WHERE id = $1`, [rec.id]);
+  return true;
 }
 
 // ---------------- 会话 ----------------
@@ -496,15 +571,15 @@ export async function revokeSession(token: string, userId: number): Promise<bool
   return rows.length > 0;
 }
 
-export async function getUserByToken(token: string): Promise<{ id: number; username: string; avatar: string; role: string } | null> {
+export async function getUserByToken(token: string): Promise<{ id: number; username: string; avatar: string; role: string; email: string } | null> {
   if (!token) return null;
   ensureDb();
   // 在【同一条连接】上完成「读取用户 + 刷新活跃时间」：
   // 这样只要能认证成功（读到了会话），就一定能更新 last_active，
   // 避免池化代理（Prisma 等）在 flaky 时「读走健康连接、写走坏连接」导致活跃时间静默丢失。
   return withClient(async (c: any) => {
-    const res = await c.queryObject<{ id: number; username: string; avatar: string; role: string; expires_at: string }>(
-      `SELECT u.id, u.username, u.avatar, u.role, s.expires_at FROM sessions s
+    const res = await c.queryObject<{ id: number; username: string; avatar: string; role: string; email: string; expires_at: string }>(
+      `SELECT u.id, u.username, u.avatar, u.role, u.email, s.expires_at FROM sessions s
        JOIN users u ON u.id = s.user_id WHERE s.token = $1`,
       [token],
     );
@@ -517,7 +592,7 @@ export async function getUserByToken(token: string): Promise<{ id: number; usern
     // 刷新活跃时间（与读同连接；写失败不阻断请求，但静默吞掉只在此处发生，
     // 正常健康连接下必然成功）
     await c.queryObject(`UPDATE sessions SET last_active = now() WHERE token = $1`, [token]).catch(() => {});
-    return { id: r.id, username: r.username, avatar: r.avatar, role: r.role };
+    return { id: r.id, username: r.username, avatar: r.avatar, role: r.role, email: r.email };
   });
 }
 

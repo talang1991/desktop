@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="应用导航" />
-  <link rel="stylesheet" href="styles.css?v=89" />
+  <link rel="stylesheet" href="styles.css?v=90" />
 </head>
 <body>
   <!-- 内联 SVG 图标雪碧图：品牌/访客用极光渐变填充，其余 UI 图标用 currentColor 描边随主题色变化 -->
@@ -583,6 +583,25 @@
           <p class="settings-hint" data-i18n="settings.cacheHint">仅清除本机缓存（界面布局），保留登录状态、语言与主题。</p>
         </div>
         <div class="settings-section">
+          <div class="settings-section-title" data-i18n="settings.email">绑定邮箱</div>
+          <div id="emailBoundBox" hidden>
+            <div class="email-bound-row">
+              <span class="email-bound-icon">✉️</span>
+              <span id="emailBoundText" class="email-bound-text"></span>
+            </div>
+            <button id="emailUnbindBtn" class="btn ghost block danger" data-i18n="settings.emailUnbind">解绑邮箱</button>
+          </div>
+          <div id="emailFormBox">
+            <input id="emailInput" type="email" class="input" placeholder="you@example.com" data-i18n-ph="settings.emailPh" autocomplete="off" />
+            <button id="emailSendCodeBtn" class="btn ghost block" data-i18n="settings.emailSendCode">发送验证码</button>
+            <div id="emailCodeRow" hidden class="email-code-row">
+              <input id="emailCodeInput" type="text" inputmode="numeric" maxlength="6" class="input" placeholder="6 位验证码" data-i18n-ph="settings.emailCodePh" autocomplete="off" />
+              <button id="emailBindBtn" class="btn primary block" data-i18n="settings.emailBind">绑定</button>
+            </div>
+            <p class="settings-hint" data-i18n="settings.emailHint">用于接收重要通知，验证码通过邮件发送。</p>
+          </div>
+        </div>
+        <div class="settings-section">
           <div class="settings-section-title" data-i18n="settings.devices">登录设备</div>
           <div id="sessionsList" class="sessions-list"></div>
           <button id="logoutOthersBtn" class="btn ghost block" data-i18n="settings.logoutOthers">登出其他设备</button>
@@ -603,7 +622,7 @@
 
   <!-- 管理后台已拆为独立页面 admin.html（从设置的「管理」入口打开） -->
 
-  <script src="app.js?v=168"></script>
+  <script src="app.js?v=169"></script>
   <script src="delight.js?v=4"></script>
 </body>
 </html>

@@ -10,6 +10,7 @@ import {
   renameGroup, getGroupMemberIds,
   listAllUsers, updateUserRole, countUsers, countLinks, recentRegistrations,
   createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, updateApp, countPendingApps, toggleAppLike,
+  findUserByEmail, setUserEmail, saveEmailOtp, verifyEmailOtp,
   DbUnavailableError,
 } from "./store.ts";
 
@@ -31,7 +32,7 @@ function isHttpUrl(s: unknown): boolean {
 import { getWsPublicUrl, getIceServers, isOnline, pushToUser } from "./signaling.ts";
 import { saveMessage, getMessages, saveGroupMessage, getGroupMessages, chatKvReady, saveReadCursor, getReadCursor } from "./chatstore.ts";
 
-interface User { id: number; username: string; avatar: string; role: string; }
+interface User { id: number; username: string; avatar: string; role: string; email?: string; }
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -60,6 +61,40 @@ function requireUser(req: Request): Promise<User | null> {
 // 仅管理员可访问：返回当前用户（含 role）；非 admin 或已登录返回 null（调用方据此返回 403）
 function requireAdmin(req: Request): Promise<User | null> {
   return requireUser(req).then((u) => (u && u.role === "admin" ? u : null));
+}
+
+// 校验邮箱格式（简单而够用）
+function isEmail(s: unknown): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
+}
+
+// 通过第三方邮件服务发送绑定验证码（密钥从环境变量读取，不硬编码）
+async function sendBindCodeEmail(to: string, code: string): Promise<void> {
+  const auth = Deno.env.get("MAIL_AUTH");
+  const templateId = Deno.env.get("MAIL_TEMPLATE_ID");
+  const appId = Deno.env.get("MAIL_APP_ID");
+  const appSecret = Deno.env.get("MAIL_APP_SECRET");
+  if (!auth || !templateId || !appId || !appSecret) {
+    throw new Error("邮件服务未配置（缺少 MAIL_* 环境变量）");
+  }
+  const res = await fetch("https://mailadmin.xixixue1994.deno.net/api/send", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "authorization": auth,
+    },
+    body: JSON.stringify({
+      templateId,
+      vars: { code },
+      appId,
+      appSecret,
+      to,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error("邮件发送失败（" + res.status + "）" + text.slice(0, 200));
+  }
 }
 
 export async function handleApi(req: Request): Promise<Response> {
@@ -117,7 +152,7 @@ export async function handleApi(req: Request): Promise<Response> {
     if (path === "/api/me" && method === "GET") {
       // getUserByToken 内部已在同一连接上刷新 last_active（见 store.ts）
       const user = await requireUser(req);
-      return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar, role: user.role } : null });
+      return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar, role: user.role, email: user.email || "" } : null });
     }
 
     // ---- 更新当前用户资料（头像 / 昵称）----
@@ -137,6 +172,60 @@ export async function handleApi(req: Request): Promise<Response> {
         username = r.username ?? username;
       }
       return json({ user: { id: user.id, username, avatar } });
+    }
+
+    // ---- 绑定邮箱：发送验证码（需登录）----
+    // 同一邮箱不可已被其它账号绑定；已绑定过（含自己）则按 rebind 用途发码（允许换绑）
+    if (path === "/api/email/send-code" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const b = await req.json().catch(() => ({}));
+      const email = String(b.email || "").trim();
+      if (!isEmail(email)) return json({ error: "邮箱格式不正确" }, 400);
+      const owner = await findUserByEmail(email);
+      // 邮箱已被他人占用（不是当前用户自己的旧邮箱）
+      if (owner && owner.id !== user.id) {
+        return json({ error: "该邮箱已被其他账号绑定" }, 409);
+      }
+      // 已绑定过（且就是自己当前邮箱）→ 视为换绑，用 rebind 用途；否则 bind 用途
+      const purpose = user.email === email ? "rebind" : "bind";
+      const code = String(Math.floor(100000 + Math.random() * 900000)); // 6 位纯数字验证码
+      await saveEmailOtp(user.id, email, code, purpose);
+      try {
+        await sendBindCodeEmail(email, code);
+      } catch (e) {
+        return json({ error: (e as Error).message || "验证码发送失败" }, 502);
+      }
+      return json({ ok: true, purpose });
+    }
+
+    // ---- 绑定邮箱：校验验证码并写入（需登录）----
+    if (path === "/api/email/bind" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const b = await req.json().catch(() => ({}));
+      const email = String(b.email || "").trim();
+      const code = String(b.code || "").trim();
+      if (!isEmail(email)) return json({ error: "邮箱格式不正确" }, 400);
+      if (!/^\d{6}$/.test(code)) return json({ error: "请输入 6 位验证码" }, 400);
+      const owner = await findUserByEmail(email);
+      if (owner && owner.id !== user.id) {
+        return json({ error: "该邮箱已被其他账号绑定" }, 409);
+      }
+      const purpose = user.email === email ? "rebind" : "bind";
+      const ok = await verifyEmailOtp(user.id, email, code, purpose);
+      if (!ok) return json({ error: "验证码错误或已过期" }, 400);
+      await setUserEmail(user.id, email);
+      return json({ ok: true, email });
+    }
+
+    // ---- 解绑邮箱（需登录；清空 email 字段）----
+    if (path === "/api/email/unbind" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      if (!user.email) return json({ error: "尚未绑定邮箱" }, 400);
+      await setUserEmail(user.id, "");
+      return json({ ok: true });
     }
 
     // ---- 管理后台：用户列表（仅管理员）----

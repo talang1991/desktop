@@ -41,6 +41,7 @@
   let currentUsername = "";
   let myAvatar = "";
   let currentUserRole = "user";   // 当前登录用户角色：user | admin（来自 /api/me）
+  let currentUserEmail = "";      // 当前登录用户已绑定的邮箱（来自 /api/me）
 
   // ---------- DOM ----------
   const $ = (sel) => document.querySelector(sel);
@@ -378,6 +379,7 @@
     currentUserId = user.id;
     myAvatar = user.avatar || "";
     currentUserRole = (user.role === "admin") ? "admin" : "user";
+    currentUserEmail = user.email || "";
     refreshAdminEntry();
     $("#userName").textContent = user.username;
     renderAvatarInto($("#userAvatar"), myAvatar, (user.username || "?").charAt(0).toUpperCase());
@@ -1650,6 +1652,17 @@
       "settings.clearCacheConfirm": "确定清空本地缓存？这会清除本机界面布局，但不会退出登录。",
       "settings.cacheHint": "仅清除本机缓存（界面布局），保留登录状态、语言与主题。",
       "settings.cacheCleared": "缓存已清空",
+      "settings.email": "绑定邮箱",
+      "settings.emailPh": "you@example.com",
+      "settings.emailSendCode": "发送验证码",
+      "settings.emailCodePh": "6 位验证码",
+      "settings.emailBind": "绑定",
+      "settings.emailUnbind": "解绑邮箱",
+      "settings.emailHint": "用于接收重要通知，验证码通过邮件发送。",
+      "settings.emailBound": "已绑定",
+      "settings.emailSendErr": "发送失败：",
+      "settings.emailBindErr": "绑定失败：",
+      "settings.emailUnbindDone": "已解绑邮箱",
       "settings.devices": "登录设备",
       "settings.logoutOthers": "登出其他设备",
       "settings.devicesHint": "这里列出当前账号登录过的所有设备，可单独登出某台或一键登出其他设备。",
@@ -1943,6 +1956,17 @@
       "settings.clearCacheConfirm": "Clear local cache? This wipes local layout, but won't log you out.",
       "settings.cacheHint": "Only local cache (layout) is cleared; login, language and theme are kept.",
       "settings.cacheCleared": "Cache cleared",
+      "settings.email": "Bind Email",
+      "settings.emailPh": "you@example.com",
+      "settings.emailSendCode": "Send Code",
+      "settings.emailCodePh": "6-digit code",
+      "settings.emailBind": "Bind",
+      "settings.emailUnbind": "Unbind Email",
+      "settings.emailHint": "Used to receive important notices. The code is sent by email.",
+      "settings.emailBound": "Bound",
+      "settings.emailSendErr": "Send failed: ",
+      "settings.emailBindErr": "Bind failed: ",
+      "settings.emailUnbindDone": "Email unbound",
       "settings.devices": "Devices",
       "settings.logoutOthers": "Log out other devices",
       "settings.devicesHint": "Lists all devices signed in to this account. You can sign out a single device or all others at once.",
@@ -3002,13 +3026,89 @@
   function openSettings() {
     settingsPanel.hidden = false;
     refreshThemeToggle();
+    renderEmailSection();
     loadSessions(); // 进入设置即刷新「登录设备」列表
+  }
+
+  // ---------- 绑定邮箱：根据当前是否已绑定渲染区块 ----------
+  function renderEmailSection() {
+    const boundBox = $("#emailBoundBox");
+    const formBox = $("#emailFormBox");
+    if (!boundBox || !formBox) return;
+    if (currentUserEmail) {
+      boundBox.hidden = false;
+      formBox.hidden = true;
+      $("#emailBoundText").textContent = currentUserEmail;
+    } else {
+      boundBox.hidden = true;
+      formBox.hidden = false;
+      $("#emailCodeRow").hidden = true;
+      $("#emailInput").value = "";
+      $("#emailCodeInput").value = "";
+    }
+  }
+
+  // ---------- 绑定邮箱：发送验证码 ----------
+  async function emailSendCode() {
+    const email = $("#emailInput").value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast(t("settings.emailPh") + " 格式不正确", "err"); return; }
+    const btn = $("#emailSendCodeBtn");
+    btn.disabled = true;
+    try {
+      const r = await api("/api/email/send-code", { method: "POST", body: JSON.stringify({ email }) });
+      if (r.error) { toast(t("settings.emailSendErr") + r.error, "err"); return; }
+      $("#emailCodeRow").hidden = false;
+      toast(t("settings.emailSendCode") + " ✅");
+    } catch (e) {
+      toast(t("settings.emailSendErr") + ((e && e.message) || e), "err");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ---------- 绑定邮箱：校验并绑定 ----------
+  async function emailBind() {
+    const email = $("#emailInput").value.trim();
+    const code = $("#emailCodeInput").value.trim();
+    if (!/^\d{6}$/.test(code)) { toast(t("settings.emailCodePh"), "err"); return; }
+    const btn = $("#emailBindBtn");
+    btn.disabled = true;
+    try {
+      const r = await api("/api/email/bind", { method: "POST", body: JSON.stringify({ email, code }) });
+      if (r.error) { toast(t("settings.emailBindErr") + r.error, "err"); return; }
+      currentUserEmail = r.email || email;
+      renderEmailSection();
+      toast(t("settings.emailBound") + " ✅");
+    } catch (e) {
+      toast(t("settings.emailBindErr") + ((e && e.message) || e), "err");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ---------- 解绑邮箱 ----------
+  async function emailUnbind() {
+    try {
+      const r = await api("/api/email/unbind", { method: "POST" });
+      if (r.error) { toast(r.error, "err"); return; }
+      currentUserEmail = "";
+      renderEmailSection();
+      toast(t("settings.emailUnbindDone"));
+    } catch (e) {
+      toast((e && e.message) || String(e), "err");
+    }
   }
   function closeSettings() { settingsPanel.hidden = true; }
   const settingsClose = $("#settingsClose");
   if (settingsClose) settingsClose.onclick = closeSettings;
   const logoutBtn2 = $("#logoutBtn2");
   if (logoutBtn2) logoutBtn2.onclick = logout;
+  const emailSendCodeBtn = $("#emailSendCodeBtn");
+  if (emailSendCodeBtn) emailSendCodeBtn.onclick = emailSendCode;
+  const emailBindBtn = $("#emailBindBtn");
+  if (emailBindBtn) emailBindBtn.onclick = emailBind;
+  const emailUnbindBtn = $("#emailUnbindBtn");
+  if (emailUnbindBtn) emailUnbindBtn.onclick = emailUnbind;
 
   // ---------- 管理后台（仅管理员可见 / 可进入）----------
   // ---------- 管理后台入口（已拆为独立页面 admin.html）----------

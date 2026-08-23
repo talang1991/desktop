@@ -604,6 +604,18 @@ body.selection-mode .card:hover { transform: none; }
 .settings-panel .btn.block { display: block; width: 100%; margin-bottom: 10px; text-align: left; }
 .settings-hint { font-size: 12px; color: var(--text-2); line-height: 1.5; margin: 6px 0 0; }
 
+/* ---------- 绑定邮箱 ---------- */
+.email-bound-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; margin-bottom: 10px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+}
+.email-bound-icon { font-size: 16px; }
+.email-bound-text { font-size: 14px; color: var(--text-1); word-break: break-all; }
+.email-code-row { display: flex; gap: 8px; margin-top: 10px; }
+.email-code-row .input { flex: 1; }
+.email-code-row .btn { white-space: nowrap; }
+
 /* ---------- 管理后台 ---------- */
 .admin-panel {
   position: fixed; inset: 0; z-index: 200;
