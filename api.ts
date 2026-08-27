@@ -84,18 +84,16 @@ function isEmail(s: unknown): boolean {
 
 // 通过第三方邮件服务发送绑定验证码（密钥从环境变量读取，不硬编码）
 async function sendBindCodeEmail(to: string, code: string, purpose = '邮箱绑定'): Promise<void> {
-  const auth = Deno.env.get("MAIL_AUTH");
   const templateId = Deno.env.get("MAIL_TEMPLATE_ID");
   const appId = Deno.env.get("MAIL_APP_ID");
   const appSecret = Deno.env.get("MAIL_APP_SECRET");
-  if (!auth || !templateId || !appId || !appSecret) {
+  if (!templateId || !appId || !appSecret) {
     throw new Error("邮件服务未配置（缺少 MAIL_* 环境变量）");
   }
   const res = await fetch("https://mailadmin.xixixue1994.deno.net/api/send", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "authorization": auth,
     },
     body: JSON.stringify({
       templateId,
