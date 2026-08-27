@@ -64,8 +64,9 @@
     }
     .mk-banner-track {
       display: flex; height: 100%; transition: transform .5s ease; will-change: transform;
-      /* 首屏默认居中首张（1080-930)/2 = 75px；客户端会按实际宽度重算 */
-      transform: translateX(75px);
+      /* 无限轮播：克隆数组 [末张, 真实..., 首张]，首张真实位于 clone-index=1，
+         首屏居中 = (1080-930)/2 - 930 = -855px；客户端会按真实宽度重算 */
+      transform: translateX(-855px);
     }
     .mk-banner-item {
       position: relative; flex: 0 0 930px; width: 930px; max-width: 100%; height: 100%;

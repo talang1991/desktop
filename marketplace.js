@@ -722,9 +722,17 @@
   }
 
   function renderBanner(slot, apps) {
-    const items = apps.map((a, i) => bannerItemHtml(a, i)).join("");
+    let items;
     let extra = "";
     if (apps.length > 1) {
+      // 无限轮播：首前放「末张克隆」，末后放「首张克隆」，使首尾环绕无缝
+      const lead = apps[apps.length - 1];
+      const tail = apps[0];
+      const order = [lead, ...apps, tail];
+      items = order.map((a, pos) => {
+        const realIndex = pos === 0 ? apps.length - 1 : (pos === order.length - 1 ? 0 : pos - 1);
+        return bannerItemHtml(a, realIndex);
+      }).join("");
       const dots = apps.map((_, i) =>
         '<button class="mk-bi-dot' + (i === 0 ? " active" : "") + '" data-dot="' + i + '" aria-label="第 ' + (i + 1) + ' 张"></button>'
       ).join("");
@@ -732,8 +740,12 @@
         '<div class="mk-banner-dots">' + dots + "</div>" +
         '<button class="mk-bi-arrow prev" aria-label="上一张">‹</button>' +
         '<button class="mk-bi-arrow next" aria-label="下一张">›</button>';
+    } else {
+      items = apps.map((a, i) => bannerItemHtml(a, i)).join("");
     }
-    slot.innerHTML = '<div class="mk-banner-track">' + items + "</div>" + extra;
+    // 首屏首张真实（clone-index=1）居中：translateX = (1080-930)/2 - 930 = -855px
+    slot.innerHTML =
+      '<div class="mk-banner-track" style="transform:translateX(-855px)">' + items + "</div>" + extra;
   }
 
   let bannerTimer = null;
@@ -746,29 +758,45 @@
     });
     const track = slot.querySelector(".mk-banner-track");
     const dots = Array.from(slot.querySelectorAll(".mk-bi-dot"));
-    const count = dots.length;
+    const count = dots.length; // 真实 banner 数（= apps.length）
     if (count <= 1 || !track) return; // 单张无需轮播
-    let idx = 0;
-    // 居中轮播：把当前 banner 居中，左右各露出前后 banner 的一部分（peek）。
-    // itemWidth 取首张实际宽度，offset=(视口宽-单张宽)/2；translateX = offset - idx*itemWidth。
-    const go = (i) => {
-      idx = (i + count) % count;
+    // 克隆数组 index：0 = 末张克隆, 1..count = 真实张, count+1 = 首张克隆
+    const cloneLast = count + 1;
+    let idx = 1; // 首屏停在首张真实（clone-index=1）
+    const measure = () => {
       const itemW = track.firstElementChild ? track.firstElementChild.offsetWidth : 930;
       const offset = (slot.clientWidth - itemW) / 2;
-      track.style.transform = "translateX(" + (offset - idx * itemW) + "px)";
-      dots.forEach((d, k) => d.classList.toggle("active", k === idx));
+      return { itemW, offset };
     };
+    // 居中轮播 + 无缝循环：把当前 banner 居中（peek 前后），越过克隆边缘时瞬间跳回真实张。
+    const go = (target, animate = true) => {
+      target = Math.max(0, Math.min(cloneLast, target)); // 夹紧在 [0, count+1]
+      const { itemW, offset } = measure();
+      track.style.transition = animate ? "" : "none";
+      track.style.transform = "translateX(" + (offset - target * itemW) + "px)";
+      if (!animate) { void track.offsetHeight; } // 强制回流，无动画跳变立即生效
+      idx = target;
+      const real = ((idx - 1) % count + count) % count; // 真实张索引（克隆边缘也映射到对应真实张）
+      dots.forEach((d, k) => d.classList.toggle("active", k === real));
+    };
+    // 动画落到克隆边缘后，无感跳回真实对应张 → 实现首尾相接的流畅循环
+    track.addEventListener("transitionend", (ev) => {
+      if (ev.propertyName !== "transform") return;
+      if (idx === cloneLast) go(1, false);   // 落在「首张克隆」→ 跳回真实首张
+      else if (idx === 0) go(count, false);  // 落在「末张克隆」→ 跳回真实末张
+    });
     const next = () => go(idx + 1);
     const prev = () => go(idx - 1);
     const start = () => { stop(); bannerTimer = setInterval(next, 4500); };
     const stop = () => { if (bannerTimer) { clearInterval(bannerTimer); bannerTimer = null; } };
-    dots.forEach((d, k) => d.addEventListener("click", (e) => { e.stopPropagation(); go(k); start(); }));
+    dots.forEach((d, k) => d.addEventListener("click", (e) => { e.stopPropagation(); go(k + 1); start(); }));
     const prevBtn = slot.querySelector(".mk-bi-arrow.prev");
     const nextBtn = slot.querySelector(".mk-bi-arrow.next");
     if (prevBtn) prevBtn.addEventListener("click", (e) => { e.stopPropagation(); prev(); start(); });
     if (nextBtn) nextBtn.addEventListener("click", (e) => { e.stopPropagation(); next(); start(); });
     slot.addEventListener("mouseenter", stop);
     slot.addEventListener("mouseleave", start);
+    go(1, false); // 首屏按真实宽度定位（与 SSR 内联 transform 一致）
     start();
   }
 

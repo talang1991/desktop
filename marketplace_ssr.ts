@@ -129,9 +129,17 @@ function bannerSlotHtml(apps: BannerApp[]): string {
   if (!apps.length) {
     return '<div id="mkBanner" class="mk-banner-slot" hidden></div>';
   }
-  const items = apps.map((a, i) => bannerItemHtml(a, i)).join("");
+  let items: string;
   let extra = "";
   if (apps.length > 1) {
+    // 无限轮播：首前放「末张克隆」，末后放「首张克隆」，与 marketplace.js renderBanner 一致
+    const lead = apps[apps.length - 1];
+    const tail = apps[0];
+    const order = [lead, ...apps, tail];
+    items = order.map((a, pos) => {
+      const realIndex = pos === 0 ? apps.length - 1 : (pos === order.length - 1 ? 0 : pos - 1);
+      return bannerItemHtml(a, realIndex);
+    }).join("");
     const dots = apps.map((_, i) =>
       '<button class="mk-bi-dot' + (i === 0 ? " active" : "") + '" data-dot="' + i + '" aria-label="第 ' + (i + 1) + ' 张"></button>'
     ).join("");
@@ -139,8 +147,11 @@ function bannerSlotHtml(apps: BannerApp[]): string {
       '<div class="mk-banner-dots">' + dots + "</div>" +
       '<button class="mk-bi-arrow prev" aria-label="上一张">‹</button>' +
       '<button class="mk-bi-arrow next" aria-label="下一张">›</button>';
+  } else {
+    items = apps.map((a, i) => bannerItemHtml(a, i)).join("");
   }
-  const inner = '<div class="mk-banner-track">' + items + "</div>" + extra;
+  // 首屏首张真实（clone-index=1）居中：translateX = (1080-930)/2 - 930 = -855px
+  const inner = '<div class="mk-banner-track" style="transform:translateX(-855px)">' + items + "</div>" + extra;
   const data = '<script type="application/json" id="ssrBannerData">' +
     JSON.stringify(apps).replace(/</g, "\\u003c") + "</script>";
   return '<div id="mkBanner" class="mk-banner-slot" data-ssr="1">' + inner + "</div>" + data;
