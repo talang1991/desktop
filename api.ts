@@ -11,6 +11,7 @@ import {
   listAllUsers, updateUserRole, countUsers, countLinks, recentRegistrations,
   createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, updateApp, countPendingApps, toggleAppLike,
   findUserByEmail, setUserEmail, updatePassword, saveEmailOtp, verifyEmailOtp,
+  getLatestVersion, updateVersion,
   DbUnavailableError,
 } from "./store.ts";
 
@@ -298,6 +299,57 @@ export async function handleApi(req: Request): Promise<Response> {
       if (!ok) return json({ error: "验证码错误或已过期" }, 400);
       await updatePassword(owner.id, newPassword);
       return json({ ok: true });
+    }
+
+    // ---- 最新版本信息（公开）：前端据此决定是否展示更新弹窗 ----
+    if (path === "/api/version" && method === "GET") {
+      try {
+        const v = await getLatestVersion();
+        if (!v) return json({ version: null });
+        return json({
+          version: v.version,
+          title: v.title || "",
+          release_note: v.release_note || "",
+          show_popup: !!v.show_popup,
+          published_at: v.published_at,
+        });
+      } catch (e) {
+        if (e instanceof DbUnavailableError) return json({ error: "数据库暂时不可用" }, 503);
+        return json({ version: null });
+      }
+    }
+
+    // ---- 管理后台：读取当前版本记录（供编辑）----
+    if (path === "/api/admin/version" && method === "GET") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      try {
+        const v = await getLatestVersion();
+        if (!v) return json({ error: "尚无版本记录（请先部署以触发编译写入）" }, 404);
+        return json({ version: v });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 500);
+      }
+    }
+
+    // ---- 管理后台：更新版本信息（标题 / 发布说明 / 是否弹窗 / 发布时间）----
+    if (path === "/api/admin/version" && method === "PUT") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      try {
+        const cur = await getLatestVersion();
+        if (!cur) return json({ error: "尚无版本记录" }, 404);
+        const b = await req.json();
+        const patch: { title?: string; release_note?: string; show_popup?: boolean; published_at?: string } = {};
+        if (typeof b.title === "string") patch.title = b.title.slice(0, 200);
+        if (typeof b.release_note === "string") patch.release_note = b.release_note.slice(0, 5000);
+        if (typeof b.show_popup === "boolean") patch.show_popup = b.show_popup;
+        if (typeof b.published_at === "string") patch.published_at = b.published_at;
+        const ok = await updateVersion(cur.id, patch);
+        return json({ ok, version: { ...cur, ...patch } });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 500);
+      }
     }
 
     // ---- 管理后台：用户列表（仅管理员）----

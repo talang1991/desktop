@@ -154,13 +154,6 @@
     </div>
   </div>
 
-  <!-- 版本更新提示条（检测到新版本时由 app.js 显示） -->
-  <div id="updateBanner" class="update-banner" hidden>
-    <span class="update-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#sym-sparkle"/></svg></span>
-    <span id="updateText" class="update-text">已更新到新版本</span>
-    <button id="updateReload" class="btn small" type="button" data-i18n="update.reload">刷新</button>
-  </div>
-
   <!-- 安装到桌面提示条（浏览器允许安装且未安装/未忽略时由 app.js 显示） -->
   <div id="installBanner" class="install-banner" hidden>
     <span class="install-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><use href="#sym-brand"/></svg></span>
@@ -175,6 +168,21 @@
     <span class="notify-text" data-role="txt"></span>
     <button class="btn primary small" data-role="btn" type="button"></button>
     <button class="notify-close" data-role="close" type="button" aria-label="关闭">✕</button>
+  </div>
+
+  <!-- 版本更新弹窗（前端启动后，后端 show_popup 且版本更新时展示） -->
+  <div id="releaseModal" class="release-modal" hidden>
+    <div class="release-card">
+      <div class="release-head">
+        <span id="releaseTitle" class="release-title">版本更新</span>
+        <button id="releaseClose" class="release-close" type="button" title="关闭" aria-label="关闭">✕</button>
+      </div>
+      <div class="release-sub" id="releaseSub"></div>
+      <div class="release-body" id="releaseBody"></div>
+      <div class="release-foot">
+        <button id="releaseGotit" class="btn primary block" type="button" data-i18n="release.gotit">我知道了</button>
+      </div>
+    </div>
   </div>
 
   <!-- 主应用 -->

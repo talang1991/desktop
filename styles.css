@@ -489,22 +489,6 @@ body.selection-mode .card:hover { transform: none; }
 .auth-spinner-text { margin: 0; color: var(--text-soft); font-size: 14px; }
 
 /* 版本更新提示条 */
-.update-banner {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 300;
-  display: flex; align-items: center; gap: 10px;
-  padding: 9px 16px; background: var(--primary); color: #fff;
-  font-size: 14px; box-shadow: var(--shadow);
-}
-.update-banner[hidden] { display: none; }
-.update-banner .update-icon { display: inline-flex; line-height: 1; }
-.update-banner .update-icon svg { width: 18px; height: 18px; display: block; }
-.update-banner .update-text { flex: 1 1 auto; }
-.update-banner .btn.small {
-  background: rgba(255, 255, 255, 0.22); color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.55); padding: 5px 12px;
-}
-.update-banner .btn.small:hover { background: rgba(255, 255, 255, 0.34); }
-
 .user-name {
   font-size: 13px;
   color: var(--text-soft);
@@ -2907,5 +2891,25 @@ input, select, textarea, .friend-row, .conv-row, .member-picker, .group-list, .f
 /* 排序按钮激活态 */
 #reorderBtn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 #reorderBtn.active .ico { color: #fff; }
+
+/* ---------- 版本更新弹窗 ---------- */
+.release-modal {
+  position: fixed; inset: 0; z-index: 320;
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+  background: rgba(0,0,0,.45);
+}
+.release-modal[hidden] { display: none; }
+.release-card {
+  width: 100%; max-width: 440px; max-height: 86vh; overflow: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  padding: 20px; box-shadow: var(--shadow); animation: settingsSlideIn 0.18s ease-out;
+}
+.release-head { display: flex; align-items: center; font-weight: 600; font-size: 17px; }
+.release-title { flex: 1; }
+.release-close { margin-left: auto; border: none; background: none; color: var(--text-2); font-size: 18px; cursor: pointer; padding: 2px 6px; border-radius: 8px; }
+.release-close:hover { background: var(--surface-2); color: var(--text); }
+.release-sub { font-size: 13px; color: var(--text-2); margin: 6px 0 12px; }
+.release-body { font-size: 14px; line-height: 1.7; color: var(--text); white-space: pre-wrap; word-break: break-word; max-height: 50vh; overflow: auto; }
+.release-foot { margin-top: 16px; }
 
 

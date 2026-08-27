@@ -72,31 +72,29 @@
     .detail-val { flex: 1; word-break: break-all; }
     .detail-desc { line-height: 1.5; white-space: pre-wrap; }
     .padmin-modal-foot { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
-  /* 版本更新提示条（与首页一致） */
-  .update-banner {
-    position: fixed; top: 0; left: 0; right: 0; z-index: 300;
-    display: flex; align-items: center; gap: 10px;
-    padding: 9px 16px; background: var(--primary); color: #fff;
-    font-size: 14px; box-shadow: var(--shadow);
+
+  /* 版本发布管理 */
+  .admin-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px 18px; margin-bottom: 18px;
   }
-  .update-banner[hidden] { display: none; }
-  .update-banner .update-icon { display: inline-flex; line-height: 1; }
-  .update-banner .update-icon svg { width: 18px; height: 18px; display: block; }
-  .update-banner .update-text { flex: 1 1 auto; }
-  .update-banner .btn.small {
-    background: rgba(255, 255, 255, 0.22); color: #fff;
-    border: 1px solid rgba(255, 255, 255, 0.55); padding: 5px 12px;
+  .version-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .version-label { font-size: 13px; color: var(--text-2); flex: 0 0 auto; }
+  .version-no { font-weight: 600; font-size: 15px; color: var(--primary); }
+  .version-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; font-size: 13px; color: var(--text-2); }
+  .version-field .input {
+    border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px;
+    background: var(--surface); color: var(--text); font: inherit; font-size: 14px;
+    box-sizing: border-box; width: 100%; resize: vertical;
   }
-  .update-banner .btn.small:hover { background: rgba(255, 255, 255, 0.34); }
+  .version-field textarea.input { line-height: 1.6; }
+  .version-toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text); cursor: pointer; }
+  .version-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+  .version-msg { font-size: 13px; color: var(--primary); }
+  .version-msg.err { color: var(--danger); }
   </style>
 </head>
 <body>
-  <!-- 版本更新提示条（检测到新版本时由 admin.js 显示） -->
-  <div id="updateBanner" class="update-banner" hidden>
-    <span class="update-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.4 6.9H22l-6 4.3 2.3 7-6.3-4.4L5.7 20.2 8 13.2 2 8.9h7.6z" fill="currentColor"/></svg></span>
-    <span id="updateText" class="update-text">已更新到新版本</span>
-    <button id="updateReload" class="btn small" type="button">刷新</button>
-  </div>
   <div class="padmin-wrap">
     <div class="padmin-top">
       <a class="padmin-back" id="adminBack" href="index.html">← 返回应用</a>
@@ -107,6 +105,35 @@
     <div id="notice" hidden></div>
 
     <div id="adminMain">
+      <div class="admin-section-title">版本发布</div>
+      <div class="admin-card" id="versionCard">
+        <div class="version-row">
+          <span class="version-label">当前版本</span>
+          <span id="versionNo" class="version-no">…</span>
+        </div>
+        <label class="version-field">
+          <span>发布标题</span>
+          <input id="versionTitle" class="input" type="text" maxlength="200" placeholder="如：v1.2.0 正式发布" />
+        </label>
+        <label class="version-field">
+          <span>发布说明（release notes，支持换行）</span>
+          <textarea id="versionNote" class="input" rows="6" maxlength="5000" placeholder="每行一条更新内容…"></textarea>
+        </label>
+        <div class="version-row">
+          <label class="version-toggle">
+            <input id="versionShowPopup" type="checkbox" />
+            <span>展示更新弹窗（前端启动后弹出更新内容）</span>
+          </label>
+        </div>
+        <div class="version-row">
+          <span class="version-label">发布时间</span>
+          <input id="versionPublishedAt" class="input" type="datetime-local" />
+        </div>
+        <div class="version-actions">
+          <button id="versionSave" class="btn primary" type="button">保存</button>
+          <span id="versionMsg" class="version-msg"></span>
+        </div>
+      </div>
       <div class="admin-stats" id="adminStats"></div>
       <div class="admin-section-title">用户</div>
       <div class="admin-table-wrap">

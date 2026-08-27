@@ -175,6 +175,18 @@ async function main() {
   const report: string[] = [];
   const kb = (n: number) => (n / 1024).toFixed(1) + " KB";
 
+  // 生成版本基线文件 dist/version.json（version + buildTime），供 server 启动时写入数据库（versions 表）。
+  // 版本号取自 package.json 的 version 字段（语义化版本，发布时手工维护）。
+  try {
+    const pkg = JSON.parse(await Deno.readTextFile(`${ROOT}/package.json`));
+    const ver = (pkg && typeof pkg.version === "string" && pkg.version) ? pkg.version : "0.0.0";
+    const versionJson = JSON.stringify({ version: ver, buildTime: new Date().toISOString() });
+    await Deno.writeFile(`${OUT}/version.json`, enc.encode(versionJson));
+    console.log(`📌 版本基线已写入 dist/version.json: v${ver}`);
+  } catch (e) {
+    console.warn("[build] 生成 version.json 失败（已忽略）:", (e as Error).message);
+  }
+
   // 1) JS
   for (const f of JS_FILES) {
     const before = (await Deno.stat(`${ROOT}/${f}`)).size;

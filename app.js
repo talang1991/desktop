@@ -4,6 +4,8 @@
 
   const THEME_KEY = "web-app-launcher:theme";
   const TOKEN_KEY = "web-app-launcher:token";
+  // 本地已展示过更新弹窗的版本号：决定「版本更新弹窗」是否再次弹出（避免重复打扰）
+  const RELEASE_KEY = "web-app-launcher:release-version";
   // 与 localStorage 中的 token 保持同步的 Cookie 名：用于应用广场首屏（SSR）判断登录用户，
   // 使服务端直接渲染「是否已保存」状态。HttpOnly 由服务端在需要时设置；此处为前端写入，
   // 故仅作同源携带用途（SameSite=Lax；https 环境下追加 Secure）。
@@ -399,6 +401,8 @@
     if (pendingMeetingId) {
       try { joinMeetingFromLink(pendingMeetingId); } catch (e) { console.error("[INIT] 链接入会闸门失败:", e); }
     }
+    // 版本更新弹窗：后端 show_popup 且版本高于本地已展示版本时展示
+    checkReleaseNotes();
   }
   async function checkAuth() {
     const tk = localStorage.getItem(TOKEN_KEY);
@@ -1640,8 +1644,10 @@
       "auth.forgot.submit": "重置密码",
       "auth.forgot.back": "返回登录",
       "auth.sessionExpired": "登录已失效，请重新登录",
-      "update.text": "已更新到新版本 v",
-      "update.reload": "刷新",
+      "release.title": "版本更新",
+      "release.notes": "更新内容",
+      "release.gotit": "我知道了",
+      "release.newversion": "新版本 v",
       "install.text": "安装到桌面，随时一键打开",
       "install.now": "安装",
       "install.later": "稍后",
@@ -1962,8 +1968,10 @@
       "auth.forgot.sendCode": "Send code",
       "auth.forgot.submit": "Reset password",
       "auth.forgot.back": "Back to sign in",
-      "update.text": "Updated to version v",
-      "update.reload": "Reload",
+      "release.title": "Release Notes",
+      "release.notes": "What's new",
+      "release.gotit": "Got it",
+      "release.newversion": "Version v",
       "install.text": "Install to desktop for one-tap access",
       "install.now": "Install",
       "install.later": "Later",
@@ -7069,31 +7077,6 @@
   }
 
   // 从当前加载的 app.js 脚本 URL 中提取版本号（?v=），作为本次部署的“版本标识”
-  function getAppVersion() {
-    const s = document.querySelector('script[src*="app.js"]');
-    if (s) {
-      const m = /[?&]v=([^&"']+)/.exec(s.getAttribute("src") || s.src || "");
-      if (m) return m[1];
-    }
-    return "unknown";
-  }
-  // 检测到新版本：展示顶部提示条，并接入“刷新”按钮以应用最新资源
-  function showUpdateBanner(cur) {
-    const banner = $("#updateBanner");
-    const txt = $("#updateText");
-    if (txt) txt.textContent = t("update.text") + cur;
-    if (banner) banner.hidden = false;
-  }
-  function setupUpdateBanner() {
-    const btn = $("#updateReload");
-    if (btn) btn.onclick = () => location.reload();
-    // 对比本次运行的版本与上次记录的版本，不一致说明发生了版本更新
-    const cur = getAppVersion();
-    const last = localStorage.getItem("app-version");
-    if (last && last !== cur && cur !== "unknown") showUpdateBanner(cur);
-    localStorage.setItem("app-version", cur);
-  }
-
   // ---------- 安装到桌面（PWA）：捕获 beforeinstallprompt，展示轻量提示条 ----------
   function setupInstallPrompt() {
     const banner = $("#installBanner");
@@ -7126,19 +7109,6 @@
       if (banner) banner.hidden = true;
       localStorage.setItem("app-installed", "1");
     });
-  }
-  // 接收 Service Worker 的版本通知，并主动查询，确保本端优先（旧缓存）场景下更新“及时上报”。
-  // 两种来源：
-  //  ① SW_VERSION_UPDATE —— SW 后台拉到新 HTML 时主动推送（快速路径，可能因竞态早于本监听而丢失）；
-  //  ② HTML_VERSION / SW_READY.htmlVersion —— 页面监听就绪后主动查询 SW 缓存元数据得到的最新服务端版本
-  //     （竞态安全兜底，保证不漏报）。
-  function handleServerVersion(ver) {
-    if (!ver) return;
-    const cur = getAppVersion(); // 当前页（旧缓存）的版本
-    if (ver !== cur) {
-      showUpdateBanner(ver);
-      localStorage.setItem("app-version", ver);
-    }
   }
   // ---- 系统通知（页面隐藏时提醒新消息 / 来电）----
   // 仅当 Notification 权限已授予且页面处于隐藏态（document.hidden）时，由 JS 主动通过 Service
@@ -7232,38 +7202,55 @@
     };
   }
 
+  // Service Worker 消息：仅处理来电「接听 / 拒绝」按钮回传（版本更新提示已改为数据库驱动的发布弹窗）
   function setupSWUpdateListener() {
     if (!("serviceWorker" in navigator)) return;
     navigator.serviceWorker.addEventListener("message", (event) => {
       const data = (event && event.data) || {};
-      // SW_VERSION_UPDATE 现在带 url（仅对应页面应弹更新提示）；其余页面忽略，避免误报
-      if (data.type === "SW_VERSION_UPDATE" && data.version) {
-        if (!data.url || data.url === location.pathname) handleServerVersion(data.version);
-      }
-      else if (data.type === "HTML_VERSION" && data.version) handleServerVersion(data.version);
-      else if (data.type === "SW_READY" && data.htmlVersion) handleServerVersion(data.htmlVersion);
       // 来电通知的「接听 / 拒绝」按钮：由 SW notificationclick 回传，这里转交给通话模块
-      else if (data.type === "NOTIFY_CALL_ACTION") {
+      if (data.type === "NOTIFY_CALL_ACTION") {
         if (data.action === "accept") { try { acceptCall(); } catch (e) {} }
         else if (data.action === "reject") { try { declineCall(); } catch (e) {} }
       }
     });
-    // 向已激活的 SW 查询“服务端最新 HTML 版本”。SW 会直接问服务端（绕过本端缓存），
-    // 因此无论 SW 本端优先返回的是否为旧缓存、后台 revalidation 是否已完成，都能拿到真实最新版本。
-    const query = () => {
-      if (navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({ type: "QUERY_HTML_VERSION" });
+  }
+
+  // ---------- 版本更新弹窗（后端 show_popup 控制，且仅当版本高于本地已展示版本时弹出）----------
+  async function checkReleaseNotes() {
+    try {
+      const v = await api("/api/version");
+      if (!v || !v.version) return;
+      // 后端关闭弹窗开关：记录当前版本避免未来误弹，直接返回
+      if (!v.show_popup) {
+        try { localStorage.setItem(RELEASE_KEY, v.version); } catch (e) {}
+        return;
       }
-    };
-    if (navigator.serviceWorker.controller) query();
-    else navigator.serviceWorker.addEventListener("controllerchange", query);
-    // SW 激活后兜底再查一次（应对首屏 controller 早期为 null、尚未接管页面的窗口期）
-    if (navigator.serviceWorker.ready && typeof navigator.serviceWorker.ready.then === "function") {
-      navigator.serviceWorker.ready.then(query).catch(() => {});
-    }
-    // 延迟二次查询：确保 SW 后台 revalidation / 接管完成，即使 SW_VERSION_UPDATE 快速路径
-    // 因客户端接管时机丢失，也能兜底弹出更新提示。
-    setTimeout(query, 1500);
+      let shown = null;
+      try { shown = localStorage.getItem(RELEASE_KEY); } catch (e) {}
+      if (shown === v.version) return; // 当前版本已展示过
+      showReleaseNotes(v);
+    } catch (e) { /* 接口异常不影响主流程 */ }
+  }
+  function showReleaseNotes(data) {
+    const m = document.getElementById("releaseModal");
+    if (!m) return;
+    const titleEl = document.getElementById("releaseTitle");
+    const subEl = document.getElementById("releaseSub");
+    const bodyEl = document.getElementById("releaseBody");
+    if (titleEl) titleEl.textContent = data.title || (t("release.title") + (data.version ? " v" + data.version : ""));
+    if (subEl) subEl.textContent = t("release.newversion") + (data.version || "");
+    if (bodyEl) bodyEl.textContent = data.release_note || "";
+    const close = () => closeReleaseNotes(data.version);
+    const c1 = document.getElementById("releaseClose");
+    const c2 = document.getElementById("releaseGotit");
+    if (c1) c1.onclick = close;
+    if (c2) c2.onclick = close;
+    m.hidden = false;
+  }
+  function closeReleaseNotes(version) {
+    const m = document.getElementById("releaseModal");
+    if (m) m.hidden = true;
+    try { localStorage.setItem(RELEASE_KEY, version || ""); } catch (e) {}
   }
 
   // ---------- Init ----------
@@ -7280,7 +7267,6 @@
     } catch (e) {}
     registerServiceWorker();
     setupSWUpdateListener();
-    setupUpdateBanner();
     setupInstallPrompt();
     checkAuth();
   }

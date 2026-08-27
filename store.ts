@@ -153,6 +153,19 @@ const APPS_DDL = `CREATE TABLE IF NOT EXISTS apps (
   approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL
 )`;
 
+// 版本信息表：每次编译（部署）由 server 启动时 upsert 一条基线；管理后台可编辑标题/发布说明/是否弹窗。
+// 前端拉取最新一条：仅当后端 show_popup=true 且版本高于本地已展示版本时弹窗展示更新内容。
+const VERSIONS_DDL = `CREATE TABLE IF NOT EXISTS versions (
+  id SERIAL PRIMARY KEY,
+  version TEXT NOT NULL UNIQUE,                 -- 语义化版本号（每次发布唯一）
+  title TEXT NOT NULL DEFAULT '',               -- 发布标题（弹窗标题）
+  release_note TEXT NOT NULL DEFAULT '',         -- 发布说明 / release notes（支持换行）
+  show_popup BOOLEAN NOT NULL DEFAULT false,     -- 后端开关：是否向前端推送「展示更新弹窗」
+  build_time TIMESTAMPTZ NOT NULL DEFAULT now(), -- 编译时间（构建脚本写入 version.json）
+  published_at TIMESTAMPTZ NOT NULL DEFAULT now(), -- 发布时间（后台可编辑，用于排序/展示）
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)`;
+
 // 应用点赞表：哪位用户对哪个应用点过赞（主键去重，天然防止重复点赞）
 const APP_LIKES_DDL = `CREATE TABLE IF NOT EXISTS app_likes (
   app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
@@ -366,6 +379,8 @@ export async function initStore(): Promise<void> {
           );
           // 应用广场：用户发布的应用，经管理员审核（approved）后上架
           await c.queryObject(APPS_DDL);
+          // 版本信息表：编译后由 server 启动时 upsert 基线，后台可编辑
+          await c.queryObject(VERSIONS_DDL);
         });
         schemaOk = true;
       } catch (e) {
@@ -376,6 +391,10 @@ export async function initStore(): Promise<void> {
     if (schemaOk) {
       console.error("[store] PostgreSQL 已连接，表结构已就绪。");
       await migrateFromJson();
+      // 编译后把当前版本基线写入 versions 表（供前端更新弹窗 + 后台编辑）；失败不阻塞启动
+      await recordBuildVersion().catch((e) =>
+        console.error("[store] 记录版本基线失败（已忽略）：", (e as Error).message)
+      );
     } else {
       // 保留 pool，后续请求会自动重试重连
       console.error(
@@ -487,6 +506,86 @@ export async function updatePassword(userId: number, newPassword: string): Promi
   const rows = await query<{ id: number }>(
     `UPDATE users SET password_hash = $2 WHERE id = $1 RETURNING id`,
     [userId, hash],
+  );
+  return rows.length > 0;
+}
+
+// ---------------- 版本信息（发布说明 / 更新弹窗）----------------
+
+export interface VersionRow {
+  id: number;
+  version: string;
+  title: string;
+  release_note: string;
+  show_popup: boolean;
+  build_time: string;
+  published_at: string;
+  created_at: string;
+}
+
+// 编译后写入数据库：读取构建脚本生成的 version.json（或回退 package.json 的 version），
+// upsert 一条版本基线。仅当该 version 不存在时插入；若已存在（后台已编辑）则不覆盖。
+async function readBuildVersion(): Promise<{ version: string; buildTime: string } | null> {
+  // 1) 构建脚本产物：部署时 cwd=dist（./version.json）；本地运行在 ./dist/version.json
+  for (const p of ["./version.json", "./dist/version.json"]) {
+    try {
+      const j = JSON.parse(await Deno.readTextFile(p));
+      if (j && typeof j.version === "string" && j.version) {
+        return { version: j.version, buildTime: j.buildTime || new Date().toISOString() };
+      }
+    } catch { /* 尝试下一个路径 */ }
+  }
+  // 2) 回退：package.json 的 version 字段
+  try {
+    const j = JSON.parse(await Deno.readTextFile("./package.json"));
+    if (j && typeof j.version === "string" && j.version) {
+      return { version: j.version, buildTime: new Date().toISOString() };
+    }
+  } catch { /* 无版本信息则跳过 */ }
+  return null;
+}
+
+// 编译后（server 启动时）把当前版本基线写入 versions 表；不覆盖后台已编辑的内容
+export async function recordBuildVersion(): Promise<void> {
+  const info = await readBuildVersion();
+  if (!info) return;
+  ensureDb();
+  // ON CONFLICT(version) DO NOTHING：保留后台已编辑的 title/release_note/show_popup/published_at
+  await query(
+    `INSERT INTO versions (version, build_time) VALUES ($1, $2)
+     ON CONFLICT (version) DO NOTHING`,
+    [info.version, info.buildTime],
+  );
+}
+
+// 前端公开接口：返回最新一条版本（用于判断是否弹窗展示更新内容）
+export async function getLatestVersion(): Promise<VersionRow | null> {
+  ensureDb();
+  const rows = await query<VersionRow>(
+    `SELECT id, version, title, release_note, show_popup, build_time, published_at, created_at
+     FROM versions ORDER BY id DESC LIMIT 1`,
+  );
+  return rows[0] ?? null;
+}
+
+// 后台编辑：更新标题 / 发布说明 / 是否弹窗 / 发布时间（不更新 version 本身）
+export async function updateVersion(
+  id: number,
+  patch: { title?: string; release_note?: string; show_popup?: boolean; published_at?: string },
+): Promise<boolean> {
+  ensureDb();
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  let i = 1;
+  if (typeof patch.title === "string") { sets.push(`title = $${i++}`); params.push(patch.title); }
+  if (typeof patch.release_note === "string") { sets.push(`release_note = $${i++}`); params.push(patch.release_note); }
+  if (typeof patch.show_popup === "boolean") { sets.push(`show_popup = $${i++}`); params.push(patch.show_popup); }
+  if (typeof patch.published_at === "string") { sets.push(`published_at = $${i++}`); params.push(patch.published_at); }
+  if (!sets.length) return false;
+  params.push(id);
+  const rows = await query<{ id: number }>(
+    `UPDATE versions SET ${sets.join(", ")} WHERE id = $${i} RETURNING id`,
+    params,
   );
   return rows.length > 0;
 }
