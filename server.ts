@@ -204,6 +204,33 @@ async function serveFaviconProxy(req: Request): Promise<Response> {
   }
 }
 
+// 站点地图：列出对外可索引的页面，便于搜索引擎收录。
+// 基础地址从请求 host 推导（本地与云端部署通用），无需硬编码域名。
+// 新增对外页面时，只需往 SITEMAP_PATHS 追加 pathname 即可。
+const SITEMAP_PATHS = ["/", "/marketplace.html"];
+async function serveSitemap(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const host = url.host || "localhost";
+  const origin = `${url.protocol}//${host}`;
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+  const items = SITEMAP_PATHS.map(
+    (p) =>
+      `  <url>\n    <loc>${esc(origin + p)}</loc>\n    <changefreq>weekly</changefreq>\n    <priority>${p === "/" ? "1.0" : "0.8"}</priority>\n  </url>`,
+  ).join("\n");
+  const xml =
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${items}\n</urlset>\n`;
+  return new Response(xml, {
+    status: 200,
+    headers: {
+      "content-type": "application/xml; charset=utf-8",
+      "cache-control": "public, max-age=3600",
+    },
+  });
+}
+
 const server = createServer(async (req, res) => {
   try {
     const webReq = await toWebRequest(req);
@@ -211,6 +238,7 @@ const server = createServer(async (req, res) => {
     let webRes: Response;
     if (url.pathname === "/favicon-proxy") webRes = await serveFaviconProxy(webReq);
     else if (url.pathname.startsWith("/api/")) webRes = await handleApi(webReq);
+    else if (url.pathname === "/sitemap.xml") webRes = await serveSitemap(webReq);
     else if (url.pathname === "/marketplace.html") webRes = await serveMarketplace(webReq);
     else webRes = await serveStatic(webReq);
     await writeWeb(res, webRes);
