@@ -306,7 +306,17 @@
       (a.description ? row("简介", '<div class="detail-desc">' + escapeHtml(a.description) + "</div>") : "") +
       ((a.status === "rejected" && a.reject_reason)
         ? row("拒绝原因", '<div class="detail-desc" style="color:#d23">' + escapeHtml(a.reject_reason) + "</div>")
-        : "");
+        : "") +
+      '<div class="detail-banner-block">' +
+        row("Banner", a.banner
+          ? '<img class="detail-banner-img" src="' + escapeHtml(a.banner) + '" alt="banner" />'
+          : '<span class="hint">未设置</span>') +
+        '<div class="banner-upload-row">' +
+          '<button type="button" class="btn ghost small" id="dUploadBanner">上传 / 替换 Banner</button>' +
+          '<input id="dBannerFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden />' +
+          '<span class="hint">建议宽幅图片（如 960×300），PNG/JPG/GIF/WEBP，最大 2MB</span>' +
+        '</div>' +
+      '</div>';
     const actions = document.getElementById("appDetailActions");
     let ah = "";
     if (a.status !== "approved") ah += '<button class="btn ghost small d-approve">通过</button> ';
@@ -316,11 +326,53 @@
     if (da) da.addEventListener("click", () => approveApp(a.id, da));
     const dr = actions.querySelector(".d-reject");
     if (dr) dr.addEventListener("click", () => rejectApp(a.id, dr));
+    // banner 上传
+    const ub = body.querySelector("#dUploadBanner");
+    const uf = body.querySelector("#dBannerFile");
+    if (ub) ub.addEventListener("click", () => uf && uf.click());
+    if (uf) uf.addEventListener("change", (e) => onBannerFilePicked(e, a.id));
     document.getElementById("appDetailModal").hidden = false;
   }
   function closeAppDetail() {
     const m = document.getElementById("appDetailModal");
     if (m) m.hidden = true;
+  }
+
+  // 上传应用 banner 到后端（服务端代理上传到 COS）。返回公开 URL。
+  async function uploadAppBanner(id, file) {
+    const tk = localStorage.getItem(TOKEN_KEY);
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/admin/apps/" + id + "/banner", {
+      method: "POST",
+      headers: tk ? { authorization: "Bearer " + tk } : undefined,
+      body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || ("Banner 上传失败（" + res.status + "）"));
+    if (!data.banner) throw new Error("上传未返回 banner 地址");
+    return data.banner;
+  }
+
+  // 选择本地图片 → 上传 → 更新内存数据并就地重绘详情弹窗
+  async function onBannerFilePicked(e, id) {
+    const input = e.target;
+    const file = input.files && input.files[0];
+    input.value = ""; // 允许再次选择同一文件
+    if (!file) return;
+    const btn = document.getElementById("dUploadBanner");
+    const old = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "上传中…"; }
+    try {
+      const url = await uploadAppBanner(id, file);
+      if (appIndex[id]) appIndex[id].banner = url;
+      openAppDetail(id); // 重绘：banner 立即生效
+      toast("Banner 已更新");
+    } catch (err) {
+      toast(err.message || "上传失败");
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = old; }
+    }
   }
 
   function registerServiceWorker() {

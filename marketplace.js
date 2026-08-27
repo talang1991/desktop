@@ -209,6 +209,7 @@
           "</div>" +
           (status ? '<div style="margin-left:auto">' + status + "</div>" : "") +
         "</div>" +
+        (app.banner ? '<div class="mk-banner"><img src="' + escapeHtml(app.banner) + '" alt="banner" loading="lazy" /></div>' : "") +
         '<div class="mk-desc">' + escapeHtml(app.description || "") + "</div>" +
         '<div class="mk-badges">' + badgeHtml(app) + "</div>" +
         reason +

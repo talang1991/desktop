@@ -142,6 +142,7 @@ const APPS_DDL = `CREATE TABLE IF NOT EXISTS apps (
   url TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   icon TEXT NOT NULL DEFAULT '',
+  banner TEXT NOT NULL DEFAULT '',                  -- 应用市场 banner 图（COS 公开 URL）
   category TEXT NOT NULL DEFAULT '其它',
   supports_pc BOOLEAN NOT NULL DEFAULT false,     -- 是否支持 PC（电脑端）
   supports_mobile BOOLEAN NOT NULL DEFAULT false, -- 是否支持手机端
@@ -190,7 +191,7 @@ async function ensureAppsTable(): Promise<void> {
         // 幂等补列：CREATE TABLE IF NOT EXISTS 对旧表无效，需显式 ALTER
         const existing = await c.queryObject<{ column_name: string }>(
           `SELECT column_name FROM information_schema.columns
-           WHERE table_name = 'apps' AND column_name IN ('supports_pc','supports_mobile','supports_pwa')`,
+           WHERE table_name = 'apps' AND column_name IN ('supports_pc','supports_mobile','supports_pwa','banner')`,
         );
         const have = new Set((existing.rows ?? []).map((r) => r.column_name));
         if (!have.has("supports_pc")) {
@@ -201,6 +202,9 @@ async function ensureAppsTable(): Promise<void> {
         }
         if (!have.has("supports_pwa")) {
           await c.queryObject(`ALTER TABLE apps ADD COLUMN supports_pwa BOOLEAN NOT NULL DEFAULT false`);
+        }
+        if (!have.has("banner")) {
+          await c.queryObject(`ALTER TABLE apps ADD COLUMN banner TEXT NOT NULL DEFAULT ''`);
         }
       });
     })().catch((e) => {
@@ -954,6 +958,7 @@ export interface AppStatus {
   url: string;
   description: string;
   icon: string;
+  banner: string;            // 应用市场 banner 图（COS 公开 URL 或留空）
   category: string;
   supports_pc: boolean;
   supports_mobile: boolean;
@@ -1016,7 +1021,7 @@ export async function listApprovedApps(
     likedSub = `(EXISTS (SELECT 1 FROM app_likes al WHERE al.app_id = a.id AND al.user_id = $${params.length})) AS liked`;
   }
   const rows = await query<AppStatus>(
-    `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
+    `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.banner, a.category,
             a.supports_pc, a.supports_mobile, a.supports_pwa, a.status, a.reject_reason, a.created_at,
             a.approved_at, u.username, ${likeSub}, ${likedSub}
      FROM apps a JOIN users u ON u.id = a.user_id
@@ -1037,7 +1042,7 @@ export async function listMyApps(userId: number, currentUserId?: number): Promis
     : `false AS liked`;
   const params = currentUserId ? [userId, currentUserId] : [userId];
   const rows = await query<AppStatus>(
-    `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
+    `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.banner, a.category,
             a.supports_pc, a.supports_mobile, a.supports_pwa, a.status, a.reject_reason, a.created_at,
             a.approved_at, u.username, ${likeSub}, ${likedSub}
      FROM apps a JOIN users u ON u.id = a.user_id
@@ -1053,7 +1058,7 @@ export async function listAllApps(): Promise<AppStatus[]> {
   ensureDb();
   await ensureAppsTable();
   const rows = await query<AppStatus>(
-    `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.category,
+    `SELECT a.id, a.user_id, a.name, a.url, a.description, a.icon, a.banner, a.category,
             a.supports_pc, a.supports_mobile, a.supports_pwa, a.status, a.reject_reason, a.created_at,
             a.approved_at, a.approved_by, u.username,
             (SELECT COUNT(*) FROM app_likes al WHERE al.app_id = a.id)::int AS like_count,
@@ -1124,6 +1129,17 @@ export async function updateApp(
       data.name, data.url, data.description || "", data.icon || "",
       data.category || "其它", !!data.supports_pc, !!data.supports_mobile, !!data.supports_pwa,
     ],
+  );
+  return rows.length > 0;
+}
+
+// 仅更新应用 banner（管理后台上传；不触碰审核状态 / 不重置上架信息）
+export async function updateAppBanner(id: number, banner: string): Promise<boolean> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ id: number }>(
+    `UPDATE apps SET banner = $2 WHERE id = $1 RETURNING id`,
+    [id, String(banner || "").slice(0, 2048)],
   );
   return rows.length > 0;
 }

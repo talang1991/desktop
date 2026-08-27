@@ -9,13 +9,14 @@ import {
   createGroup, addGroupMember, listUserGroups, getGroupBasic, isGroupMember, leaveGroup,
   renameGroup, getGroupMemberIds,
   listAllUsers, updateUserRole, countUsers, countLinks, recentRegistrations, updateUserVersion,
-  createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, updateApp, countPendingApps, toggleAppLike,
+  createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, updateApp, updateAppBanner, countPendingApps, toggleAppLike,
   findUserByEmail, setUserEmail, updatePassword, saveEmailOtp, verifyEmailOtp,
   getLatestVersion, getAllVersions, getPublicVersion, forceVersion, unforceAllVersions,
   updateVersion, type VersionRow,
   DbUnavailableError,
 } from "./store.ts";
 import { broadcastVersionState } from "./signaling.ts";
+import { genCosKey, uploadToCos } from "./cos.ts";
 
 // 向所有在线客户端推送“当前应推送版本”的强制状态（供前端实时禁用 / 解禁应用）。
 // 失败不影响管理操作本身。
@@ -106,6 +107,38 @@ async function sendBindCodeEmail(to: string, code: string, purpose = '邮箱绑�
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error("邮件发送失败（" + res.status + "）" + text.slice(0, 200));
+  }
+}
+
+// ---------------- 图片上传（服务端代理上传到腾讯云 COS）----------------
+const IMG_TYPES: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+const IMG_MAX_BYTES = 2 * 1024 * 1024; // 2MB
+
+type PickResult =
+  | { ok: true; bytes: Uint8Array<ArrayBuffer>; contentType: string }
+  | { ok: false; status: number; error: string };
+
+// 从 multipart/form-data 中读取字段名为 file 的图片，并做大小/类型校验
+async function pickImage(req: Request): Promise<PickResult> {
+  try {
+    const form = await req.formData();
+    const file = form.get("file");
+    if (!(file instanceof File)) {
+      return { ok: false, status: 400, error: "缺少上传文件（字段名 file）" };
+    }
+    const ext = IMG_TYPES[file.type];
+    if (!ext) return { ok: false, status: 400, error: "仅支持 PNG / JPG / GIF / WEBP 图片" };
+    if (file.size > IMG_MAX_BYTES) return { ok: false, status: 400, error: "图片过大（最多 2MB）" };
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    return { ok: true, bytes, contentType: file.type };
+  } catch {
+    return { ok: false, status: 400, error: "请求格式不正确（需 multipart/form-data）" };
   }
 }
 
@@ -204,6 +237,22 @@ export async function handleApi(req: Request): Promise<Response> {
         username = r.username ?? username;
       }
       return json({ user: { id: user.id, username, avatar } });
+    }
+
+    // ---- 上传头像（需登录；服务端代理上传到 COS，返回公开 URL 写入 users.avatar）----
+    if (path === "/api/me/avatar" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      const pick = await pickImage(req);
+      if (!pick.ok) return json({ error: pick.error }, pick.status);
+      try {
+        const key = genCosKey(`avatars/u${user.id}`, IMG_TYPES[pick.contentType]);
+        const avatar = await uploadToCos(key, pick.bytes, pick.contentType);
+        await updateUserAvatar(user.id, avatar);
+        return json({ avatar });
+      } catch (e) {
+        return json({ error: (e as Error).message || "头像上传失败" }, 500);
+      }
     }
 
     // ---- 绑定邮箱：发送验证码（需登录）----
@@ -584,6 +633,25 @@ export async function handleApi(req: Request): Promise<Response> {
       }
       if (!ok) return json({ error: "应用不存在" }, 404);
       return json({ ok: true, status: appAct[2] === "approve" ? "approved" : "rejected" });
+    }
+
+    // ---- 管理后台：上传应用市场 banner（仅管理员；服务端代理上传到 COS，写入 apps.banner）----
+    const appBannerRes = path.match(/^\/api\/admin\/apps\/(\d+)\/banner$/);
+    if (appBannerRes && method === "POST") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const id = Number(appBannerRes[1]);
+      const pick = await pickImage(req);
+      if (!pick.ok) return json({ error: pick.error }, pick.status);
+      try {
+        const key = genCosKey(`banners/a${id}`, IMG_TYPES[pick.contentType]);
+        const banner = await uploadToCos(key, pick.bytes, pick.contentType);
+        const ok = await updateAppBanner(id, banner);
+        if (!ok) return json({ error: "应用不存在" }, 404);
+        return json({ banner });
+      } catch (e) {
+        return json({ error: (e as Error).message || "Banner 上传失败" }, 500);
+      }
     }
 
     // ---- 登录设备管理：列出当前账号所有会话（多端登录）----

@@ -1446,6 +1446,46 @@
   }
   function closeProfileModal() { profileModal.hidden = true; }
 
+  // 上传头像到后端（服务端代理上传到 COS）。返回公开 URL。
+  async function uploadAvatar(file) {
+    const tk = localStorage.getItem(TOKEN_KEY);
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/me/avatar", {
+      method: "POST",
+      headers: tk ? { authorization: "Bearer " + tk } : undefined,
+      body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || ("头像上传失败（" + res.status + "）"));
+    if (!data.avatar) throw new Error("上传未返回头像地址");
+    return data.avatar;
+  }
+
+  // 选择本地图片 → 上传 → 立即持久化并刷新展示
+  async function onAvatarFilePicked(e) {
+    const input = e.target;
+    const file = input.files && input.files[0];
+    input.value = ""; // 允许再次选择同一文件
+    if (!file) return;
+    const btn = $("#uploadAvatarBtn");
+    const oldText = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = t("profile.uploading") || "上传中…"; }
+    try {
+      const url = await uploadAvatar(file);
+      const r = await api("/api/me", {
+        method: "PUT",
+        body: JSON.stringify({ username: $("#pNickname").value.trim(), avatar: url }),
+      });
+      applyProfileUpdate(r.user);
+      toast(t("profile.uploaded") || "头像已更新");
+    } catch (err) {
+      toast(err.message || "上传失败");
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = oldText; }
+    }
+  }
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const name = $("#fName").value.trim();
@@ -1768,6 +1808,10 @@
       "profile.usernameLabel": "用户名",
       "profile.cancel": "取消",
       "profile.save": "保存",
+      "profile.uploadAvatar": "上传图片",
+      "profile.uploadAvatarHint": "支持 PNG / JPG / GIF / WEBP，最大 2MB",
+      "profile.uploading": "上传中…",
+      "profile.uploaded": "头像已更新",
       "chat.title": "聊天",
       "chat.close": "关闭",
       "chat.resizer": "拖动调整宽度",
@@ -2093,6 +2137,10 @@
       "profile.usernameLabel": "Username",
       "profile.cancel": "Cancel",
       "profile.save": "Save",
+      "profile.uploadAvatar": "Upload image",
+      "profile.uploadAvatarHint": "PNG / JPG / GIF / WEBP, up to 2MB",
+      "profile.uploading": "Uploading…",
+      "profile.uploaded": "Avatar updated",
       "chat.title": "Chat",
       "chat.close": "Close",
       "chat.resizer": "Drag to resize width",
@@ -2510,6 +2558,8 @@
   $("#userAvatarBtn").onclick = openProfileModal;
   $("#pAvatar").addEventListener("input", updateAvatarPreview);
   $("#saveAvatar").onclick = saveProfile;
+  $("#uploadAvatarBtn").onclick = () => $("#avatarFile").click();
+  $("#avatarFile").addEventListener("change", onAvatarFilePicked);
   profileModal.querySelectorAll("[data-close]").forEach((el) => el.onclick = closeProfileModal);
 
   // 图标预览实时更新 + 一键填入网站默认 favicon

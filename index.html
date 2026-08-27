@@ -313,6 +313,11 @@
             <input id="pAvatar" type="text" placeholder="🌟 或 https://…/avatar.png" data-i18n-ph="profile.avatarPh" autocomplete="off" />
             <span class="icon-preview" id="avatarPreview" aria-hidden="true"></span>
           </div>
+          <div class="avatar-upload-row">
+            <button type="button" class="btn ghost" id="uploadAvatarBtn" data-i18n="profile.uploadAvatar">上传图片</button>
+            <input id="avatarFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden />
+            <span class="hint" id="avatarUploadHint" data-i18n="profile.uploadAvatarHint">支持 PNG / JPG / GIF / WEBP，最大 2MB</span>
+          </div>
         </label>
         <label class="field">
           <span data-i18n="profile.nicknameLabel">昵称（展示给你的好友与会议中的其他人）</span>

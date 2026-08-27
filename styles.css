@@ -359,6 +359,19 @@ body.selection-mode .card:hover { transform: none; }
   white-space: nowrap;
 }
 .icon-input-row button { flex: 0 0 auto; }
+.avatar-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.avatar-upload-row .btn { padding: 7px 12px; font-size: 13px; }
+.avatar-upload-row .hint, .hint {
+  font-size: 12px;
+  color: var(--text-soft);
+  opacity: 0.85;
+}
 .icon-preview {
   width: 34px; height: 34px; flex: 0 0 34px;
   border-radius: 10px; display: grid; place-items: center;
