@@ -46,7 +46,7 @@ function isIconUrl(s: string): boolean {
 function appIconHtml(app: AppStatus): string {
   const src = (app.icon && isIconUrl(app.icon)) ? app.icon : faviconFor(app.url);
   const letter = escapeHtml((app.name || "?").charAt(0).toUpperCase());
-  return '<img src="' + escapeHtml(src) + '" alt="" draggable="false" ' +
+  return '<img src="' + escapeHtml(src) + '" alt="' + escapeHtml(app.name) + '" draggable="false" ' +
     "onerror=\"this.style.display='none';this.parentNode.textContent='" + letter + "'\"/>";
 }
 function badgeHtml(app: AppStatus): string {
@@ -73,11 +73,11 @@ function plazaCardHtml(app: AppStatus, savedSet: Set<string>): string {
       '<span class="mk-like-count">' + (app.like_count || 0) + "</span>" +
     "</button>";
   return (
-    '<div class="mk-card">' +
+    '<article class="mk-card">' +
       '<div class="mk-card-head">' +
         '<div class="mk-icon">' + appIconHtml(app) + "</div>" +
         "<div>" +
-          '<div class="mk-title">' + escapeHtml(app.name) + "</div>" +
+          '<h3 class="mk-title">' + escapeHtml(app.name) + "</h3>" +
           '<div class="mk-sub">by ' + escapeHtml(app.username || "未知") + "</div>" +
         "</div>" +
       "</div>" +
@@ -88,8 +88,39 @@ function plazaCardHtml(app: AppStatus, savedSet: Set<string>): string {
         save +
         like +
       "</div>" +
-    "</div>"
+    "</article>"
   );
+}
+
+// 应用列表结构化数据（ItemList + SoftwareApplication），注入首屏 HTML 利于 SEO 富结果
+function plazaJsonLd(apps: AppStatus[]): string {
+  const itemListElement = apps.map((a, i) => {
+    let os = "Web";
+    if (a.supports_pc && a.supports_mobile) os = "Windows, macOS, Android, iOS, Web";
+    else if (a.supports_mobile) os = "Android, iOS, Web";
+    else if (a.supports_pc) os = "Windows, macOS, Web";
+    return {
+      "@type": "ListItem",
+      "position": i + 1,
+      "item": {
+        "@type": "SoftwareApplication",
+        "name": a.name,
+        "description": a.description || "",
+        "url": a.url,
+        "applicationCategory": (a.category && a.category !== "其它") ? a.category : "Utilities",
+        "operatingSystem": os,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
+        "author": { "@type": "Person", "name": a.username || "踏浪" },
+      },
+    };
+  });
+  const data = {
+    "@context": "https://schema.org",
+    "@type": "ItemList",
+    "name": "应用广场 - 在线网页工具",
+    "itemListElement": itemListElement,
+  };
+  return '<script type="application/ld+json">' + JSON.stringify(data).replace(/</g, "\\u003c") + "</script>";
 }
 
 const PLACEHOLDER = '<div class="mk-grid" id="mkGrid"><div class="mk-msg">加载中…</div></div>';
@@ -196,6 +227,10 @@ export async function renderMarketplaceHtml(req?: Request): Promise<string> {
       html = html.replace(BANNER_PLACEHOLDER, bannerSlotHtml(bannerApps));
     } catch {
       /* 头部门面渲染失败：保留占位，前端走客户端 loadBanner 兜底 */
+    }
+    // 应用列表结构化数据（ItemList）：注入首屏 HTML 尾部，利于 SEO 富结果
+    if (apps.length) {
+      html = html.replace("</body>", plazaJsonLd(apps) + "\n</body>");
     }
     return html;
   } catch {

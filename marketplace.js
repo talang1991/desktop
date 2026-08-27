@@ -25,7 +25,7 @@
   function appIconHtml(app) {
     const src = (app.icon && isIconUrl(app.icon)) ? app.icon : faviconFor(app.url);
     const letter = escapeHtml((app.name || "?").charAt(0).toUpperCase());
-    return '<img src="' + escapeHtml(src) + '" alt="" draggable="false" ' +
+    return '<img src="' + escapeHtml(src) + '" alt="' + escapeHtml(app.name) + '" draggable="false" ' +
       "onerror=\"this.style.display='none';this.parentNode.textContent='" + letter + "'\"/>";
   }
   function fmtDate(s) {
@@ -200,11 +200,11 @@
     // 被拒绝的应用不展示点赞（该卡已无公开意义，避免按钮过载）
     const like = hideOpenAndSave ? "" : likeHtml(app);
     return (
-      '<div class="mk-card">' +
+      '<article class="mk-card">' +
         '<div class="mk-card-head">' +
           '<div class="mk-icon">' + appIconHtml(app) + "</div>" +
           "<div>" +
-            '<div class="mk-title">' + escapeHtml(app.name) + "</div>" +
+            '<h3 class="mk-title">' + escapeHtml(app.name) + "</h3>" +
             '<div class="mk-sub">by ' + escapeHtml(app.username || "未知") + "</div>" +
           "</div>" +
           (status ? '<div style="margin-left:auto">' + status + "</div>" : "") +
@@ -219,7 +219,7 @@
           edit +
           del +
         "</div>" +
-      "</div>"
+      "</article>"
     );
   }
 
