@@ -980,7 +980,7 @@ export async function createApp(
   await ensureAppsTable();
   const rows = await query<{ id: number }>(
     `INSERT INTO apps (user_id, name, url, description, icon, category, supports_pc, supports_mobile, supports_pwa)
-     VALUES ($1, $2,, $3, $4, $5, $6, $7, $8, $9) RETURNING id`.replace(",$3", ", $3"),
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`.replace(",$3", ", $3"),
     [
       userId,
       data.name,
