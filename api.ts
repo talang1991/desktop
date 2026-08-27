@@ -15,6 +15,18 @@ import {
   updateVersion, type VersionRow,
   DbUnavailableError,
 } from "./store.ts";
+import { broadcastVersionState } from "./signaling.ts";
+
+// 向所有在线客户端推送“当前应推送版本”的强制状态（供前端实时禁用 / 解禁应用）。
+// 失败不影响管理操作本身。
+async function pushVersionState(): Promise<void> {
+  try {
+    const v = await getPublicVersion();
+    broadcastVersionState(v ? v.version : "", !!(v && v.force_popup));
+  } catch {
+    /* 推送失败不阻断管理操作 */
+  }
+}
 
 // 归一化设备类型：仅允许 mobile/tablet/desktop，其它一律 desktop
 function normalizeDevice(d: unknown): string {
@@ -168,8 +180,10 @@ export async function handleApi(req: Request): Promise<Response> {
         const buildTime = b.buildTime ? String(b.buildTime) : null;
         // 本地可能未携带语义版本号：此时必须带打包时间，后台据其反查 deployment 记录
         if (!version && !buildTime) return json({ error: "版本号与构建时间不能同时为空" }, 400);
-        await updateUserVersion(user.id, version, buildTime);
-        return json({ ok: true });
+        const resolved = await updateUserVersion(user.id, version, buildTime);
+        // 返回服务端解析后的版本号：未携带版本号时按 build_time 反查，供前端更新“本地版本号”
+        // 用作强制推送失效判定 / 更新弹窗的版本比对（尤其处理打包时未填版本号的情况）。
+        return json({ ok: true, version: resolved });
       } catch (e) {
         return json({ error: (e as Error).message }, 500);
       }
@@ -377,6 +391,7 @@ export async function handleApi(req: Request): Promise<Response> {
           if (target) ok = await updateVersion(target.id, patch);
         }
         if (!target) return json({ error: "尚无版本记录" }, 404);
+        if (ok) await pushVersionState(); // 版本号 / 强制状态变更后实时推送
         return json({ ok, version: { ...target, ...patch } });
       } catch (e) {
         return json({ error: (e as Error).message }, 500);
@@ -405,6 +420,7 @@ export async function handleApi(req: Request): Promise<Response> {
         if (!Number.isFinite(id) || id <= 0) return json({ error: "缺少版本记录 id" }, 400);
         const ok = await forceVersion(id);
         if (!ok) return json({ error: "未找到该版本记录 id=" + id }, 404);
+        await pushVersionState(); // 实时推送：所有在线客户端若版本不一致则被禁用
         return json({ ok: true });
       } catch (e) {
         return json({ error: (e as Error).message }, 500);
@@ -417,6 +433,7 @@ export async function handleApi(req: Request): Promise<Response> {
       if (!admin) return json({ error: "无权访问" }, 403);
       try {
         await unforceAllVersions();
+        await pushVersionState(); // 实时解禁：所有在线客户端恢复可用
         return json({ ok: true });
       } catch (e) {
         return json({ error: (e as Error).message }, 500);

@@ -897,9 +897,9 @@ export async function getVersionByBuildTime(buildTime: string): Promise<string> 
 
 // 前端登录后上报“当前客户端版本号”+ 打包时间，便于管理后台查看各用户实际使用的版本。
 // buildTime 用于按 versions.build_time 匹配出该构建对应的版本号（即便本次构建未携带版本号）。
-export async function updateUserVersion(userId: number, version: string, buildTime?: string | null): Promise<boolean> {
+export async function updateUserVersion(userId: number, version: string, buildTime?: string | null): Promise<string> {
   ensureDb();
-  if (!Number.isFinite(userId) || userId < 0) return false;
+  if (!Number.isFinite(userId) || userId < 0) return "";
   let v = String(version || "").slice(0, 64);
   const bt = buildTime ? String(buildTime) : null;
   // 本地未携带语义版本号：按打包时间在 versions 表匹配该构建对应的版本号，
@@ -912,7 +912,8 @@ export async function updateUserVersion(userId: number, version: string, buildTi
     `UPDATE users SET current_version = $2, current_build_time = $3 WHERE id = $1 RETURNING id`,
     [userId, v, bt],
   );
-  return rows.length > 0;
+  // 返回“服务端解析后的版本号”，供前端更新本地版本号（用于强制推送 / 更新弹窗的版本比对）
+  return rows.length > 0 ? v : "";
 }
 
 export async function countUsers(): Promise<number> {

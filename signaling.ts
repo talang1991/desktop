@@ -15,6 +15,9 @@ import { WebSocketServer, WebSocket } from "npm:ws@8.18.0";
 import { getUserByToken, isGroupMember, getGroupMemberIds, getUserById } from "./store.ts";
 import { saveMessage, saveGroupMessage } from "./chatstore.ts";
 
+// 版本强制更新广播：保存 ws 服务实例引用，供 broadcastVersionState 向所有在线连接推送。
+let wssRef: WebSocketServer | null = null;
+
 // 根据请求推导前端应连接的 ws URL（与页面同源同端口，仅协议换 ws/wss）。
 export function getWsPublicUrl(req: Request): string {
   const u = new URL(req.url);
@@ -241,9 +244,23 @@ export function pushToUser(userId: number, obj: unknown): boolean {
   return delivered;
 }
 
+// 向所有已连接的 WebSocket 客户端（不限用户 / 访客）实时推送「版本强制更新 / 解禁」事件。
+// 前端据此判断：若本地版本 ≠ 推送的最新版本且处于强制状态，则禁用应用并弹失效提示；
+// 若 force=false 则解除禁用（如管理员取消强制推送）。
+export function broadcastVersionState(version: string, force: boolean): void {
+  if (!wssRef) return;
+  const payload = JSON.stringify({ type: "version-force", version: version || "", force: !!force, ts: Date.now() });
+  for (const sock of wssRef.clients) {
+    if (sock.readyState === WebSocket.OPEN) {
+      try { sock.send(payload); } catch { /* 忽略单条发送失败 */ }
+    }
+  }
+}
+
 // 把信令服务（ws）附着到已有的 node:http 服务器上（与 HTTP/API 同端口）
 export function attachSignaling(server: Server): void {
   const wss = new WebSocketServer({ server });
+  wssRef = wss;
 
   // 心跳：清理掉线连接
   const heartbeat = setInterval(() => {

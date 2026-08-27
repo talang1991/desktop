@@ -2919,4 +2919,28 @@ input, select, textarea, .friend-row, .conv-row, .member-picker, .group-list, .f
 .release-foot { margin-top: 16px; display: flex; gap: 10px; }
 .release-foot .btn { flex: 1 1 auto; justify-content: center; }
 
+/* ---------- 版本失效 / 强制更新弹窗 ---------- */
+/* 全屏遮罩、不可关闭（无关闭按钮、点击遮罩无效），覆盖整个应用，实现“应用不可用” */
+.force-modal {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+  background: rgba(0,0,0,.55);
+}
+.force-modal[hidden] { display: none; }
+.force-card {
+  width: 100%; max-width: 420px; text-align: center;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  padding: 26px 22px; box-shadow: var(--shadow); animation: settingsSlideIn 0.18s ease-out;
+}
+.force-icon {
+  width: 54px; height: 54px; line-height: 54px; margin: 0 auto 12px;
+  font-size: 28px; border-radius: 50%;
+  background: rgba(220, 38, 38, .12); color: #dc2626;
+}
+.force-head { font-weight: 700; font-size: 18px; color: var(--text); }
+.force-sub { font-size: 13px; color: var(--text-2); margin: 6px 0 10px; }
+.force-body { font-size: 14px; line-height: 1.7; color: var(--text); }
+.force-foot { margin-top: 18px; }
+.force-foot .btn { width: 100%; justify-content: center; }
+
 

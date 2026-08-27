@@ -186,6 +186,19 @@
     </div>
   </div>
 
+  <!-- 版本失效 / 强制更新弹窗：本地版本与最新版本不一致且处于强制状态时展示，不可关闭，仅可刷新 -->
+  <div id="forceModal" class="force-modal" hidden>
+    <div class="force-card">
+      <div class="force-icon" aria-hidden="true">⚠</div>
+      <div class="force-head" id="forceTitle">版本已失效</div>
+      <div class="force-sub" id="forceSub"></div>
+      <div class="force-body" id="forceBody">当前使用的版本已不可用，请刷新以更新到最新版本后继续使用。</div>
+      <div class="force-foot">
+        <button id="forceRefresh" class="btn primary block" type="button" data-i18n="release.refresh">立即刷新</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 主应用 -->
   <div id="appView" hidden>
     <header class="topbar">

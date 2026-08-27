@@ -6,6 +6,9 @@
   const TOKEN_KEY = "web-app-launcher:token";
   // 本地已展示过更新弹窗的版本号：决定「版本更新弹窗」是否再次弹出（避免重复打扰）
   const RELEASE_KEY = "web-app-launcher:release-version";
+  // 服务端解析后回写的“本地版本号”：上报 /api/me/version 后由后端按 build_time 反查版本号并写回，
+  // 用于强制推送失效判定与更新弹窗的版本比对（处理打包时未填版本号的情况）。
+  const LOCAL_VERSION_KEY = "web-app-launcher:local-version";
   // 本地已处理过的「强制推送令牌」：后端每次点「强制更新」会刷新 force_token，
   // 令牌变化即对所有客户端（含已看过该版本的）重新弹窗，关闭后记录令牌避免重复弹。
   const RELEASE_FORCE_KEY = "web-app-launcher:release-force-token";
@@ -404,10 +407,13 @@
     if (pendingMeetingId) {
       try { joinMeetingFromLink(pendingMeetingId); } catch (e) { console.error("[INIT] 链接入会闸门失败:", e); }
     }
-    // 版本更新弹窗：后端 show_popup 且版本高于本地已展示版本时展示
-    checkReleaseNotes();
-    // 上报当前客户端版本号（供管理后台展示各用户使用版本）；失败不影响主流程
-    reportUserVersion();
+    // 先上报当前客户端版本号：供管理后台展示，并取回服务端解析后的版本号写入本地，
+    // 作为后续强制推送 / 更新弹窗比对的“本地版本号”（await 确保比对前本地版本已更新）
+    await reportUserVersion();
+    // 版本强制更新（失效）检查：与最新版本不一致且处于强制状态时禁用应用（先于版本弹窗）
+    await checkVersionEnforcement();
+    // 版本更新弹窗：后端 show_popup 且版本高于本地已展示版本时展示（失效状态下不再弹）
+    if (!appVersionDisabled) checkReleaseNotes();
   }
   async function checkAuth() {
     const tk = localStorage.getItem(TOKEN_KEY);
@@ -3732,6 +3738,10 @@
         break;
       case "error":
         setChatStatus("错误：" + m.error, "warn");
+        break;
+      // 版本强制更新 / 解禁推送：与最新版本不一致且处于强制状态时，禁用应用并弹失效提示
+      case "version-force":
+        applyVersionEnforcement(m.version ? String(m.version) : "", !!m.force);
         break;
       case "ping":
         try { sigSocket.send(JSON.stringify({ type: "pong" })); } catch {}
@@ -7253,7 +7263,12 @@
       if (!ver && !buildTime) return;                          // 既无版本号也无打包时间则不上报
       // 同时上报打包时间：后端据此按 versions.build_time 匹配出“该构建对应的版本号”
       // （即便本次构建未携带版本号，后台给这条 build_time 补填版本号后即匹配到）。
-      await api("/api/me/version", { method: "POST", body: JSON.stringify({ version: ver, buildTime }) }).catch(() => {});
+      const r = await api("/api/me/version", { method: "POST", body: JSON.stringify({ version: ver, buildTime }) }).catch(() => null);
+      // 后端返回“服务端解析后的版本号”（未携带版本号时按 build_time 反查），用它更新本地版本号，
+      // 作为强制推送失效判定 / 更新弹窗比对的依据。
+      if (r && r.ok && typeof r.version === "string") {
+        try { localStorage.setItem(LOCAL_VERSION_KEY, r.version || ""); } catch (e) {}
+      }
     } catch (e) { /* 上报失败不影响主流程 */ }
   }
 
@@ -7330,6 +7345,58 @@
     }, 150);
   }
 
+  // ---------- 版本强制更新（失效）逻辑 ----------
+  // 语义：后端开启“强制推送”（force_popup）时，若本地版本 ≠ 最新版本，则应用不可用，
+  // 弹“版本已失效”提示，仅可“立即刷新”。通过 WebSocket 实时推送 + 打开应用时检查一次。
+  let appVersionDisabled = false;
+
+  // 取当前运行构建的语义版本号（构建时注入，与运行代码一起下发）
+  function getLocalVersion() {
+    // 优先取“服务端解析后回写的本地版本号”（无则回退到构建时注入的语义版本号）。
+    // 打包时未填版本号的构建，会在上报后由后端反查版本号并写回，从而能正确参与版本比对。
+    let local = "";
+    try { local = localStorage.getItem(LOCAL_VERSION_KEY) || ""; } catch (e) {}
+    if (!local) {
+      const b = (typeof window !== "undefined" && window.__APP_BUILD__) || null;
+      local = (b && b.version) ? String(b.version) : "";
+    }
+    return local;
+  }
+
+  // 根据“最新版本 + 是否强制”判定并应用禁用 / 解禁
+  function applyVersionEnforcement(latest, force) {
+    const local = getLocalVersion();
+    // 仅当：处于强制状态、且两端都有语义版本、且版本不一致时，才判定失效。
+    // 本地无版本（未打包版本号的开发构建）不强制禁用，避免在开发期被锁死。
+    const invalid = !!force && !!latest && !!local && local !== latest;
+    if (invalid) showForceModal(latest);
+    else hideForceModal();
+  }
+
+  function showForceModal(latest) {
+    appVersionDisabled = true;
+    const m = document.getElementById("forceModal");
+    const sub = document.getElementById("forceSub");
+    if (sub) sub.textContent = (t("release.newversion") || "最新版本") + " v" + (latest || "");
+    const btn = document.getElementById("forceRefresh");
+    if (btn) btn.onclick = () => applyUpdate();
+    if (m) m.hidden = false;
+  }
+
+  function hideForceModal() {
+    appVersionDisabled = false;
+    const m = document.getElementById("forceModal");
+    if (m) m.hidden = true;
+  }
+
+  // 打开应用时检查一次：拉取公开版本信息，应用强制禁用判定
+  async function checkVersionEnforcement() {
+    try {
+      const v = await api("/api/version");
+      applyVersionEnforcement(v && v.version ? v.version : "", !!(v && v.force_popup));
+    } catch (e) { /* 检查失败不影响主流程 */ }
+  }
+
   // ---------- Init ----------
   function init() {
     // 清理“立即刷新”带的时间戳查询串，恢复干净地址（此时新版本已加载完成）
@@ -7340,6 +7407,8 @@
         history.replaceState({}, "", _u.pathname + _u.search + _u.hash);
       }
     } catch (e) {}
+    // 打开应用时检查一次：若本地版本 ≠ 最新版本且后端开启强制推送，则禁用应用并弹失效提示
+    checkVersionEnforcement();
     applyTheme(
       localStorage.getItem(THEME_KEY) ||
       (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
