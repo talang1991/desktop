@@ -8,7 +8,7 @@ import {
   updateUserAvatar, updateUserUsername, areFriends,
   createGroup, addGroupMember, listUserGroups, getGroupBasic, isGroupMember, leaveGroup,
   renameGroup, getGroupMemberIds,
-  listAllUsers, updateUserRole, countUsers, countLinks, recentRegistrations,
+  listAllUsers, updateUserRole, countUsers, countLinks, recentRegistrations, updateUserVersion,
   createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, updateApp, countPendingApps, toggleAppLike,
   findUserByEmail, setUserEmail, updatePassword, saveEmailOtp, verifyEmailOtp,
   getLatestVersion, getAllVersions, getPublicVersion, forceVersion, unforceAllVersions,
@@ -154,7 +154,22 @@ export async function handleApi(req: Request): Promise<Response> {
     if (path === "/api/me" && method === "GET") {
       // getUserByToken 内部已在同一连接上刷新 last_active（见 store.ts）
       const user = await requireUser(req);
-      return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar, role: user.role, email: user.email || "" } : null });
+      return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar, role: user.role, email: user.email || "", current_version: user.current_version || "" } : null });
+    }
+
+    // ---- 前端上报“当前使用的客户端版本号”（登录态；供管理后台展示）----
+    if (path === "/api/me/version" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      try {
+        const b = await req.json().catch(() => ({}));
+        const version = String(b.version || "").trim();
+        if (!version) return json({ error: "版本号不能为空" }, 400);
+        await updateUserVersion(user.id, version);
+        return json({ ok: true });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 500);
+      }
     }
 
     // ---- 更新当前用户资料（头像 / 昵称）----

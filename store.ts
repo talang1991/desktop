@@ -296,6 +296,10 @@ export async function initStore(): Promise<void> {
                ALTER TABLE users ADD CONSTRAINT chk_users_role CHECK (role IN ('user','admin'));
              EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
           );
+          // 当前用户正在使用的客户端版本号（前端启动后上报），供管理后台展示
+          await c.queryObject(
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS current_version TEXT NOT NULL DEFAULT ''`,
+          );
           await c.queryObject(
             `CREATE TABLE IF NOT EXISTS links (
               id SERIAL PRIMARY KEY,
@@ -768,15 +772,15 @@ export async function revokeSession(token: string, userId: number): Promise<bool
   return rows.length > 0;
 }
 
-export async function getUserByToken(token: string): Promise<{ id: number; username: string; avatar: string; role: string; email: string } | null> {
+export async function getUserByToken(token: string): Promise<{ id: number; username: string; avatar: string; role: string; email: string; current_version: string } | null> {
   if (!token) return null;
   ensureDb();
   // 在【同一条连接】上完成「读取用户 + 刷新活跃时间」：
   // 这样只要能认证成功（读到了会话），就一定能更新 last_active，
   // 避免池化代理（Prisma 等）在 flaky 时「读走健康连接、写走坏连接」导致活跃时间静默丢失。
   return withClient(async (c: any) => {
-    const res = await c.queryObject<{ id: number; username: string; avatar: string; role: string; email: string; expires_at: string }>(
-      `SELECT u.id, u.username, u.avatar, u.role, u.email, s.expires_at FROM sessions s
+    const res = await c.queryObject<{ id: number; username: string; avatar: string; role: string; email: string; current_version: string; expires_at: string }>(
+      `SELECT u.id, u.username, u.avatar, u.role, u.email, u.current_version, s.expires_at FROM sessions s
        JOIN users u ON u.id = s.user_id WHERE s.token = $1`,
       [token],
     );
@@ -789,7 +793,7 @@ export async function getUserByToken(token: string): Promise<{ id: number; usern
     // 刷新活跃时间（与读同连接；写失败不阻断请求，但静默吞掉只在此处发生，
     // 正常健康连接下必然成功）
     await c.queryObject(`UPDATE sessions SET last_active = now() WHERE token = $1`, [token]).catch(() => {});
-    return { id: r.id, username: r.username, avatar: r.avatar, role: r.role, email: r.email };
+    return { id: r.id, username: r.username, avatar: r.avatar, role: r.role, email: r.email, current_version: r.current_version || "" };
   });
 }
 
@@ -857,21 +861,33 @@ export async function updateUserRole(userId: number, role: string): Promise<bool
 }
 
 // ---------------- 管理后台聚合查询 ----------------
-// 全部用户：含角色、头像、注册时间、链接数（按注册时间倒序）
+// 全部用户：含角色、头像、注册时间、链接数、当前使用版本（按注册时间倒序）
 export async function listAllUsers(): Promise<
-  Array<{ id: number; username: string; avatar: string; role: string; created_at: string; link_count: number; last_active: string | null }>
+  Array<{ id: number; username: string; avatar: string; role: string; created_at: string; link_count: number; last_active: string | null; current_version: string }>
 > {
   ensureDb();
   const rows = await query<{
-    id: number; username: string; avatar: string; role: string; created_at: string; link_count: number; last_active: string | null;
+    id: number; username: string; avatar: string; role: string; created_at: string; link_count: number; last_active: string | null; current_version: string;
   }>(
-    `SELECT u.id, u.username, u.avatar, u.role, u.created_at,
+    `SELECT u.id, u.username, u.avatar, u.role, u.created_at, u.current_version,
             (SELECT COUNT(*) FROM links l WHERE l.user_id = u.id)::int AS link_count,
             (SELECT MAX(s.last_active) FROM sessions s WHERE s.user_id = u.id) AS last_active
      FROM users u ORDER BY u.created_at DESC`,
     [],
   );
   return rows;
+}
+
+// 前端登录后上报“当前客户端版本号”，便于管理后台查看各用户实际使用的版本
+export async function updateUserVersion(userId: number, version: string): Promise<boolean> {
+  ensureDb();
+  if (!Number.isFinite(userId) || userId < 0) return false;
+  const v = String(version || "").slice(0, 64);
+  const rows = await query<{ id: number }>(
+    `UPDATE users SET current_version = $2 WHERE id = $1 RETURNING id`,
+    [userId, v],
+  );
+  return rows.length > 0;
 }
 
 export async function countUsers(): Promise<number> {

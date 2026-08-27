@@ -124,7 +124,7 @@
     if (!tb) return;
     tb.innerHTML = "";
     if (!users.length) {
-      tb.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-2)">暂无用户</td></tr>';
+      tb.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-2)">暂无用户</td></tr>';
       return;
     }
     for (const u of users) {
@@ -153,7 +153,8 @@
       tr.insertAdjacentHTML("beforeend",
         "<td>" + roleBadge + "</td><td>" + escapeHtml(u.link_count) +
         "</td><td>" + escapeHtml(fmtDate(u.created_at)) + "</td><td>" +
-        escapeHtml(u.last_active ? fmtDate(u.last_active) : "从未登录") + "</td>");
+        escapeHtml(u.last_active ? fmtDate(u.last_active) : "从未登录") + "</td><td>" +
+        (u.current_version ? '<span class="version-tag">' + escapeHtml(u.current_version) + "</span>" : '<span class="muted">—</span>') + "</td>");
       const actTd = document.createElement("td");
       actTd.innerHTML = action;
       tr.appendChild(actTd);

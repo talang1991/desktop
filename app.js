@@ -406,6 +406,8 @@
     }
     // 版本更新弹窗：后端 show_popup 且版本高于本地已展示版本时展示
     checkReleaseNotes();
+    // 上报当前客户端版本号（供管理后台展示各用户使用版本）；失败不影响主流程
+    reportUserVersion();
   }
   async function checkAuth() {
     const tk = localStorage.getItem(TOKEN_KEY);
@@ -7218,6 +7220,17 @@
         else if (data.action === "reject") { try { declineCall(); } catch (e) {} }
       }
     });
+  }
+
+  // ---------- 上报当前客户端版本号（供管理后台“用户列表”展示）----------
+  async function reportUserVersion() {
+    try {
+      // 读取构建脚本写入的版本基线（dist/version.json）：语义化版本号，与 versions 表一致
+      const vi = await fetch("version.json", { cache: "no-store" }).then((r) => r.json()).catch(() => null);
+      const ver = vi && typeof vi.version === "string" && vi.version ? vi.version : null;
+      if (!ver) return;
+      await api("/api/me/version", { method: "POST", body: JSON.stringify({ version: ver }) }).catch(() => {});
+    } catch (e) { /* 上报失败不影响主流程 */ }
   }
 
   // ---------- 版本更新弹窗（后端 show_popup 控制，且仅当版本高于本地已展示版本时弹出）----------

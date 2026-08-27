@@ -703,6 +703,12 @@ body.selection-mode .card:hover { transform: none; }
 .role-admin { background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary); }
 .role-user { background: var(--surface-2); color: var(--text-2); }
 .admin-self { font-size: 12px; color: var(--text-2); }
+.version-tag {
+  display: inline-block; padding: 2px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; line-height: 1.6;
+  background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--primary);
+}
+.muted { color: var(--text-2); }
 
 @media (max-width: 560px) {
   .admin-stats { grid-template-columns: 1fr; }
