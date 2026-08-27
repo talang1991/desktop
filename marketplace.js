@@ -749,9 +749,13 @@
     const count = dots.length;
     if (count <= 1 || !track) return; // 单张无需轮播
     let idx = 0;
+    // 居中轮播：把当前 banner 居中，左右各露出前后 banner 的一部分（peek）。
+    // itemWidth 取首张实际宽度，offset=(视口宽-单张宽)/2；translateX = offset - idx*itemWidth。
     const go = (i) => {
       idx = (i + count) % count;
-      track.style.transform = "translateX(" + (-idx * 100) + "%)";
+      const itemW = track.firstElementChild ? track.firstElementChild.offsetWidth : 930;
+      const offset = (slot.clientWidth - itemW) / 2;
+      track.style.transform = "translateX(" + (offset - idx * itemW) + "px)";
       dots.forEach((d, k) => d.classList.toggle("active", k === idx));
     };
     const next = () => go(idx + 1);
