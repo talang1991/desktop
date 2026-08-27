@@ -387,8 +387,9 @@
   }
 
   // ---------- 版本发布管理（列表 / 编辑 / 强制推送）----------
-  let selectedVersion = null;     // 当前编辑的目标版本；null = 最新一条
+  let selectedId = null;          // 当前编辑的目标记录 id；null = 最新一条
   let allVersionsCache = [];      // 列表缓存，供「编辑」直接取数
+  let popupTouched = false;       // 用户是否手动改过「展示弹窗」开关（用于「设了版本号自动弹」判断）
 
   function toLocalInputValue(iso) {
     if (!iso) return "";
@@ -407,10 +408,17 @@
     const saveBtn = document.getElementById("versionSave");
     if (saveBtn) saveBtn.onclick = saveVersion;
     const clearBtn = document.getElementById("versionEditClear");
-    if (clearBtn) clearBtn.onclick = () => { selectedVersion = null; loadVersion(); loadVersionsList(); };
+    if (clearBtn) clearBtn.onclick = () => { selectedId = null; popupTouched = false; loadVersion(); loadVersionsList(); };
+    const popupEl = document.getElementById("versionShowPopup");
+    if (popupEl) popupEl.onchange = () => { popupTouched = true; };
+    const verInput = document.getElementById("versionInput");
+    if (verInput) verInput.oninput = () => {
+      // 「设了版本号就自动弹」：填入版本号且用户未手动关掉开关时，自动勾选展示弹窗
+      if (verInput.value.trim() && popupEl && !popupTouched) popupEl.checked = true;
+    };
     try {
       let v = null;
-      if (selectedVersion) v = allVersionsCache.find((x) => x.version === selectedVersion);
+      if (selectedId != null) v = allVersionsCache.find((x) => x.id === selectedId);
       if (!v) {
         const r = await api("/api/admin/version");
         if (!r.version) {
@@ -419,21 +427,23 @@
           return;
         }
         v = r.version;
-        selectedVersion = null; // 接口仅返回最新一条
+        selectedId = null; // 接口仅返回最新一条
       }
       const no = document.getElementById("versionNo");
-      if (no) no.textContent = v.version + (selectedVersion ? "（指定版本）" : "");
+      if (no) no.textContent = "#" + v.id + (v.version ? "（" + v.version + "）" : "（未设版本号）");
+      const vi = document.getElementById("versionInput");
+      if (vi) vi.value = v.version || "";
       const title = document.getElementById("versionTitle");
       if (title) title.value = v.title || "";
       const note = document.getElementById("versionNote");
       if (note) note.value = v.release_note || "";
       const popup = document.getElementById("versionShowPopup");
-      if (popup) popup.checked = !!v.show_popup;
+      if (popup) { popup.checked = !!v.show_popup; popupTouched = false; }
       const pa = document.getElementById("versionPublishedAt");
       if (pa) pa.value = toLocalInputValue(v.published_at);
       const hint = document.getElementById("versionEditHint");
-      if (hint) hint.textContent = selectedVersion ? ("正在编辑指定版本：" + selectedVersion) : "";
-      if (clearBtn) clearBtn.hidden = !selectedVersion;
+      if (hint) hint.textContent = selectedId != null ? ("正在编辑记录 #" + selectedId + (v.version ? "（" + v.version + "）" : "")) : "";
+      if (clearBtn) clearBtn.hidden = selectedId == null;
     } catch (e) {
       const msg = document.getElementById("versionMsg");
       if (msg) { msg.textContent = "加载失败：" + ((e && e.message) || "未知错误"); msg.className = "version-msg err"; }
@@ -454,18 +464,19 @@
             ? '<span class="badge on">弹窗开</span>'
             : '<span class="badge off">弹窗关</span>';
           const forceBadge = v.force_popup ? '<span class="badge force">强制中</span>' : '';
+          const verText = v.version ? escapeHtml(v.version) : '<span class="muted">未设置</span>';
           const pa = v.published_at ? new Date(v.published_at).toLocaleString() : "";
           const forceBtn = v.force_popup
-            ? '<button class="btn ghost small" data-act="unforce" data-v="' + escapeHtml(v.version) + '">取消强制</button>'
-            : '<button class="btn small" data-act="force" data-v="' + escapeHtml(v.version) + '">强制推送</button>';
+            ? '<button class="btn ghost small" data-act="unforce" data-id="' + v.id + '">取消强制</button>'
+            : '<button class="btn small" data-act="force" data-id="' + v.id + '">强制推送</button>';
           return '<tr>'
-            + '<td class="ver-no">' + escapeHtml(v.version) + '</td>'
+            + '<td class="ver-no">' + verText + '</td>'
             + '<td>' + escapeHtml(v.title || "—") + '</td>'
             + '<td>' + escapeHtml(pa) + '</td>'
             + '<td>' + popupBadge + '</td>'
             + '<td>' + forceBadge + '</td>'
             + '<td><div class="row-actions">'
-              + '<button class="btn ghost small" data-act="edit" data-v="' + escapeHtml(v.version) + '">编辑</button>'
+              + '<button class="btn ghost small" data-act="edit" data-id="' + v.id + '">编辑</button>'
               + forceBtn
             + '</div></td>'
           + '</tr>';
@@ -473,9 +484,9 @@
         body.querySelectorAll("button[data-act]").forEach((btn) => {
           btn.onclick = () => {
             const act = btn.getAttribute("data-act");
-            const ver = btn.getAttribute("data-v");
-            if (act === "edit") editVersion(ver);
-            else if (act === "force") forceVersionApi(ver);
+            const id = Number(btn.getAttribute("data-id"));
+            if (act === "edit") editVersion(id);
+            else if (act === "force") forceVersionApi(id);
             else if (act === "unforce") unforceApi();
           };
         });
@@ -484,14 +495,16 @@
       if (body) body.innerHTML = '<tr><td colspan="6" class="admin-empty">加载失败：' + escapeHtml((e && e.message) || "未知错误") + '</td></tr>';
     }
   }
-  function editVersion(ver) {
-    selectedVersion = ver;
+  function editVersion(id) {
+    selectedId = id;
     loadVersion();
   }
-  async function forceVersionApi(ver) {
-    if (!confirm("确定要强制推送版本 " + ver + " 吗？所有用户（含已看过该版本的）下次打开都会重新弹出更新内容。")) return;
+  async function forceVersionApi(id) {
+    const rec = allVersionsCache.find((x) => x.id === id);
+    const label = rec ? (rec.version || ("#" + id)) : ("#" + id);
+    if (!confirm("确定要强制推送 " + label + " 吗？所有用户（含已看过该版本的）下次打开都会重新弹出更新内容。")) return;
     try {
-      await api("/api/admin/version/force", { method: "POST", body: JSON.stringify({ version: ver }) });
+      await api("/api/admin/version/force", { method: "POST", body: JSON.stringify({ id }) });
       await loadVersionsList();
     } catch (e) {
       const msg = document.getElementById("versionMsg");
@@ -508,6 +521,7 @@
     }
   }
   async function saveVersion() {
+    const vi = document.getElementById("versionInput");
     const title = document.getElementById("versionTitle");
     const note = document.getElementById("versionNote");
     const popup = document.getElementById("versionShowPopup");
@@ -519,10 +533,12 @@
       show_popup: !!(popup && popup.checked),
       published_at: pa && pa.value ? toIsoFromLocal(pa.value) : undefined,
     };
-    if (selectedVersion) payload.version = selectedVersion;
+    if (vi) payload.version = vi.value.trim();
+    if (selectedId != null) payload.id = selectedId;
     if (msg) { msg.textContent = "保存中…"; msg.className = "version-msg"; }
     try {
       await api("/api/admin/version", { method: "PUT", body: JSON.stringify(payload) });
+      popupTouched = false;
       if (msg) { msg.textContent = "已保存"; msg.className = "version-msg"; }
       await loadVersionsList();
     } catch (e) {

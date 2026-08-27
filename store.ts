@@ -157,7 +157,7 @@ const APPS_DDL = `CREATE TABLE IF NOT EXISTS apps (
 // 前端拉取最新一条：仅当后端 show_popup=true 且版本高于本地已展示版本时弹窗展示更新内容。
 const VERSIONS_DDL = `CREATE TABLE IF NOT EXISTS versions (
   id SERIAL PRIMARY KEY,
-  version TEXT NOT NULL UNIQUE,                 -- 语义化版本号（每次发布唯一）
+  version TEXT NOT NULL DEFAULT '',              -- 语义化版本号（可空：未设版本号的构建不弹窗；后台补填后可弹）
   title TEXT NOT NULL DEFAULT '',               -- 发布标题（弹窗标题）
   release_note TEXT NOT NULL DEFAULT '',         -- 发布说明 / release notes（支持换行）
   show_popup BOOLEAN NOT NULL DEFAULT false,     -- 后端开关：是否向前端推送「展示更新弹窗」
@@ -535,37 +535,37 @@ export interface VersionRow {
   created_at: string;
 }
 
-// 编译后写入数据库：读取构建脚本生成的 version.json（或回退 package.json 的 version），
-// upsert 一条版本基线。仅当该 version 不存在时插入；若已存在（后台已编辑）则不覆盖。
+// 编译后写入数据库：读取构建脚本生成的 version.json，得到「本次构建」的版本号与编译时间。
+// version 可空（默认留空，由管理后台补填）；buildTime 每次构建都不同，用于去重（避免 dev 重启重复插入）。
 async function readBuildVersion(): Promise<{ version: string; buildTime: string } | null> {
-  // 1) 构建脚本产物：部署时 cwd=dist（./version.json）；本地运行在 ./dist/version.json
+  // 构建脚本产物：部署时 cwd=dist（./version.json）；本地运行在 ./dist/version.json
   for (const p of ["./version.json", "./dist/version.json"]) {
     try {
       const j = JSON.parse(await Deno.readTextFile(p));
-      if (j && typeof j.version === "string" && j.version) {
-        return { version: j.version, buildTime: j.buildTime || new Date().toISOString() };
+      if (j && typeof j === "object") {
+        const version = typeof j.version === "string" ? j.version : "";
+        const buildTime = typeof j.buildTime === "string" ? j.buildTime : new Date().toISOString();
+        return { version, buildTime };
       }
     } catch { /* 尝试下一个路径 */ }
   }
-  // 2) 回退：package.json 的 version 字段
-  try {
-    const j = JSON.parse(await Deno.readTextFile("./package.json"));
-    if (j && typeof j.version === "string" && j.version) {
-      return { version: j.version, buildTime: new Date().toISOString() };
-    }
-  } catch { /* 无版本信息则跳过 */ }
   return null;
 }
 
-// 编译后（server 启动时）把当前版本基线写入 versions 表；不覆盖后台已编辑的内容
+// 编译后（server 启动时）把「本次构建」写入 versions 表：每启动一次（即每次部署/构建）插入一条新记录。
+// version 默认留空（由管理后台补填），show_popup 默认 false（未设版本号的构建不弹窗）。
+// 同一 build_time 只插入一次，避免开发期服务重启重复写。
 export async function recordBuildVersion(): Promise<void> {
   const info = await readBuildVersion();
   if (!info) return;
   ensureDb();
-  // ON CONFLICT(version) DO NOTHING：保留后台已编辑的 title/release_note/show_popup/published_at
+  const dup = await query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM versions WHERE build_time = $1::timestamptz`,
+    [info.buildTime],
+  );
+  if (dup[0] && dup[0].n > 0) return; // 本次构建已记录
   await query(
-    `INSERT INTO versions (version, build_time) VALUES ($1, $2)
-     ON CONFLICT (version) DO NOTHING`,
+    `INSERT INTO versions (version, build_time) VALUES ($1, $2)`,
     [info.version, info.buildTime],
   );
 }
@@ -590,6 +590,8 @@ export async function ensureVersionsColumns(): Promise<void> {
   ]) {
     await query(col);
   }
+  // 历史唯一约束（version 唯一）已废弃：现每构建一条记录、version 可空，移除之（忽略失败）
+  await query(`ALTER TABLE versions DROP CONSTRAINT IF EXISTS versions_version_key`).catch(() => {});
 }
 
 // 后台：返回全部版本（按 id 倒序，最新在前），供「版本列表」展示
@@ -618,15 +620,16 @@ export async function getPublicVersion(): Promise<VersionRow | null> {
   return rows[0] ?? null;
 }
 
-// 强制推送某个版本：把该版本标记为 force_popup=true 并刷新 force_token，其余版本全部取消强制。
-// 这样「一次只强制一个版本」，前端据此对所有客户端（无论是否看过）重新弹窗。
-export async function forceVersion(version: string): Promise<boolean> {
+// 强制推送某条版本记录（按 id）：把该记录标记为 force_popup=true 并刷新 force_token，其余全部取消强制。
+// 这样「一次只强制一条」，前端据此对所有客户端（无论是否看过）重新弹窗。
+export async function forceVersion(id: number): Promise<boolean> {
   ensureDb();
+  if (!Number.isFinite(id) || id < 0) return false;
   const token = (Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
-  await query(`UPDATE versions SET force_popup = false WHERE force_popup = true`);
+  await query(`UPDATE versions SET force_popup = false`);
   const rows = await query<{ id: number }>(
-    `UPDATE versions SET force_popup = true, force_token = $2 WHERE version = $1 RETURNING id`,
-    [version, token],
+    `UPDATE versions SET force_popup = true, force_token = $2 WHERE id = $1 RETURNING id`,
+    [id, token],
   );
   return rows.length > 0;
 }
@@ -637,37 +640,17 @@ export async function unforceAllVersions(): Promise<void> {
   await query(`UPDATE versions SET force_popup = false WHERE force_popup = true`);
 }
 
-// 后台：按 version 更新某条版本记录（列表里点「编辑」可定位到任意版本，而不仅是最新一条）
-export async function updateVersionByVersion(
-  version: string,
-  patch: { title?: string; release_note?: string; show_popup?: boolean; published_at?: string },
-): Promise<boolean> {
-  ensureDb();
-  const sets: string[] = [];
-  const params: unknown[] = [];
-  let i = 1;
-  if (typeof patch.title === "string") { sets.push(`title = $${i++}`); params.push(patch.title); }
-  if (typeof patch.release_note === "string") { sets.push(`release_note = $${i++}`); params.push(patch.release_note); }
-  if (typeof patch.show_popup === "boolean") { sets.push(`show_popup = $${i++}`); params.push(patch.show_popup); }
-  if (typeof patch.published_at === "string") { sets.push(`published_at = $${i++}`); params.push(patch.published_at); }
-  if (!sets.length) return false;
-  params.push(version);
-  const rows = await query<{ id: number }>(
-    `UPDATE versions SET ${sets.join(", ")} WHERE version = $${i} RETURNING id`,
-    params,
-  );
-  return rows.length > 0;
-}
-
-// 后台编辑：更新标题 / 发布说明 / 是否弹窗 / 发布时间（不更新 version 本身）
+// 后台编辑：按 id 更新某条版本记录（标题 / 版本号 / 发布说明 / 是否弹窗 / 发布时间）
 export async function updateVersion(
   id: number,
-  patch: { title?: string; release_note?: string; show_popup?: boolean; published_at?: string },
+  patch: { title?: string; version?: string; release_note?: string; show_popup?: boolean; published_at?: string },
 ): Promise<boolean> {
   ensureDb();
+  if (!Number.isFinite(id) || id < 0) return false;
   const sets: string[] = [];
   const params: unknown[] = [];
   let i = 1;
+  if (typeof patch.version === "string") { sets.push(`version = $${i++}`); params.push(patch.version.trim().slice(0, 64)); }
   if (typeof patch.title === "string") { sets.push(`title = $${i++}`); params.push(patch.title); }
   if (typeof patch.release_note === "string") { sets.push(`release_note = $${i++}`); params.push(patch.release_note); }
   if (typeof patch.show_popup === "boolean") { sets.push(`show_popup = $${i++}`); params.push(patch.show_popup); }

@@ -176,13 +176,13 @@ async function main() {
   const kb = (n: number) => (n / 1024).toFixed(1) + " KB";
 
   // 生成版本基线文件 dist/version.json（version + buildTime），供 server 启动时写入数据库（versions 表）。
-  // 版本号取自 package.json 的 version 字段（语义化版本，发布时手工维护）。
+  // 版本号默认留空：每次构建都会插入一条「未设版本号」的记录，版本号与发布说明留到管理后台补填
+  // （只有补填了版本号的构建才会向前端弹更新内容）。可选：deno task build 1.2.3 直接写入版本号。
   try {
-    const pkg = JSON.parse(await Deno.readTextFile(`${ROOT}/package.json`));
-    const ver = (pkg && typeof pkg.version === "string" && pkg.version) ? pkg.version : "0.0.0";
+    const ver = (Deno.args[0] && typeof Deno.args[0] === "string") ? Deno.args[0] : "";
     const versionJson = JSON.stringify({ version: ver, buildTime: new Date().toISOString() });
     await Deno.writeFile(`${OUT}/version.json`, enc.encode(versionJson));
-    console.log(`📌 版本基线已写入 dist/version.json: v${ver}`);
+    console.log(`📌 版本基线已写入 dist/version.json` + (ver ? `: v${ver}` : `（未设版本号，待后台补填）`));
   } catch (e) {
     console.warn("[build] 生成 version.json 失败（已忽略）:", (e as Error).message);
   }

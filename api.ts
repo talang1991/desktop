@@ -12,7 +12,7 @@ import {
   createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, updateApp, countPendingApps, toggleAppLike,
   findUserByEmail, setUserEmail, updatePassword, saveEmailOtp, verifyEmailOtp,
   getLatestVersion, getAllVersions, getPublicVersion, forceVersion, unforceAllVersions,
-  updateVersion, updateVersionByVersion, type VersionRow,
+  updateVersion, type VersionRow,
   DbUnavailableError,
 } from "./store.ts";
 
@@ -351,23 +351,24 @@ export async function handleApi(req: Request): Promise<Response> {
       }
     }
 
-    // ---- 管理后台：更新版本信息（标题 / 发布说明 / 是否弹窗 / 发布时间）----
-    // 支持按 body.version 更新指定版本（列表里点「编辑」），缺省则更新最新一条。
+    // ---- 管理后台：更新版本信息（版本号 / 标题 / 发布说明 / 是否弹窗 / 发布时间）----
+    // 后台补填：版本号在此填写。按 body.id 更新指定记录（列表里点「编辑」），缺省则更新最新一条。
     if (path === "/api/admin/version" && method === "PUT") {
       const admin = await requireAdmin(req);
       if (!admin) return json({ error: "无权访问" }, 403);
       try {
         const b = await req.json();
-        const patch: { title?: string; release_note?: string; show_popup?: boolean; published_at?: string } = {};
+        const patch: { title?: string; version?: string; release_note?: string; show_popup?: boolean; published_at?: string } = {};
+        if (typeof b.version === "string") patch.version = b.version.trim().slice(0, 64);
         if (typeof b.title === "string") patch.title = b.title.slice(0, 200);
         if (typeof b.release_note === "string") patch.release_note = b.release_note.slice(0, 5000);
         if (typeof b.show_popup === "boolean") patch.show_popup = b.show_popup;
         if (typeof b.published_at === "string") patch.published_at = b.published_at;
         let ok = false;
         let target: VersionRow | null = null;
-        if (typeof b.version === "string" && b.version) {
-          target = (await getAllVersions()).find((x) => x.version === b.version) ?? null;
-          if (target) ok = await updateVersionByVersion(b.version, patch);
+        if (typeof b.id === "number") {
+          target = (await getAllVersions()).find((x) => x.id === b.id) ?? null;
+          if (target) ok = await updateVersion(target.id, patch);
         } else {
           target = await getLatestVersion();
           if (target) ok = await updateVersion(target.id, patch);
@@ -391,16 +392,16 @@ export async function handleApi(req: Request): Promise<Response> {
       }
     }
 
-    // ---- 管理后台：强制推送某个版本（所有客户端无论是否看过都会重新弹窗）----
+    // ---- 管理后台：强制推送某条版本记录（所有客户端无论是否看过都会重新弹窗）----
     if (path === "/api/admin/version/force" && method === "POST") {
       const admin = await requireAdmin(req);
       if (!admin) return json({ error: "无权访问" }, 403);
       try {
         const b = await req.json().catch(() => ({}));
-        const version = String(b.version || "").trim();
-        if (!version) return json({ error: "缺少版本号" }, 400);
-        const ok = await forceVersion(version);
-        if (!ok) return json({ error: "未找到该版本：" + version }, 404);
+        const id = Number(b.id);
+        if (!Number.isFinite(id) || id <= 0) return json({ error: "缺少版本记录 id" }, 400);
+        const ok = await forceVersion(id);
+        if (!ok) return json({ error: "未找到该版本记录 id=" + id }, 404);
         return json({ ok: true });
       } catch (e) {
         return json({ error: (e as Error).message }, 500);
