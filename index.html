@@ -13,7 +13,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="应用导航" />
-  <link rel="stylesheet" href="styles.css?v=94" />
+  <link rel="stylesheet" href="styles.css?v=95" />
 </head>
 <body>
   <!-- 内联 SVG 图标雪碧图：品牌/访客用极光渐变填充，其余 UI 图标用 currentColor 描边随主题色变化 -->
@@ -315,7 +315,7 @@
           </div>
           <div class="avatar-upload-row">
             <button type="button" class="btn ghost" id="uploadAvatarBtn" data-i18n="profile.uploadAvatar">上传图片</button>
-            <input id="avatarFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden />
+            <input id="avatarFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;" />
             <span class="hint" id="avatarUploadHint" data-i18n="profile.uploadAvatarHint">支持 PNG / JPG / GIF / WEBP，最大 2MB</span>
           </div>
         </label>
@@ -676,7 +676,7 @@
 
   <!-- 管理后台已拆为独立页面 admin.html（从设置的「管理」入口打开） -->
 
-  <script src="app.js?v=170"></script>
+  <script src="app.js?v=171"></script>
   <script src="delight.js?v=4"></script>
 </body>
 </html>

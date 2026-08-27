@@ -104,10 +104,19 @@ async function serveStatic(req: Request): Promise<Response> {
     if (target.endsWith(".html") || pathname.endsWith("/sw.js")) {
       headers["cache-control"] = "no-cache";
       headers["pragma"] = "no-cache";
-    } else if (url.searchParams.has("v")) {
-      headers["cache-control"] = "public, max-age=31536000, immutable";
     } else {
-      headers["cache-control"] = "public, max-age=3600";
+      // 仅当 ?v= 是「内容哈希」（≥8 位十六进制，由构建脚本为 dist 产物生成）时
+      // 才允许长期 immutable 缓存：内容变了哈希必变 → URL 必变 → 浏览器强制拉新。
+      // 手写构建号（如 app.js?v=170）一旦被 immutable 缓存，改了源码也永不刷新，
+      // 故这类资源一律 no-cache，保证本地开发 / 调试时改动即时生效、自愈。
+      const vParam = url.searchParams.get("v");
+      const isContentHash = vParam != null && /^[0-9a-f]{8,}$/i.test(vParam);
+      if (isContentHash) {
+        headers["cache-control"] = "public, max-age=31536000, immutable";
+      } else {
+        headers["cache-control"] = "no-cache";
+        headers["pragma"] = "no-cache";
+      }
     }
     return new Response(data, { headers });
   } catch {
