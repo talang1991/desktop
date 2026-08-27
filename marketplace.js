@@ -669,10 +669,19 @@
     loadBanner();
   }
 
-  // ---------------- 应用市场头部 Banner 广告位 ----------------
+  // ---------------- 应用市场头部 Banner 广告位（轮播）----------------
   async function loadBanner() {
     const slot = document.getElementById("mkBanner");
     if (!slot) return;
+    // 服务端已渲染（SSR）：直接水合（挂事件 + 启动轮播），不再二次请求
+    const ssrData = document.getElementById("ssrBannerData");
+    if (ssrData && !slot.hidden && slot.querySelector(".mk-banner-item")) {
+      try { bannerApps = JSON.parse(ssrData.textContent || "[]"); } catch (_) { bannerApps = []; }
+      bannerApps.forEach((a) => { appIndex[a.id] = a; });
+      attachBanner();
+      return;
+    }
+    // 否则客户端拉取（含筛选刷新 / SSR 不可用兜底）
     let apps = [];
     try {
       const res = await api("/api/marketplace/banner");
@@ -683,10 +692,8 @@
     // 并入 appIndex，确保「添加应用」可复用 saveApp 取到图标
     apps.forEach((a) => { appIndex[a.id] = a; });
     slot.hidden = false;
-    slot.innerHTML = apps.map((a, i) => bannerItemHtml(a, i)).join("");
-    slot.querySelectorAll(".mk-banner-item").forEach((el) => {
-      el.addEventListener("click", (e) => onBannerClick(e, Number(el.getAttribute("data-i"))));
-    });
+    renderBanner(slot, apps);
+    attachBanner();
   }
 
   function bannerItemHtml(a, i) {
@@ -700,7 +707,7 @@
       ? '<img src="' + escapeHtml(icon) + '" alt="" />'
       : escapeHtml((a.name || "·").slice(0, 1));
     return (
-      '<button class="mk-banner-item' + plain + '" data-i="' + i + '" title="' + escapeHtml(a.name) + '">' +
+      '<button class="mk-banner-item' + plain + '" data-i="' + i + '" title="' + escapeHtml(a.name) + '" type="button">' +
         img +
         '<span class="mk-bi-tag">推荐</span>' +
         '<div class="mk-bi-body">' +
@@ -712,6 +719,53 @@
         "</div>" +
       "</button>"
     );
+  }
+
+  function renderBanner(slot, apps) {
+    const items = apps.map((a, i) => bannerItemHtml(a, i)).join("");
+    let extra = "";
+    if (apps.length > 1) {
+      const dots = apps.map((_, i) =>
+        '<button class="mk-bi-dot' + (i === 0 ? " active" : "") + '" data-dot="' + i + '" aria-label="第 ' + (i + 1) + ' 张"></button>'
+      ).join("");
+      extra =
+        '<div class="mk-banner-dots">' + dots + "</div>" +
+        '<button class="mk-bi-arrow prev" aria-label="上一张">‹</button>' +
+        '<button class="mk-bi-arrow next" aria-label="下一张">›</button>';
+    }
+    slot.innerHTML = '<div class="mk-banner-track">' + items + "</div>" + extra;
+  }
+
+  let bannerTimer = null;
+  function attachBanner() {
+    const slot = document.getElementById("mkBanner");
+    if (!slot) return;
+    if (bannerTimer) { clearInterval(bannerTimer); bannerTimer = null; }
+    slot.querySelectorAll(".mk-banner-item").forEach((el) => {
+      el.addEventListener("click", (e) => onBannerClick(e, Number(el.getAttribute("data-i"))));
+    });
+    const track = slot.querySelector(".mk-banner-track");
+    const dots = Array.from(slot.querySelectorAll(".mk-bi-dot"));
+    const count = dots.length;
+    if (count <= 1 || !track) return; // 单张无需轮播
+    let idx = 0;
+    const go = (i) => {
+      idx = (i + count) % count;
+      track.style.transform = "translateX(" + (-idx * 100) + "%)";
+      dots.forEach((d, k) => d.classList.toggle("active", k === idx));
+    };
+    const next = () => go(idx + 1);
+    const prev = () => go(idx - 1);
+    const start = () => { stop(); bannerTimer = setInterval(next, 4500); };
+    const stop = () => { if (bannerTimer) { clearInterval(bannerTimer); bannerTimer = null; } };
+    dots.forEach((d, k) => d.addEventListener("click", (e) => { e.stopPropagation(); go(k); start(); }));
+    const prevBtn = slot.querySelector(".mk-bi-arrow.prev");
+    const nextBtn = slot.querySelector(".mk-bi-arrow.next");
+    if (prevBtn) prevBtn.addEventListener("click", (e) => { e.stopPropagation(); prev(); start(); });
+    if (nextBtn) nextBtn.addEventListener("click", (e) => { e.stopPropagation(); next(); start(); });
+    slot.addEventListener("mouseenter", stop);
+    slot.addEventListener("mouseleave", start);
+    start();
   }
 
   function onBannerClick(e, i) {

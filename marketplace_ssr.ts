@@ -7,7 +7,7 @@
 // 归一化 URL 得到「已保存」集合，渲染卡片时直接标记「✓ 已保存」。同时把 savedUrls
 // 注入 #ssrPlazaData，供前端水合（填充 myLinkUrls，避免二次请求 /api/links）。
 // 若数据库暂不可用，则返回原始模板，前端照常走客户端 loadPlaza() 兜底。
-import { listApprovedApps, getUserByToken, listLinks, type AppStatus } from "./store.ts";
+import { listApprovedApps, getUserByToken, listLinks, listBannerApps, type AppStatus, type BannerApp } from "./store.ts";
 
 // 与前端 localStorage token key 对应的 Cookie 名（前端在登录/注册/启动时写入）
 const TOKEN_COOKIE = "wal_token";
@@ -93,6 +93,58 @@ function plazaCardHtml(app: AppStatus, savedSet: Set<string>): string {
 }
 
 const PLACEHOLDER = '<div class="mk-grid" id="mkGrid"><div class="mk-msg">加载中…</div></div>';
+// 头部门面 Banner 占位：SSR 渲染成功时整体替换为轮播结构；失败则保留原样由前端兜底
+const BANNER_PLACEHOLDER = '    <div id="mkBanner" class="mk-banner-slot" hidden></div>';
+
+// ---------------- 应用市场头部 Banner 广告位（SSR 轮播）----------------
+// 结构与 marketplace.js 的 bannerItemHtml / renderBanner 保持一致，便于前端水合后复用。
+function bannerItemHtml(a: BannerApp, i: number): string {
+  const icon = (a.icon && isIconUrl(a.icon)) ? a.icon : faviconFor(a.url);
+  const plain = a.banner ? "" : " mk-bi-plain";
+  const img = a.banner
+    ? '<img class="mk-bi-img" src="' + escapeHtml(a.banner) + '" alt="" loading="lazy" />' +
+      '<div class="mk-bi-mask"></div>'
+    : "";
+  const iconInner = icon
+    ? '<img src="' + escapeHtml(icon) + '" alt="" />'
+    : escapeHtml((a.name || "·").slice(0, 1));
+  return (
+    '<button class="mk-banner-item' + plain + '" data-i="' + i + '" title="' + escapeHtml(a.name) + '" type="button">' +
+      img +
+      '<span class="mk-bi-tag">推荐</span>' +
+      '<div class="mk-bi-body">' +
+        '<div class="mk-bi-icon">' + iconInner + "</div>" +
+        '<div class="mk-bi-text">' +
+          '<div class="mk-bi-name">' + escapeHtml(a.name) + "</div>" +
+          '<div class="mk-bi-sub">' + escapeHtml(a.description || ("by " + (a.username || "未知"))) + "</div>" +
+        "</div>" +
+      "</div>" +
+    "</button>"
+  );
+}
+
+// 生成头部门面轮播：单张无指示点/箭头，多张带轮播控件；并把 banner 应用列表注入
+// #ssrBannerData 供前端水合（免二次请求）。无 banner 时返回隐藏占位。
+function bannerSlotHtml(apps: BannerApp[]): string {
+  if (!apps.length) {
+    return '<div id="mkBanner" class="mk-banner-slot" hidden></div>';
+  }
+  const items = apps.map((a, i) => bannerItemHtml(a, i)).join("");
+  let extra = "";
+  if (apps.length > 1) {
+    const dots = apps.map((_, i) =>
+      '<button class="mk-bi-dot' + (i === 0 ? " active" : "") + '" data-dot="' + i + '" aria-label="第 ' + (i + 1) + ' 张"></button>'
+    ).join("");
+    extra =
+      '<div class="mk-banner-dots">' + dots + "</div>" +
+      '<button class="mk-bi-arrow prev" aria-label="上一张">‹</button>' +
+      '<button class="mk-bi-arrow next" aria-label="下一张">›</button>';
+  }
+  const inner = '<div class="mk-banner-track">' + items + "</div>" + extra;
+  const data = '<script type="application/json" id="ssrBannerData">' +
+    JSON.stringify(apps).replace(/</g, "\\u003c") + "</script>";
+  return '<div id="mkBanner" class="mk-banner-slot" data-ssr="1">' + inner + "</div>" + data;
+}
 
 // req 可选：携带 Cookie 时据此判断登录用户并标记「已保存」；不传则按匿名渲染。
 export async function renderMarketplaceHtml(req?: Request): Promise<string> {
@@ -126,7 +178,15 @@ export async function renderMarketplaceHtml(req?: Request): Promise<string> {
     const gridHtml =
       '<div class="mk-grid" id="mkGrid">' + cards + "</div>" +
       '<script type="application/json" id="ssrPlazaData">' + payload + "</script>";
-    return tmpl.replace(PLACEHOLDER, gridHtml);
+    let html = tmpl.replace(PLACEHOLDER, gridHtml);
+    // 头部门面轮播：SSR 直接注入首屏 HTML，失败则保留占位、由前端 loadBanner 兜底
+    try {
+      const bannerApps = await listBannerApps();
+      html = html.replace(BANNER_PLACEHOLDER, bannerSlotHtml(bannerApps));
+    } catch {
+      /* 头部门面渲染失败：保留占位，前端走客户端 loadBanner 兜底 */
+    }
+    return html;
   } catch {
     // 数据库暂不可用：回退原始模板，前端照常走客户端 loadPlaza() 兜底
     return tmpl;
