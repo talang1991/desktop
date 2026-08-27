@@ -89,9 +89,24 @@
   }
   .version-field textarea.input { line-height: 1.6; }
   .version-toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text); cursor: pointer; }
-  .version-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+  .version-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
   .version-msg { font-size: 13px; color: var(--primary); }
   .version-msg.err { color: var(--danger); }
+  .version-edit-hint { font-size: 12px; color: var(--text-2); }
+
+  /* 版本列表表格 */
+  .admin-table-wrap { margin-bottom: 18px; overflow-x: auto; }
+  .admin-table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .admin-table th, .admin-table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .admin-table th { background: var(--surface-2); color: var(--text-2); font-weight: 600; white-space: nowrap; }
+  .admin-table tr:last-child td { border-bottom: none; }
+  .admin-table .admin-empty { text-align: center; color: var(--text-2); padding: 18px; }
+  .admin-table .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .admin-table .ver-no { font-weight: 600; color: var(--primary); }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; line-height: 1.6; }
+  .badge.on { background: rgba(34,197,94,.16); color: #16a34a; }
+  .badge.off { background: var(--surface-2); color: var(--text-2); }
+  .badge.force { background: rgba(239,68,68,.16); color: #dc2626; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -130,9 +145,30 @@
           <input id="versionPublishedAt" class="input" type="datetime-local" />
         </div>
         <div class="version-actions">
+          <span id="versionEditHint" class="version-edit-hint"></span>
           <button id="versionSave" class="btn primary" type="button">保存</button>
+          <button id="versionEditClear" class="btn ghost" type="button" hidden>取消编辑指定版本</button>
           <span id="versionMsg" class="version-msg"></span>
         </div>
+      </div>
+
+      <div class="admin-section-title">版本列表</div>
+      <div class="admin-table-wrap">
+        <table class="admin-table" id="versionTable">
+          <thead>
+            <tr>
+              <th>版本</th>
+              <th>标题</th>
+              <th>发布时间</th>
+              <th>弹窗</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="versionListBody">
+            <tr><td colspan="6" class="admin-empty">加载中…</td></tr>
+          </tbody>
+        </table>
       </div>
       <div class="admin-stats" id="adminStats"></div>
       <div class="admin-section-title">用户</div>

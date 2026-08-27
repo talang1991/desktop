@@ -352,6 +352,7 @@
       if (who) who.textContent = me.user.username;
       await loadData();
       loadVersion();
+      loadVersionsList();
     } catch (e) {
       if (e && e.status === 401) {
         renderNotice('登录态已失效，请返回 <a href="index.html">应用</a> 重新登录。');
@@ -384,7 +385,10 @@
     }
   }
 
-  // ---------- 版本发布管理（读取 / 保存当前版本记录）----------
+  // ---------- 版本发布管理（列表 / 编辑 / 强制推送）----------
+  let selectedVersion = null;     // 当前编辑的目标版本；null = 最新一条
+  let allVersionsCache = [];      // 列表缓存，供「编辑」直接取数
+
   function toLocalInputValue(iso) {
     if (!iso) return "";
     const d = new Date(iso);
@@ -401,16 +405,23 @@
   async function loadVersion() {
     const saveBtn = document.getElementById("versionSave");
     if (saveBtn) saveBtn.onclick = saveVersion;
+    const clearBtn = document.getElementById("versionEditClear");
+    if (clearBtn) clearBtn.onclick = () => { selectedVersion = null; loadVersion(); loadVersionsList(); };
     try {
-      const r = await api("/api/admin/version");
-      if (!r.version) {
-        const msg = document.getElementById("versionMsg");
-        if (msg) { msg.textContent = r.error || "尚无版本记录（请先部署）"; msg.className = "version-msg err"; }
-        return;
+      let v = null;
+      if (selectedVersion) v = allVersionsCache.find((x) => x.version === selectedVersion);
+      if (!v) {
+        const r = await api("/api/admin/version");
+        if (!r.version) {
+          const msg = document.getElementById("versionMsg");
+          if (msg) { msg.textContent = r.error || "尚无版本记录（请先部署）"; msg.className = "version-msg err"; }
+          return;
+        }
+        v = r.version;
+        selectedVersion = null; // 接口仅返回最新一条
       }
-      const v = r.version;
       const no = document.getElementById("versionNo");
-      if (no) no.textContent = v.version;
+      if (no) no.textContent = v.version + (selectedVersion ? "（指定版本）" : "");
       const title = document.getElementById("versionTitle");
       if (title) title.value = v.title || "";
       const note = document.getElementById("versionNote");
@@ -419,9 +430,80 @@
       if (popup) popup.checked = !!v.show_popup;
       const pa = document.getElementById("versionPublishedAt");
       if (pa) pa.value = toLocalInputValue(v.published_at);
+      const hint = document.getElementById("versionEditHint");
+      if (hint) hint.textContent = selectedVersion ? ("正在编辑指定版本：" + selectedVersion) : "";
+      if (clearBtn) clearBtn.hidden = !selectedVersion;
     } catch (e) {
       const msg = document.getElementById("versionMsg");
       if (msg) { msg.textContent = "加载失败：" + ((e && e.message) || "未知错误"); msg.className = "version-msg err"; }
+    }
+  }
+  async function loadVersionsList() {
+    const body = document.getElementById("versionListBody");
+    try {
+      const r = await api("/api/admin/versions");
+      allVersionsCache = r.versions || [];
+      if (!allVersionsCache.length) {
+        if (body) body.innerHTML = '<tr><td colspan="6" class="admin-empty">尚无版本记录（请先部署以触发编译写入）</td></tr>';
+        return;
+      }
+      if (body) {
+        body.innerHTML = allVersionsCache.map((v) => {
+          const popupBadge = v.show_popup
+            ? '<span class="badge on">弹窗开</span>'
+            : '<span class="badge off">弹窗关</span>';
+          const forceBadge = v.force_popup ? '<span class="badge force">强制中</span>' : '';
+          const pa = v.published_at ? new Date(v.published_at).toLocaleString() : "";
+          const forceBtn = v.force_popup
+            ? '<button class="btn ghost small" data-act="unforce" data-v="' + escapeHtml(v.version) + '">取消强制</button>'
+            : '<button class="btn small" data-act="force" data-v="' + escapeHtml(v.version) + '">强制推送</button>';
+          return '<tr>'
+            + '<td class="ver-no">' + escapeHtml(v.version) + '</td>'
+            + '<td>' + escapeHtml(v.title || "—") + '</td>'
+            + '<td>' + escapeHtml(pa) + '</td>'
+            + '<td>' + popupBadge + '</td>'
+            + '<td>' + forceBadge + '</td>'
+            + '<td><div class="row-actions">'
+              + '<button class="btn ghost small" data-act="edit" data-v="' + escapeHtml(v.version) + '">编辑</button>'
+              + forceBtn
+            + '</div></td>'
+          + '</tr>';
+        }).join("");
+        body.querySelectorAll("button[data-act]").forEach((btn) => {
+          btn.onclick = () => {
+            const act = btn.getAttribute("data-act");
+            const ver = btn.getAttribute("data-v");
+            if (act === "edit") editVersion(ver);
+            else if (act === "force") forceVersionApi(ver);
+            else if (act === "unforce") unforceApi();
+          };
+        });
+      }
+    } catch (e) {
+      if (body) body.innerHTML = '<tr><td colspan="6" class="admin-empty">加载失败：' + escapeHtml((e && e.message) || "未知错误") + '</td></tr>';
+    }
+  }
+  function editVersion(ver) {
+    selectedVersion = ver;
+    loadVersion();
+  }
+  async function forceVersionApi(ver) {
+    if (!confirm("确定要强制推送版本 " + ver + " 吗？所有用户（含已看过该版本的）下次打开都会重新弹出更新内容。")) return;
+    try {
+      await api("/api/admin/version/force", { method: "POST", body: JSON.stringify({ version: ver }) });
+      await loadVersionsList();
+    } catch (e) {
+      const msg = document.getElementById("versionMsg");
+      if (msg) { msg.textContent = "强制推送失败：" + ((e && e.message) || "未知错误"); msg.className = "version-msg err"; }
+    }
+  }
+  async function unforceApi() {
+    try {
+      await api("/api/admin/version/unforce", { method: "POST", body: "{}" });
+      await loadVersionsList();
+    } catch (e) {
+      const msg = document.getElementById("versionMsg");
+      if (msg) { msg.textContent = "取消强制失败：" + ((e && e.message) || "未知错误"); msg.className = "version-msg err"; }
     }
   }
   async function saveVersion() {
@@ -436,10 +518,12 @@
       show_popup: !!(popup && popup.checked),
       published_at: pa && pa.value ? toIsoFromLocal(pa.value) : undefined,
     };
+    if (selectedVersion) payload.version = selectedVersion;
     if (msg) { msg.textContent = "保存中…"; msg.className = "version-msg"; }
     try {
       await api("/api/admin/version", { method: "PUT", body: JSON.stringify(payload) });
       if (msg) { msg.textContent = "已保存"; msg.className = "version-msg"; }
+      await loadVersionsList();
     } catch (e) {
       if (msg) { msg.textContent = "保存失败：" + ((e && e.message) || "未知错误"); msg.className = "version-msg err"; }
     }

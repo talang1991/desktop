@@ -161,6 +161,8 @@ const VERSIONS_DDL = `CREATE TABLE IF NOT EXISTS versions (
   title TEXT NOT NULL DEFAULT '',               -- 发布标题（弹窗标题）
   release_note TEXT NOT NULL DEFAULT '',         -- 发布说明 / release notes（支持换行）
   show_popup BOOLEAN NOT NULL DEFAULT false,     -- 后端开关：是否向前端推送「展示更新弹窗」
+  force_popup BOOLEAN NOT NULL DEFAULT false,    -- 是否「强制推送」：覆盖本地已展示记忆，所有客户端都弹（一次至多一条）
+  force_token TEXT NOT NULL DEFAULT '',          -- 强制令牌：每次点「强制更新」刷新，前端据此判断是否需重新弹（关闭后记录，避免重复弹）
   build_time TIMESTAMPTZ NOT NULL DEFAULT now(), -- 编译时间（构建脚本写入 version.json）
   published_at TIMESTAMPTZ NOT NULL DEFAULT now(), -- 发布时间（后台可编辑，用于排序/展示）
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -391,6 +393,10 @@ export async function initStore(): Promise<void> {
     if (schemaOk) {
       console.error("[store] PostgreSQL 已连接，表结构已就绪。");
       await migrateFromJson();
+      // 存量 versions 表补列（force_popup / force_token）；已存在则跳过，幂等，失败不阻塞
+      await ensureVersionsColumns().catch((e) =>
+        console.error("[store] 版本表补列失败（已忽略）：", (e as Error).message)
+      );
       // 编译后把当前版本基线写入 versions 表（供前端更新弹窗 + 后台编辑）；失败不阻塞启动
       await recordBuildVersion().catch((e) =>
         console.error("[store] 记录版本基线失败（已忽略）：", (e as Error).message)
@@ -518,6 +524,8 @@ export interface VersionRow {
   title: string;
   release_note: string;
   show_popup: boolean;
+  force_popup: boolean;
+  force_token: string;
   build_time: string;
   published_at: string;
   created_at: string;
@@ -562,10 +570,89 @@ export async function recordBuildVersion(): Promise<void> {
 export async function getLatestVersion(): Promise<VersionRow | null> {
   ensureDb();
   const rows = await query<VersionRow>(
-    `SELECT id, version, title, release_note, show_popup, build_time, published_at, created_at
+    `SELECT id, version, title, release_note, show_popup, force_popup, force_token, build_time, published_at, created_at
      FROM versions ORDER BY id DESC LIMIT 1`,
   );
   return rows[0] ?? null;
+}
+
+// 存量表补列：versions 表在已有数据的情况下新增 force_popup / force_token 两列时，
+// CREATE TABLE IF NOT EXISTS 不会自动加列，这里幂等 ALTER 补列（DB 不可用时忽略）。
+export async function ensureVersionsColumns(): Promise<void> {
+  ensureDb();
+  for (const col of [
+    `ALTER TABLE versions ADD COLUMN IF NOT EXISTS force_popup BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE versions ADD COLUMN IF NOT EXISTS force_token TEXT NOT NULL DEFAULT ''`,
+  ]) {
+    await query(col);
+  }
+}
+
+// 后台：返回全部版本（按 id 倒序，最新在前），供「版本列表」展示
+export async function getAllVersions(): Promise<VersionRow[]> {
+  ensureDb();
+  const rows = await query<VersionRow>(
+    `SELECT id, version, title, release_note, show_popup, force_popup, force_token, build_time, published_at, created_at
+     FROM versions ORDER BY id DESC`,
+  );
+  return rows;
+}
+
+// 前端公开接口：返回「当前应推送的版本」——
+//   优先返回被强制推送的那条（force_popup=true，至多一条），否则返回最新一条。
+export async function getPublicVersion(): Promise<VersionRow | null> {
+  ensureDb();
+  let rows = await query<VersionRow>(
+    `SELECT id, version, title, release_note, show_popup, force_popup, force_token, build_time, published_at, created_at
+     FROM versions WHERE force_popup = true ORDER BY id DESC LIMIT 1`,
+  );
+  if (rows[0]) return rows[0];
+  rows = await query<VersionRow>(
+    `SELECT id, version, title, release_note, show_popup, force_popup, force_token, build_time, published_at, created_at
+     FROM versions ORDER BY id DESC LIMIT 1`,
+  );
+  return rows[0] ?? null;
+}
+
+// 强制推送某个版本：把该版本标记为 force_popup=true 并刷新 force_token，其余版本全部取消强制。
+// 这样「一次只强制一个版本」，前端据此对所有客户端（无论是否看过）重新弹窗。
+export async function forceVersion(version: string): Promise<boolean> {
+  ensureDb();
+  const token = (Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+  await query(`UPDATE versions SET force_popup = false WHERE force_popup = true`);
+  const rows = await query<{ id: number }>(
+    `UPDATE versions SET force_popup = true, force_token = $2 WHERE version = $1 RETURNING id`,
+    [version, token],
+  );
+  return rows.length > 0;
+}
+
+// 取消全部强制推送（前端恢复为「仅按版本号判断」的普通弹窗逻辑）
+export async function unforceAllVersions(): Promise<void> {
+  ensureDb();
+  await query(`UPDATE versions SET force_popup = false WHERE force_popup = true`);
+}
+
+// 后台：按 version 更新某条版本记录（列表里点「编辑」可定位到任意版本，而不仅是最新一条）
+export async function updateVersionByVersion(
+  version: string,
+  patch: { title?: string; release_note?: string; show_popup?: boolean; published_at?: string },
+): Promise<boolean> {
+  ensureDb();
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  let i = 1;
+  if (typeof patch.title === "string") { sets.push(`title = $${i++}`); params.push(patch.title); }
+  if (typeof patch.release_note === "string") { sets.push(`release_note = $${i++}`); params.push(patch.release_note); }
+  if (typeof patch.show_popup === "boolean") { sets.push(`show_popup = $${i++}`); params.push(patch.show_popup); }
+  if (typeof patch.published_at === "string") { sets.push(`published_at = $${i++}`); params.push(patch.published_at); }
+  if (!sets.length) return false;
+  params.push(version);
+  const rows = await query<{ id: number }>(
+    `UPDATE versions SET ${sets.join(", ")} WHERE version = $${i} RETURNING id`,
+    params,
+  );
+  return rows.length > 0;
 }
 
 // 后台编辑：更新标题 / 发布说明 / 是否弹窗 / 发布时间（不更新 version 本身）

@@ -6,6 +6,9 @@
   const TOKEN_KEY = "web-app-launcher:token";
   // 本地已展示过更新弹窗的版本号：决定「版本更新弹窗」是否再次弹出（避免重复打扰）
   const RELEASE_KEY = "web-app-launcher:release-version";
+  // 本地已处理过的「强制推送令牌」：后端每次点「强制更新」会刷新 force_token，
+  // 令牌变化即对所有客户端（含已看过该版本的）重新弹窗，关闭后记录令牌避免重复弹。
+  const RELEASE_FORCE_KEY = "web-app-launcher:release-force-token";
   // 与 localStorage 中的 token 保持同步的 Cookie 名：用于应用广场首屏（SSR）判断登录用户，
   // 使服务端直接渲染「是否已保存」状态。HttpOnly 由服务端在需要时设置；此处为前端写入，
   // 故仅作同源携带用途（SameSite=Lax；https 环境下追加 Secure）。
@@ -1648,6 +1651,7 @@
       "release.notes": "更新内容",
       "release.gotit": "我知道了",
       "release.newversion": "新版本 v",
+      "release.forced": "已强制更新至",
       "install.text": "安装到桌面，随时一键打开",
       "install.now": "安装",
       "install.later": "稍后",
@@ -1972,6 +1976,7 @@
       "release.notes": "What's new",
       "release.gotit": "Got it",
       "release.newversion": "Version v",
+      "release.forced": "Forced update to",
       "install.text": "Install to desktop for one-tap access",
       "install.now": "Install",
       "install.later": "Later",
@@ -7220,7 +7225,14 @@
     try {
       const v = await api("/api/version");
       if (!v || !v.version) return;
-      // 后端关闭弹窗开关：记录当前版本避免未来误弹，直接返回
+      // 后端强制推送：force_token 变化即视为需要重新弹（覆盖本地已展示记忆），关闭后记录令牌
+      if (v.force_popup) {
+        let forced = null;
+        try { forced = localStorage.getItem(RELEASE_FORCE_KEY); } catch (e) {}
+        if (forced !== v.force_token) showReleaseNotes(v, true);
+        return;
+      }
+      // 普通弹窗：后端关闭开关则记录当前版本避免未来误弹，直接返回
       if (!v.show_popup) {
         try { localStorage.setItem(RELEASE_KEY, v.version); } catch (e) {}
         return;
@@ -7228,29 +7240,32 @@
       let shown = null;
       try { shown = localStorage.getItem(RELEASE_KEY); } catch (e) {}
       if (shown === v.version) return; // 当前版本已展示过
-      showReleaseNotes(v);
+      showReleaseNotes(v, false);
     } catch (e) { /* 接口异常不影响主流程 */ }
   }
-  function showReleaseNotes(data) {
+  function showReleaseNotes(data, isForce) {
     const m = document.getElementById("releaseModal");
     if (!m) return;
     const titleEl = document.getElementById("releaseTitle");
     const subEl = document.getElementById("releaseSub");
     const bodyEl = document.getElementById("releaseBody");
     if (titleEl) titleEl.textContent = data.title || (t("release.title") + (data.version ? " v" + data.version : ""));
-    if (subEl) subEl.textContent = t("release.newversion") + (data.version || "");
+    if (subEl) subEl.textContent = (isForce ? t("release.forced") + " " : t("release.newversion")) + (data.version || "");
     if (bodyEl) bodyEl.textContent = data.release_note || "";
-    const close = () => closeReleaseNotes(data.version);
+    const close = () => closeReleaseNotes(data.version, isForce, data.force_token);
     const c1 = document.getElementById("releaseClose");
     const c2 = document.getElementById("releaseGotit");
     if (c1) c1.onclick = close;
     if (c2) c2.onclick = close;
     m.hidden = false;
   }
-  function closeReleaseNotes(version) {
+  function closeReleaseNotes(version, isForce, forceToken) {
     const m = document.getElementById("releaseModal");
     if (m) m.hidden = true;
-    try { localStorage.setItem(RELEASE_KEY, version || ""); } catch (e) {}
+    try {
+      if (isForce) localStorage.setItem(RELEASE_FORCE_KEY, forceToken || "");
+      else localStorage.setItem(RELEASE_KEY, version || "");
+    } catch (e) {}
   }
 
   // ---------- Init ----------

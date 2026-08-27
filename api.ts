@@ -11,7 +11,8 @@ import {
   listAllUsers, updateUserRole, countUsers, countLinks, recentRegistrations,
   createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, updateApp, countPendingApps, toggleAppLike,
   findUserByEmail, setUserEmail, updatePassword, saveEmailOtp, verifyEmailOtp,
-  getLatestVersion, updateVersion,
+  getLatestVersion, getAllVersions, getPublicVersion, forceVersion, unforceAllVersions,
+  updateVersion, updateVersionByVersion, type VersionRow,
   DbUnavailableError,
 } from "./store.ts";
 
@@ -301,16 +302,19 @@ export async function handleApi(req: Request): Promise<Response> {
       return json({ ok: true });
     }
 
-    // ---- 最新版本信息（公开）：前端据此决定是否展示更新弹窗 ----
+    // ---- 当前应推送的版本信息（公开）：前端据此决定是否展示更新弹窗 ----
+    // 优先返回被「强制推送」的版本（force_popup=true），否则返回最新一条。
     if (path === "/api/version" && method === "GET") {
       try {
-        const v = await getLatestVersion();
+        const v = await getPublicVersion();
         if (!v) return json({ version: null });
         return json({
           version: v.version,
           title: v.title || "",
           release_note: v.release_note || "",
           show_popup: !!v.show_popup,
+          force_popup: !!v.force_popup,
+          force_token: v.force_token || "",
           published_at: v.published_at,
         });
       } catch (e) {
@@ -333,20 +337,68 @@ export async function handleApi(req: Request): Promise<Response> {
     }
 
     // ---- 管理后台：更新版本信息（标题 / 发布说明 / 是否弹窗 / 发布时间）----
+    // 支持按 body.version 更新指定版本（列表里点「编辑」），缺省则更新最新一条。
     if (path === "/api/admin/version" && method === "PUT") {
       const admin = await requireAdmin(req);
       if (!admin) return json({ error: "无权访问" }, 403);
       try {
-        const cur = await getLatestVersion();
-        if (!cur) return json({ error: "尚无版本记录" }, 404);
         const b = await req.json();
         const patch: { title?: string; release_note?: string; show_popup?: boolean; published_at?: string } = {};
         if (typeof b.title === "string") patch.title = b.title.slice(0, 200);
         if (typeof b.release_note === "string") patch.release_note = b.release_note.slice(0, 5000);
         if (typeof b.show_popup === "boolean") patch.show_popup = b.show_popup;
         if (typeof b.published_at === "string") patch.published_at = b.published_at;
-        const ok = await updateVersion(cur.id, patch);
-        return json({ ok, version: { ...cur, ...patch } });
+        let ok = false;
+        let target: VersionRow | null = null;
+        if (typeof b.version === "string" && b.version) {
+          target = (await getAllVersions()).find((x) => x.version === b.version) ?? null;
+          if (target) ok = await updateVersionByVersion(b.version, patch);
+        } else {
+          target = await getLatestVersion();
+          if (target) ok = await updateVersion(target.id, patch);
+        }
+        if (!target) return json({ error: "尚无版本记录" }, 404);
+        return json({ ok, version: { ...target, ...patch } });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 500);
+      }
+    }
+
+    // ---- 管理后台：版本列表（全部版本，最新在前）----
+    if (path === "/api/admin/versions" && method === "GET") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      try {
+        const list = await getAllVersions();
+        return json({ versions: list });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 500);
+      }
+    }
+
+    // ---- 管理后台：强制推送某个版本（所有客户端无论是否看过都会重新弹窗）----
+    if (path === "/api/admin/version/force" && method === "POST") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      try {
+        const b = await req.json().catch(() => ({}));
+        const version = String(b.version || "").trim();
+        if (!version) return json({ error: "缺少版本号" }, 400);
+        const ok = await forceVersion(version);
+        if (!ok) return json({ error: "未找到该版本：" + version }, 404);
+        return json({ ok: true });
+      } catch (e) {
+        return json({ error: (e as Error).message }, 500);
+      }
+    }
+
+    // ---- 管理后台：取消全部强制推送（恢复普通「按版本号」弹窗逻辑）----
+    if (path === "/api/admin/version/unforce" && method === "POST") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      try {
+        await unforceAllVersions();
+        return json({ ok: true });
       } catch (e) {
         return json({ error: (e as Error).message }, 500);
       }
