@@ -209,7 +209,6 @@
           "</div>" +
           (status ? '<div style="margin-left:auto">' + status + "</div>" : "") +
         "</div>" +
-        (app.banner ? '<div class="mk-banner"><img src="' + escapeHtml(app.banner) + '" alt="banner" loading="lazy" /></div>' : "") +
         '<div class="mk-desc">' + escapeHtml(app.description || "") + "</div>" +
         '<div class="mk-badges">' + badgeHtml(app) + "</div>" +
         reason +
@@ -258,6 +257,7 @@
   let view = "plaza";
   let appIndex = {}; // id -> app 元数据，供「保存到我的应用」读取 name/url/category
   let myLinkUrls = new Set(); // 已保存到「我的应用」的归一化 URL 集合，用于卡片去重标记
+  let bannerApps = []; // 头部门面应用列表（供点击分流使用）
   let editingId = null; // 正在修改的应用 id（null = 新建模式）
 
   // 给当前渲染出的卡片绑定「保存到我的应用」按钮
@@ -664,6 +664,97 @@
     // 首屏优先用服务端渲染的数据水合；否则客户端拉取（含筛选/切换 tab 时也会走 loadPlaza）
     if (!hydrateFromSSR()) {
       await loadPlaza();
+    }
+    // 头部门面 Banner（非致命，失败也不影响广场浏览）
+    loadBanner();
+  }
+
+  // ---------------- 应用市场头部 Banner 广告位 ----------------
+  async function loadBanner() {
+    const slot = document.getElementById("mkBanner");
+    if (!slot) return;
+    let apps = [];
+    try {
+      const res = await api("/api/marketplace/banner");
+      apps = res.apps || [];
+    } catch (_) { apps = []; }
+    if (!apps.length) { slot.hidden = true; slot.innerHTML = ""; bannerApps = []; return; }
+    bannerApps = apps;
+    // 并入 appIndex，确保「添加应用」可复用 saveApp 取到图标
+    apps.forEach((a) => { appIndex[a.id] = a; });
+    slot.hidden = false;
+    slot.innerHTML = apps.map((a, i) => bannerItemHtml(a, i)).join("");
+    slot.querySelectorAll(".mk-banner-item").forEach((el) => {
+      el.addEventListener("click", (e) => onBannerClick(e, Number(el.getAttribute("data-i"))));
+    });
+  }
+
+  function bannerItemHtml(a, i) {
+    const icon = (a.icon && isIconUrl(a.icon)) ? a.icon : faviconFor(a.url);
+    const plain = a.banner ? "" : " mk-bi-plain";
+    const img = a.banner
+      ? '<img class="mk-bi-img" src="' + escapeHtml(a.banner) + '" alt="" loading="lazy" />' +
+        '<div class="mk-bi-mask"></div>'
+      : "";
+    const iconInner = icon
+      ? '<img src="' + escapeHtml(icon) + '" alt="" />'
+      : escapeHtml((a.name || "·").slice(0, 1));
+    return (
+      '<button class="mk-banner-item' + plain + '" data-i="' + i + '" title="' + escapeHtml(a.name) + '">' +
+        img +
+        '<span class="mk-bi-tag">推荐</span>' +
+        '<div class="mk-bi-body">' +
+          '<div class="mk-bi-icon">' + iconInner + "</div>" +
+          '<div class="mk-bi-text">' +
+            '<div class="mk-bi-name">' + escapeHtml(a.name) + "</div>" +
+            '<div class="mk-bi-sub">' + escapeHtml(a.description || ("by " + (a.username || "未知"))) + "</div>" +
+          "</div>" +
+        "</div>" +
+      "</button>"
+    );
+  }
+
+  function onBannerClick(e, i) {
+    const a = bannerApps[i];
+    if (!a) return;
+    // 已添加过该应用：直接新页面打开
+    if (myLinkUrls.has(normUrl(a.url))) {
+      window.open(a.url, "_blank", "noopener");
+      return;
+    }
+    // 未添加：弹出菜单（添加应用 / 立即打开）
+    showBannerMenu(e, a);
+  }
+
+  function showBannerMenu(e, a) {
+    const menu = document.getElementById("mkBannerMenu");
+    if (!menu) return;
+    document.removeEventListener("click", hideBannerMenuOnce); // 避免重复叠加监听
+    menu.innerHTML =
+      '<button data-act="add">＋ 添加应用</button>' +
+      '<button data-act="open">↗ 立即打开</button>';
+    menu.hidden = false;
+    const x = Math.max(8, Math.min(e.clientX, window.innerWidth - 200));
+    const y = Math.max(8, Math.min(e.clientY + 8, window.innerHeight - 110));
+    menu.style.left = x + "px";
+    menu.style.top = y + "px";
+    const addBtn = menu.querySelector('[data-act="add"]');
+    const openBtn = menu.querySelector('[data-act="open"]');
+    addBtn.onclick = (ev) => { ev.stopPropagation(); hideBannerMenu(); saveApp(a.id); };
+    openBtn.onclick = (ev) => { ev.stopPropagation(); hideBannerMenu(); window.open(a.url, "_blank", "noopener"); };
+    setTimeout(() => document.addEventListener("click", hideBannerMenuOnce), 0);
+  }
+
+  function hideBannerMenu() {
+    const menu = document.getElementById("mkBannerMenu");
+    if (menu) menu.hidden = true;
+  }
+
+  function hideBannerMenuOnce(e) {
+    const menu = document.getElementById("mkBannerMenu");
+    if (menu && !menu.contains(e.target)) {
+      menu.hidden = true;
+      document.removeEventListener("click", hideBannerMenuOnce);
     }
   }
 

@@ -10,6 +10,7 @@ import {
   renameGroup, getGroupMemberIds,
   listAllUsers, updateUserRole, countUsers, countLinks, recentRegistrations, updateUserVersion,
   createApp, listApprovedApps, listMyApps, listAllApps, approveApp, rejectApp, deleteApp, updateApp, updateAppBanner, countPendingApps, toggleAppLike,
+  listBannerApps, listBannerAppIds, addBannerApp, removeBannerApp,
   findUserByEmail, setUserEmail, updatePassword, saveEmailOtp, verifyEmailOtp,
   getLatestVersion, getAllVersions, getPublicVersion, forceVersion, unforceAllVersions,
   updateVersion, type VersionRow,
@@ -610,6 +611,12 @@ export async function handleApi(req: Request): Promise<Response> {
       }
     }
 
+    // ---- 应用市场头部 Banner 广告位：公开列表（无需登录）----
+    if (path === "/api/marketplace/banner" && method === "GET") {
+      const apps = await listBannerApps();
+      return json({ apps });
+    }
+
     // ---- 管理后台：应用审核列表（仅管理员）----
     if (path === "/api/admin/apps" && method === "GET") {
       const admin = await requireAdmin(req);
@@ -652,6 +659,35 @@ export async function handleApi(req: Request): Promise<Response> {
       } catch (e) {
         return json({ error: (e as Error).message || "Banner 上传失败" }, 500);
       }
+    }
+
+    // ---- 应用市场头部 Banner 广告位（仅管理员）----
+    // 列出当前已设为头部门面的应用 id 集合（用于后台标记）
+    if (path === "/api/admin/banner" && method === "GET") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const ids = await listBannerAppIds();
+      return json({ app_ids: ids });
+    }
+    // 把某应用加入头部门面
+    if (path === "/api/admin/banner" && method === "POST") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const b = await req.json().catch(() => ({}));
+      const appId = Number(b.app_id);
+      if (!Number.isInteger(appId) || appId <= 0) return json({ error: "缺少有效的 app_id" }, 400);
+      const ok = await addBannerApp(appId);
+      if (!ok) return json({ error: "应用不存在或操作失败" }, 404);
+      return json({ ok: true, app_id: appId });
+    }
+    // 把某应用移出头部门面
+    const bannerDel = path.match(/^\/api\/admin\/banner\/(\d+)$/);
+    if (bannerDel && method === "DELETE") {
+      const admin = await requireAdmin(req);
+      if (!admin) return json({ error: "无权访问" }, 403);
+      const appId = Number(bannerDel[1]);
+      await removeBannerApp(appId);
+      return json({ ok: true, app_id: appId });
     }
 
     // ---- 登录设备管理：列出当前账号所有会话（多端登录）----

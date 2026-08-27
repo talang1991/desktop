@@ -206,6 +206,19 @@ async function ensureAppsTable(): Promise<void> {
         if (!have.has("banner")) {
           await c.queryObject(`ALTER TABLE apps ADD COLUMN banner TEXT NOT NULL DEFAULT ''`);
         }
+        // 应用市场头部 Banner 广告位：后台可把若干已上架应用设为头部门面
+        await c.queryObject(
+          `CREATE TABLE IF NOT EXISTS marketplace_banner (
+            id SERIAL PRIMARY KEY,
+            app_id INTEGER NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            enabled BOOLEAN NOT NULL DEFAULT true,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          )`,
+        );
+        await c.queryObject(
+          `CREATE UNIQUE INDEX IF NOT EXISTS marketplace_banner_app_uniq ON marketplace_banner(app_id)`,
+        );
       });
     })().catch((e) => {
       appsTableEnsured = null; // 失败则清空，下次访问重试
@@ -1140,6 +1153,70 @@ export async function updateAppBanner(id: number, banner: string): Promise<boole
   const rows = await query<{ id: number }>(
     `UPDATE apps SET banner = $2 WHERE id = $1 RETURNING id`,
     [id, String(banner || "").slice(0, 2048)],
+  );
+  return rows.length > 0;
+}
+
+// ---------------- 应用市场头部 Banner 广告位 ----------------
+// 后台把若干已上架应用设为头部门面；市场顶部横向展示，点击可按「已添加 / 未添加」分流。
+
+export interface BannerApp {
+  id: number; // 应用 id
+  name: string;
+  url: string;
+  icon: string;
+  description: string;
+  banner: string; // 应用 banner 图（作为广告位创意；可能为空）
+  username: string;
+  sort_order: number;
+}
+
+// 公开：列出当前头部门面应用（按 sort_order 排序）
+export async function listBannerApps(): Promise<BannerApp[]> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<BannerApp>(
+    `SELECT a.id, a.name, a.url, a.icon, a.description, a.banner, u.username, b.sort_order
+     FROM marketplace_banner b
+     JOIN apps a ON a.id = b.app_id
+     JOIN users u ON u.id = a.user_id
+     WHERE b.enabled = true AND a.status = 'approved'
+     ORDER BY b.sort_order ASC, b.id ASC`,
+  );
+  return rows;
+}
+
+// 管理后台：列出当前 banner 应用 id 集合（用于在前端标记「已设为 Banner」）
+export async function listBannerAppIds(): Promise<number[]> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ app_id: number }>(
+    `SELECT app_id FROM marketplace_banner WHERE enabled = true`,
+  );
+  return rows.map((r) => r.app_id);
+}
+
+// 管理后台：把某应用加入头部门面（幂等，重复添加不报错）
+export async function addBannerApp(appId: number): Promise<boolean> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ app_id: number }>(
+    `INSERT INTO marketplace_banner (app_id, enabled)
+     VALUES ($1, true)
+     ON CONFLICT (app_id) DO UPDATE SET enabled = true
+     RETURNING app_id`,
+    [appId],
+  );
+  return rows.length > 0;
+}
+
+// 管理后台：把某应用移出头部门面
+export async function removeBannerApp(appId: number): Promise<boolean> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ app_id: number }>(
+    `DELETE FROM marketplace_banner WHERE app_id = $1 RETURNING app_id`,
+    [appId],
   );
   return rows.length > 0;
 }

@@ -23,7 +23,7 @@ initStore().catch((e) => console.error("[store] 初始化失败（后台会随�
 // 初始化聊天历史服务端存储（Deno KV，保留 3 个月）。不可用时降级，本地缓存仍工作。
 initChatStore().catch((e) => console.error("[chatstore] 初始化失败：", (e as Error).message));
 
-const ROOT = ".";
+const ROOT = "./dist";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
