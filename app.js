@@ -1654,6 +1654,8 @@
       "release.gotit": "我知道了",
       "release.newversion": "新版本 v",
       "release.forced": "已强制更新至",
+      "release.refresh": "立即刷新",
+      "release.later": "稍后再说",
       "install.text": "安装到桌面，随时一键打开",
       "install.now": "安装",
       "install.later": "稍后",
@@ -1979,6 +1981,8 @@
       "release.gotit": "Got it",
       "release.newversion": "Version v",
       "release.forced": "Forced update to",
+      "release.refresh": "Refresh now",
+      "release.later": "Later",
       "install.text": "Install to desktop for one-tap access",
       "install.now": "Install",
       "install.later": "Later",
@@ -7222,14 +7226,34 @@
     });
   }
 
+  // 读取当前真正在运行的构建标识（部署指纹）：
+  // 优先用构建时随 HTML 注入的 window.__APP_BUILD__（与运行代码一起下发，绝不会被 HTML/version.json 缓存误导）；
+  // 兜底解析当前页面 <script src="app.js?v=..."> 的 ?v= 哈希（同样等于用户实际运行的构建）。
+  function getRunningBuild() {
+    try {
+      const s = document.querySelector('script[src*="app.js"]');
+      if (s) {
+        const src = s.getAttribute("src") || s.src || "";
+        const m = /[?&]v=([^&"'\s]+)/.exec(src);
+        if (m) return m[1];
+      }
+    } catch (e) {}
+    return null;
+  }
+
   // ---------- 上报当前客户端版本号（供管理后台“用户列表”展示）----------
   async function reportUserVersion() {
     try {
-      // 读取构建脚本写入的版本基线（dist/version.json）：语义化版本号，与 versions 表一致
-      const vi = await fetch("version.json", { cache: "no-store" }).then((r) => r.json()).catch(() => null);
-      const ver = vi && typeof vi.version === "string" && vi.version ? vi.version : null;
-      if (!ver) return;
-      await api("/api/me/version", { method: "POST", body: JSON.stringify({ version: ver }) }).catch(() => {});
+      // 取“当前正在运行的构建”标识：构建时注入的 window.__APP_BUILD__。
+      // 只上报语义版本号（version）；未携带版本号时留空，由后端按 build_time 反查 deployment 记录的版本号，
+      // 这样不会把构建哈希误当成版本号、也不会因 HTML 缓存 /version.json 被新部署覆盖而误报。
+      const b = (typeof window !== "undefined" && window.__APP_BUILD__) || null;
+      const ver = (b && b.version) ? b.version : "";          // 仅语义版本号；无则空
+      const buildTime = (b && b.buildTime) ? b.buildTime : null;
+      if (!ver && !buildTime) return;                          // 既无版本号也无打包时间则不上报
+      // 同时上报打包时间：后端据此按 versions.build_time 匹配出“该构建对应的版本号”
+      // （即便本次构建未携带版本号，后台给这条 build_time 补填版本号后即匹配到）。
+      await api("/api/me/version", { method: "POST", body: JSON.stringify({ version: ver, buildTime }) }).catch(() => {});
     } catch (e) { /* 上报失败不影响主流程 */ }
   }
 
@@ -7267,9 +7291,11 @@
     if (bodyEl) bodyEl.textContent = data.release_note || "";
     const close = () => closeReleaseNotes(data.version, isForce, data.force_token);
     const c1 = document.getElementById("releaseClose");
-    const c2 = document.getElementById("releaseGotit");
+    const c2 = document.getElementById("releaseLater");
+    const c3 = document.getElementById("releaseRefresh");
     if (c1) c1.onclick = close;
     if (c2) c2.onclick = close;
+    if (c3) c3.onclick = () => { closeReleaseNotes(data.version, isForce, data.force_token); applyUpdate(); };
     m.hidden = false;
   }
   function closeReleaseNotes(version, isForce, forceToken) {
@@ -7281,8 +7307,39 @@
     } catch (e) {}
   }
 
+  // 立即应用更新：让等待中的新 SW 立刻生效（SKIP_WAITING）+ 清掉当前页 HTML 壳缓存（CLEAR_HTML）
+  // + 带时间戳查询串重载。带查询的导航在 SW 里是缓存未命中，会直连网络拿到最新 HTML（含新 ?v=），
+  // 从而真正切到新版本，而不是停留在 SW 缓存的旧 HTML。
+  async function applyUpdate() {
+    try {
+      if ("serviceWorker" in navigator) {
+        const reg = await navigator.serviceWorker.ready;
+        if (reg.waiting) { try { reg.waiting.postMessage({ type: "SKIP_WAITING" }); } catch (e) {} }
+        const sw = reg.active || reg.waiting || reg.installing;
+        if (sw) { try { sw.postMessage({ type: "CLEAR_HTML", url: location.pathname }); } catch (e) {} }
+      }
+    } catch (e) {}
+    setTimeout(() => {
+      try {
+        const u = new URL(location.href);
+        u.searchParams.set("__refresh", String(Date.now()));
+        location.href = u.pathname + u.search + u.hash;
+      } catch (e) {
+        try { location.reload(true); } catch (_) {}
+      }
+    }, 150);
+  }
+
   // ---------- Init ----------
   function init() {
+    // 清理“立即刷新”带的时间戳查询串，恢复干净地址（此时新版本已加载完成）
+    try {
+      const _u = new URL(location.href);
+      if (_u.searchParams.has("__refresh")) {
+        _u.searchParams.delete("__refresh");
+        history.replaceState({}, "", _u.pathname + _u.search + _u.hash);
+      }
+    } catch (e) {}
     applyTheme(
       localStorage.getItem(THEME_KEY) ||
       (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")

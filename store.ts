@@ -300,6 +300,10 @@ export async function initStore(): Promise<void> {
           await c.queryObject(
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS current_version TEXT NOT NULL DEFAULT ''`,
           );
+          // 当前构建的打包时间（与 versions.build_time 对应）：用于“未携带版本号的构建”按打包时间匹配出版本号
+          await c.queryObject(
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS current_build_time TIMESTAMPTZ`,
+          );
           await c.queryObject(
             `CREATE TABLE IF NOT EXISTS links (
               id SERIAL PRIMARY KEY,
@@ -763,8 +767,15 @@ export async function getUserByToken(token: string): Promise<{ id: number; usern
   // 避免池化代理（Prisma 等）在 flaky 时「读走健康连接、写走坏连接」导致活跃时间静默丢失。
   return withClient(async (c: any) => {
     const res = await c.queryObject<{ id: number; username: string; avatar: string; role: string; email: string; current_version: string; expires_at: string }>(
-      `SELECT u.id, u.username, u.avatar, u.role, u.email, u.current_version, s.expires_at FROM sessions s
-       JOIN users u ON u.id = s.user_id WHERE s.token = $1`,
+      // 左联 versions 表，按“打包时间”匹配出该用户运行构建对应的版本号：
+      // 若该构建后台已补填版本号则优先显示语义版本，否则回退到上报的构建指纹（哈希）。
+      `SELECT u.id, u.username, u.avatar, u.role, u.email,
+              COALESCE(NULLIF(v.version, ''), u.current_version) AS current_version,
+              s.expires_at
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+       LEFT JOIN versions v ON v.build_time = u.current_build_time
+       WHERE s.token = $1`,
       [token],
     );
     const r = res.rows[0];
@@ -852,23 +863,54 @@ export async function listAllUsers(): Promise<
   const rows = await query<{
     id: number; username: string; avatar: string; role: string; created_at: string; link_count: number; last_active: string | null; current_version: string;
   }>(
-    `SELECT u.id, u.username, u.avatar, u.role, u.created_at, u.current_version,
+    // 左联 versions 表，按“打包时间”匹配出每个用户运行构建对应的版本号
+    // （未携带版本号的构建：后台给对应 build_time 补填版本号后即生效，回退则为上报的构建指纹）。
+    `SELECT u.id, u.username, u.avatar, u.role, u.created_at,
+            COALESCE(NULLIF(v.version, ''), u.current_version) AS current_version,
             (SELECT COUNT(*) FROM links l WHERE l.user_id = u.id)::int AS link_count,
             (SELECT MAX(s.last_active) FROM sessions s WHERE s.user_id = u.id) AS last_active
-     FROM users u ORDER BY u.created_at DESC`,
+     FROM users u
+     LEFT JOIN versions v ON v.build_time = u.current_build_time
+     ORDER BY u.created_at DESC`,
     [],
   );
   return rows;
 }
 
-// 前端登录后上报“当前客户端版本号”，便于管理后台查看各用户实际使用的版本
-export async function updateUserVersion(userId: number, version: string): Promise<boolean> {
+// 按“打包时间”在 versions 表匹配出该构建对应的语义版本号。
+// 用于前端本地未携带版本号时，后端据 build_time 反查 deployment 记录的版本号；
+// 找不到该构建、或该构建尚未被后台补填版本号时返回空串。
+export async function getVersionByBuildTime(buildTime: string): Promise<string> {
+  ensureDb();
+  if (!buildTime) return "";
+  try {
+    const rows = await query<{ version: string }>(
+      `SELECT version FROM versions WHERE build_time = $1::timestamptz ORDER BY id DESC LIMIT 1`,
+      [buildTime],
+    );
+    const r = rows[0];
+    return r && r.version ? r.version : "";
+  } catch (e) {
+    return "";
+  }
+}
+
+// 前端登录后上报“当前客户端版本号”+ 打包时间，便于管理后台查看各用户实际使用的版本。
+// buildTime 用于按 versions.build_time 匹配出该构建对应的版本号（即便本次构建未携带版本号）。
+export async function updateUserVersion(userId: number, version: string, buildTime?: string | null): Promise<boolean> {
   ensureDb();
   if (!Number.isFinite(userId) || userId < 0) return false;
-  const v = String(version || "").slice(0, 64);
+  let v = String(version || "").slice(0, 64);
+  const bt = buildTime ? String(buildTime) : null;
+  // 本地未携带语义版本号：按打包时间在 versions 表匹配该构建对应的版本号，
+  // 匹配到（后台已补填）则写入语义版本，否则留空（管理后台补填后通过读时 JOIN 立即可见）。
+  if (!v && bt) {
+    const matched = await getVersionByBuildTime(bt);
+    if (matched) v = matched.slice(0, 64);
+  }
   const rows = await query<{ id: number }>(
-    `UPDATE users SET current_version = $2 WHERE id = $1 RETURNING id`,
-    [userId, v],
+    `UPDATE users SET current_version = $2, current_build_time = $3 WHERE id = $1 RETURNING id`,
+    [userId, v, bt],
   );
   return rows.length > 0;
 }

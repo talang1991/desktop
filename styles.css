@@ -2916,6 +2916,7 @@ input, select, textarea, .friend-row, .conv-row, .member-picker, .group-list, .f
 .release-close:hover { background: var(--surface-2); color: var(--text); }
 .release-sub { font-size: 13px; color: var(--text-2); margin: 6px 0 12px; }
 .release-body { font-size: 14px; line-height: 1.7; color: var(--text); white-space: pre-wrap; word-break: break-word; max-height: 50vh; overflow: auto; }
-.release-foot { margin-top: 16px; }
+.release-foot { margin-top: 16px; display: flex; gap: 10px; }
+.release-foot .btn { flex: 1 1 auto; justify-content: center; }
 
 

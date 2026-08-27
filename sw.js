@@ -175,6 +175,20 @@ self.addEventListener("fetch", (event) => {
 // 页面在监听就绪后主动问一次，SW 把缓存元数据里的最新版本回传。
 self.addEventListener("message", (event) => {
   const data = (event && event.data) || {};
+  // 页面“立即刷新”：让等待中的新 SW 立刻生效
+  if (data.type === "SKIP_WAITING") {
+    self.skipWaiting();
+    return;
+  }
+  // 页面“立即刷新”：清掉当前页 HTML 壳缓存（含 "/"），保证下一次导航直连网络拿最新 HTML
+  if (data.type === "CLEAR_HTML") {
+    caches.open(CACHE).then((cache) => {
+      const url = data.url || "/";
+      cache.delete(url, { ignoreSearch: false }).catch(() => {});
+      cache.delete("/", { ignoreSearch: false }).catch(() => {});
+    }).catch(() => {});
+    return;
+  }
   if (data.type === "QUERY_HTML_VERSION") {
     // 直接问服务端拿“发起查询的页面自身”的最新 HTML 版本（network-first，绕过本端缓存），
     // 彻底消除“本端优先返回旧缓存、后台 revalidation 尚未完成”导致的竞态；广场 / 后台页面各自查各自。

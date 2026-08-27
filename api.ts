@@ -164,8 +164,11 @@ export async function handleApi(req: Request): Promise<Response> {
       try {
         const b = await req.json().catch(() => ({}));
         const version = String(b.version || "").trim();
-        if (!version) return json({ error: "版本号不能为空" }, 400);
-        await updateUserVersion(user.id, version);
+        // 打包时间：用于按 versions.build_time 匹配出该构建对应的版本号（即使未携带版本号）
+        const buildTime = b.buildTime ? String(b.buildTime) : null;
+        // 本地可能未携带语义版本号：此时必须带打包时间，后台据其反查 deployment 记录
+        if (!version && !buildTime) return json({ error: "版本号与构建时间不能同时为空" }, 400);
+        await updateUserVersion(user.id, version, buildTime);
         return json({ ok: true });
       } catch (e) {
         return json({ error: (e as Error).message }, 500);

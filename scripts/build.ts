@@ -155,9 +155,19 @@ function bumpVersion(html: string, map: Record<string, string>): string {
 async function passthroughHtml(
   f: string,
   versionMap: Record<string, string>,
+  buildJson: string,
 ): Promise<void> {
   const raw = await Deno.readTextFile(`${ROOT}/${f}`);
-  const out = bumpVersion(raw, versionMap);
+  let out = bumpVersion(raw, versionMap);
+  // 注入构建标识脚本（置于 </head> 之前）：window.__APP_BUILD__ = { version, build }。
+  // 该标识随 HTML 一起下发、与“当前正在运行的代码”强绑定，前端据此读取真实运行版本，
+  // 绝不会像 /version.json 那样被后续部署覆盖而误报为别的构建的版本号。
+  if (buildJson && out.includes("</head>")) {
+    out = out.replace(
+      "</head>",
+      `<script>window.__APP_BUILD__=${buildJson};</script>\n</head>`,
+    );
+  }
   await Deno.writeFile(`${OUT}/${f}`, enc.encode(out));
 }
 
@@ -178,9 +188,15 @@ async function main() {
   // 生成版本基线文件 dist/version.json（version + buildTime），供 server 启动时写入数据库（versions 表）。
   // 版本号默认留空：每次构建都会插入一条「未设版本号」的记录，版本号与发布说明留到管理后台补填
   // （只有补填了版本号的构建才会向前端弹更新内容）。可选：deno task build 1.2.3 直接写入版本号。
+  let ver = "";
+  let buildTime = "";
   try {
-    const ver = (Deno.args[0] && typeof Deno.args[0] === "string") ? Deno.args[0] : "";
-    const versionJson = JSON.stringify({ version: ver, buildTime: new Date().toISOString() });
+    ver = (Deno.args[0] && typeof Deno.args[0] === "string") ? Deno.args[0] : "";
+    // 打包时间：写入 version.json 的同时也随 HTML 注入 window.__APP_BUILD__，
+    // 这样前端能把“当前运行构建”的打包时间与 versions 表的 build_time 对应，
+    // 从而按打包时间匹配出该构建对应的版本号（即使构建本身未携带版本号）。
+    buildTime = new Date().toISOString();
+    const versionJson = JSON.stringify({ version: ver, buildTime });
     await Deno.writeFile(`${OUT}/version.json`, enc.encode(versionJson));
     console.log(`📌 版本基线已写入 dist/version.json` + (ver ? `: v${ver}` : `（未设版本号，待后台补填）`));
   } catch (e) {
@@ -213,10 +229,13 @@ async function main() {
     versionMap["manifest.webmanifest"] = await sha256short(bytes);
   }
 
-  // 4) HTML:**不做结构压缩**,只原样复制 + 替换 ?v=
+  // 4) HTML:**不做结构压缩**,只原样复制 + 替换 ?v= + 注入构建标识
+  // 构建标识：语义版本号（CLI 参数，可能为空）+ app.js 内容哈希（部署指纹）+ 打包时间（与 versions.build_time 对应）。
+  const appBuildHash = versionMap["app.js"] || "";
+  const buildJson = JSON.stringify({ version: ver, build: appBuildHash, buildTime });
   for (const f of HTML_FILES) {
     const before = (await Deno.stat(`${ROOT}/${f}`)).size;
-    await passthroughHtml(f, versionMap);
+    await passthroughHtml(f, versionMap, buildJson);
     const after = (await Deno.stat(`${OUT}/${f}`)).size;
     report.push(`HTML ${f.padEnd(17)} ${kb(before)} -> ${kb(after)} (passthrough)`);
   }
