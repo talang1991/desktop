@@ -19,10 +19,10 @@ export interface CosConfig {
 
 // 读取并校验 COS 配置；缺失则抛错（由调用方转成 500/业务错误）
 export function getCosConfig(): CosConfig {
-  const secretId = Deno.env.get("COS_SECRET_ID");
-  const secretKey = Deno.env.get("COS_SECRET_KEY");
-  const bucket = Deno.env.get("COS_BUCKET");
-  const region = Deno.env.get("COS_REGION");
+  const secretId = (Deno.env.get("COS_SECRET_ID") || "").trim();
+  const secretKey = (Deno.env.get("COS_SECRET_KEY") || "").trim();
+  const bucket = (Deno.env.get("COS_BUCKET") || "").trim();
+  const region = (Deno.env.get("COS_REGION") || "").trim();
   if (!secretId || !secretKey || !bucket || !region) {
     throw new Error(
       "COS 未配置（缺少 COS_SECRET_ID / COS_SECRET_KEY / COS_BUCKET / COS_REGION 环境变量）",
@@ -82,7 +82,9 @@ export async function signCosPutUrl(
   const httpParameters = ""; // 无额外 query 参数
   const headerList = "content-type";
   const urlParamList = "";
-  const headerString = `content-type=${contentType}`;
+  // 关键：HttpHeaders 的 value 必须按 COS 规范做 UrlEncode（如 image/jpeg -> image%2Fjpeg），
+  // 否则客户端算出的 SHA1(HttpString) 与 COS 服务端不一致，报 SignatureDoesNotMatch。
+  const headerString = `content-type=${encodeURIComponent(contentType)}`;
 
   const httpString = `${httpMethod}\n${uriPathname}\n${httpParameters}\n${headerString}\n`;
   const signKey = await hmacSha1Hex(cfg.secretKey, keyTime);
@@ -117,7 +119,11 @@ export async function uploadToCos(
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`COS 上传失败（${res.status}）${text.slice(0, 300)}`);
+    const isSig = /SignatureDoesNotMatch/i.test(text) || /AccessDenied/i.test(text);
+    const hint = isSig
+      ? "（签名不匹配：请确认 COS_SECRET_ID / COS_SECRET_KEY 为同一对密钥、且无多余空格/换行）"
+      : "";
+    throw new Error(`COS 上传失败（${res.status}）${hint} ${text.slice(0, 300)}`);
   }
   const cfg = getCosConfig();
   const base = (
