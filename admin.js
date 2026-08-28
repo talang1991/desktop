@@ -96,7 +96,8 @@
   // ---------- 状态 ----------
   let currentUser = null;
   let appIndex = {}; // id -> 应用，供「详情」弹窗读取完整字段
-  let bannerAppIds = new Set(); // 已设为头部门面的应用 id 集合
+  let bannerAppIdsPc = new Set();   // 已设为 PC 头部门面的应用 id 集合
+  let bannerAppIdsMobile = new Set(); // 已设为移动端头部门面的应用 id 集合
 
   // ---------- 渲染 ----------
   function renderNotice(html) {
@@ -190,12 +191,13 @@
         api("/api/admin/users"),
         api("/api/admin/stats"),
         api("/api/admin/apps"),
-        api("/api/admin/banner").catch(() => ({ app_ids: [] })),
+        api("/api/admin/banner").catch(() => ({ pc: [], mobile: [] })),
       ]);
       renderStats(statsRes.stats || {});
       renderUsers(usersRes.users || []);
       renderApps(appsRes.apps || []);
-      bannerAppIds = new Set((bannerRes.app_ids || []).map(Number));
+      bannerAppIdsPc = new Set((bannerRes.pc || []).map(Number));
+      bannerAppIdsMobile = new Set((bannerRes.mobile || []).map(Number));
     } catch (e) {
       if (e && e.status === 403) {
         renderNotice('无权访问：当前账号不是管理员。<a href="index.html">返回应用</a>');
@@ -327,18 +329,22 @@
         '</div>' +
       '</div>';
     const actions = document.getElementById("appDetailActions");
-    const isBanner = bannerAppIds.has(a.id);
+    const isPc = bannerAppIdsPc.has(a.id);
+    const isMobile = bannerAppIdsMobile.has(a.id);
     let ah = "";
     if (a.status !== "approved") ah += '<button class="btn ghost small d-approve">通过</button> ';
     if (a.status !== "rejected") ah += '<button class="btn ghost small d-reject">拒绝</button>';
-    ah += '<button class="btn ghost small d-banner">' + (isBanner ? "取消 Banner" : "设为 Banner") + "</button>";
+    ah += '<button class="btn ghost small d-banner-pc' + (isPc ? " on" : "") + '">PC 头图</button>';
+    ah += '<button class="btn ghost small d-banner-mobile' + (isMobile ? " on" : "") + '">移动头图</button>';
     actions.innerHTML = ah || '<span class="admin-self">已结束审核</span>';
     const da = actions.querySelector(".d-approve");
     if (da) da.addEventListener("click", () => approveApp(a.id, da));
     const dr = actions.querySelector(".d-reject");
     if (dr) dr.addEventListener("click", () => rejectApp(a.id, dr));
-    const dbn = actions.querySelector(".d-banner");
-    if (dbn) dbn.addEventListener("click", () => toggleBanner(a.id, dbn));
+    const dbp = actions.querySelector(".d-banner-pc");
+    if (dbp) dbp.addEventListener("click", () => toggleBanner(a.id, "pc", dbp));
+    const dbm = actions.querySelector(".d-banner-mobile");
+    if (dbm) dbm.addEventListener("click", () => toggleBanner(a.id, "mobile", dbm));
     // banner 上传
     const ub = body.querySelector("#dUploadBanner");
     const uf = body.querySelector("#dBannerFile");
@@ -388,26 +394,28 @@
     }
   }
 
-  // 设为 / 取消头部门面 Banner（后台操作）
-  async function toggleBanner(id, btn) {
-    const isBanner = bannerAppIds.has(id);
-    const old = btn.textContent;
+  // 设为 / 取消指定平台头部门面 Banner（后台操作）。platform: "pc" | "mobile"
+  async function toggleBanner(id, platform, btn) {
+    const set = platform === "mobile" ? bannerAppIdsMobile : bannerAppIdsPc;
+    const isOn = set.has(id);
+    const oldOn = btn.classList.contains("on");
     btn.disabled = true;
     try {
-      if (isBanner) {
-        await api("/api/admin/banner/" + id, { method: "DELETE" });
-        bannerAppIds.delete(id);
-        btn.textContent = "设为 Banner";
-        toast("已移出头部门面");
+      if (isOn) {
+        await api("/api/admin/banner/" + id + "?platform=" + platform, { method: "DELETE" });
+        set.delete(id);
+        btn.classList.remove("on");
+        toast("已移出" + (platform === "mobile" ? "移动端" : "PC") + "头部门面");
       } else {
-        await api("/api/admin/banner", { method: "POST", body: JSON.stringify({ app_id: id }) });
-        bannerAppIds.add(id);
-        btn.textContent = "取消 Banner";
-        toast("已设为头部门面");
+        await api("/api/admin/banner", { method: "POST", body: JSON.stringify({ app_id: id, platform }) });
+        set.add(id);
+        btn.classList.add("on");
+        toast("已设为" + (platform === "mobile" ? "移动端" : "PC") + "头部门面");
       }
     } catch (err) {
+      // 失败回滚视觉状态
+      if (oldOn) btn.classList.add("on"); else btn.classList.remove("on");
       toast((err && err.message) || "操作失败", "err");
-      btn.textContent = old;
     } finally {
       btn.disabled = false;
     }

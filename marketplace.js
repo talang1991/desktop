@@ -258,7 +258,10 @@
   let view = "plaza";
   let appIndex = {}; // id -> app 元数据，供「保存到我的应用」读取 name/url/category
   let myLinkUrls = new Set(); // 已保存到「我的应用」的归一化 URL 集合，用于卡片去重标记
-  let bannerApps = []; // 头部门面应用列表（供点击分流使用）
+  let bannerApps = []; // 当前渲染的头部门面列表（供点击分流使用）
+  let bannerPc = [];   // PC 端头部门面列表
+  let bannerMobile = []; // 移动端头部门面列表
+  let bannerMediaBound = false; // matchMedia 切换监听是否已绑定（避免重复绑定）
   let editingId = null; // 正在修改的应用 id（null = 新建模式）
 
   // 给当前渲染出的卡片绑定「保存到我的应用」按钮
@@ -700,30 +703,58 @@
   }
 
   // ---------------- 应用市场头部 Banner 广告位（轮播）----------------
+  // PC / 移动端分别展示：拉取 { pc, mobile } 两份列表，按当前视口选择其一渲染。
+  function isDesktopView() { return window.innerWidth >= 931; }
+
+  // 绑定视口断点监听：跨越 931px（桌面/移动轮播切换点）时按新视口重渲染对应列表
+  function bindBannerMedia() {
+    if (bannerMediaBound) return;
+    bannerMediaBound = true;
+    const mq = window.matchMedia("(min-width: 931px)");
+    const onChange = () => renderCurrentBanner();
+    if (mq.addEventListener) mq.addEventListener("change", onChange);
+    else if (mq.addListener) mq.addListener(onChange); // 旧浏览器兼容
+  }
+
+  // 按当前视口渲染对应平台列表（PC ≥ 931，移动 < 931）
+  function renderCurrentBanner() {
+    const slot = document.getElementById("mkBanner");
+    if (!slot) return;
+    const list = isDesktopView() ? bannerPc : bannerMobile;
+    if (!list.length) { slot.hidden = true; slot.innerHTML = ""; bannerApps = []; return; }
+    bannerApps = list;
+    slot.hidden = false;
+    renderBanner(slot, list);
+    attachBanner();
+  }
+
   async function loadBanner() {
     const slot = document.getElementById("mkBanner");
     if (!slot) return;
-    // 服务端已渲染（SSR）：直接水合（挂事件 + 启动轮播），不再二次请求
+    // 服务端已渲染（SSR）：直接水合（读 {pc, mobile} 双列表 + 按视口切换），不再二次请求
     const ssrData = document.getElementById("ssrBannerData");
     if (ssrData && !slot.hidden && slot.querySelector(".mk-banner-item")) {
-      try { bannerApps = JSON.parse(ssrData.textContent || "[]"); } catch (_) { bannerApps = []; }
-      bannerApps.forEach((a) => { appIndex[a.id] = a; });
-      attachBanner();
+      try {
+        const d = JSON.parse(ssrData.textContent || "{}");
+        bannerPc = d.pc || [];
+        bannerMobile = d.mobile || [];
+      } catch (_) { bannerPc = []; bannerMobile = []; }
+      bannerPc.concat(bannerMobile).forEach((a) => { appIndex[a.id] = a; });
+      bindBannerMedia();
+      renderCurrentBanner();
       return;
     }
     // 否则客户端拉取（含筛选刷新 / SSR 不可用兜底）
-    let apps = [];
+    let data = { pc: [], mobile: [] };
     try {
       const res = await api("/api/marketplace/banner");
-      apps = res.apps || [];
-    } catch (_) { apps = []; }
-    if (!apps.length) { slot.hidden = true; slot.innerHTML = ""; bannerApps = []; return; }
-    bannerApps = apps;
-    // 并入 appIndex，确保「添加应用」可复用 saveApp 取到图标
-    apps.forEach((a) => { appIndex[a.id] = a; });
-    slot.hidden = false;
-    renderBanner(slot, apps);
-    attachBanner();
+      if (res && (res.pc || res.mobile)) data = res;
+    } catch (_) { data = { pc: [], mobile: [] }; }
+    bannerPc = data.pc || [];
+    bannerMobile = data.mobile || [];
+    bannerPc.concat(bannerMobile).forEach((a) => { appIndex[a.id] = a; });
+    bindBannerMedia();
+    renderCurrentBanner();
   }
 
   function bannerItemHtml(a, i) {
@@ -784,10 +815,17 @@
   }
 
   let bannerTimer = null;
+  let bannerSlotListeners = null; // 上一次绑定在 slot 上的悬停监听（重渲染前先移除，避免重复）
   function attachBanner() {
     const slot = document.getElementById("mkBanner");
     if (!slot) return;
     if (bannerTimer) { clearInterval(bannerTimer); bannerTimer = null; }
+    // 清理上一次绑定在 slot（持久元素）上的悬停监听，避免多次重渲染后重复绑定
+    if (bannerSlotListeners) {
+      slot.removeEventListener("mouseenter", bannerSlotListeners.enter);
+      slot.removeEventListener("mouseleave", bannerSlotListeners.leave);
+      bannerSlotListeners = null;
+    }
     slot.querySelectorAll(".mk-banner-item").forEach((el) => {
       el.addEventListener("click", (e) => onBannerClick(e, Number(el.getAttribute("data-i"))));
     });
@@ -829,8 +867,11 @@
     const nextBtn = slot.querySelector(".mk-bi-arrow.next");
     if (prevBtn) prevBtn.addEventListener("click", (e) => { e.stopPropagation(); prev(); start(); });
     if (nextBtn) nextBtn.addEventListener("click", (e) => { e.stopPropagation(); next(); start(); });
-    slot.addEventListener("mouseenter", stop);
-    slot.addEventListener("mouseleave", start);
+    const enter = () => stop();
+    const leave = () => start();
+    slot.addEventListener("mouseenter", enter);
+    slot.addEventListener("mouseleave", leave);
+    bannerSlotListeners = { enter, leave };
     go(1, false); // 首屏按真实宽度定位（与 SSR 内联 transform 一致）
     start();
   }

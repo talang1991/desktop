@@ -7,7 +7,7 @@
 // 归一化 URL 得到「已保存」集合，渲染卡片时直接标记「✓ 已保存」。同时把 savedUrls
 // 注入 #ssrPlazaData，供前端水合（填充 myLinkUrls，避免二次请求 /api/links）。
 // 若数据库暂不可用，则返回原始模板，前端照常走客户端 loadPlaza() 兜底。
-import { listApprovedApps, getUserByToken, listLinks, listBannerApps, type AppStatus, type BannerApp } from "./store.ts";
+import { listApprovedApps, getUserByToken, listLinks, listBannerAppsSplit, type AppStatus, type BannerApp } from "./store.ts";
 
 // 与前端 localStorage token key 对应的 Cookie 名（前端在登录/注册/启动时写入）
 const TOKEN_COOKIE = "wal_token";
@@ -154,11 +154,15 @@ function bannerItemHtml(a: BannerApp, i: number): string {
   );
 }
 
-// 生成头部门面轮播：单张无指示点/箭头，多张带轮播控件；并把 banner 应用列表注入
-// #ssrBannerData 供前端水合（免二次请求）。无 banner 时返回隐藏占位。
-function bannerSlotHtml(apps: BannerApp[]): string {
+// 生成头部门面轮播：单张无指示点/箭头，多张带轮播控件。pc / mobile 两份列表分别注入
+// #ssrBannerData 供前端按视口水合（免二次请求）。首屏默认渲染 PC 列表（桌面优先），
+// 移动端由前端在 loadBanner 时按视口切换到 mobile 列表。两份都为空时返回隐藏占位。
+function bannerSlotHtml(pcApps: BannerApp[], mobileApps: BannerApp[]): string {
+  const dataScript = '<script type="application/json" id="ssrBannerData">' +
+    JSON.stringify({ pc: pcApps, mobile: mobileApps }).replace(/</g, "\\u003c") + "</script>";
+  const apps = pcApps; // SSR 首屏渲染 PC 列表（桌面优先）
   if (!apps.length) {
-    return '<div id="mkBanner" class="mk-banner-slot" hidden></div>';
+    return '<div id="mkBanner" class="mk-banner-slot" hidden></div>' + dataScript;
   }
   let items: string;
   let extra = "";
@@ -183,9 +187,7 @@ function bannerSlotHtml(apps: BannerApp[]): string {
   }
   // 首屏首张真实（clone-index=1）居中：translateX = (1080-930)/2 - 930 = -855px
   const inner = '<div class="mk-banner-track" style="transform:translateX(-855px)">' + items + "</div>" + extra;
-  const data = '<script type="application/json" id="ssrBannerData">' +
-    JSON.stringify(apps).replace(/</g, "\\u003c") + "</script>";
-  return '<div id="mkBanner" class="mk-banner-slot" data-ssr="1">' + inner + "</div>" + data;
+  return '<div id="mkBanner" class="mk-banner-slot" data-ssr="1">' + inner + "</div>" + dataScript;
 }
 
 // req 可选：携带 Cookie 时据此判断登录用户并标记「已保存」；不传则按匿名渲染。
@@ -223,8 +225,8 @@ export async function renderMarketplaceHtml(req?: Request): Promise<string> {
     let html = tmpl.replace(PLACEHOLDER, gridHtml);
     // 头部门面轮播：SSR 直接注入首屏 HTML，失败则保留占位、由前端 loadBanner 兜底
     try {
-      const bannerApps = await listBannerApps();
-      html = html.replace(BANNER_PLACEHOLDER, bannerSlotHtml(bannerApps));
+      const { pc, mobile } = await listBannerAppsSplit();
+      html = html.replace(BANNER_PLACEHOLDER, bannerSlotHtml(pc, mobile));
     } catch {
       /* 头部门面渲染失败：保留占位，前端走客户端 loadBanner 兜底 */
     }

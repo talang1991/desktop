@@ -220,6 +220,15 @@ async function ensureAppsTable(): Promise<void> {
         await c.queryObject(
           `CREATE UNIQUE INDEX IF NOT EXISTS marketplace_banner_app_uniq ON marketplace_banner(app_id)`,
         );
+        // 头部门面支持 PC / 移动端分别设置：新增 platform 字段，唯一约束改为 (app_id, platform)
+        // （允许同一应用同时出现在 PC 与移动端轮播）。旧库先 DROP 原 (app_id) 唯一索引再建复合索引。
+        await c.queryObject(
+          `ALTER TABLE marketplace_banner ADD COLUMN IF NOT EXISTS platform VARCHAR(8) NOT NULL DEFAULT 'pc'`,
+        );
+        await c.queryObject(`DROP INDEX IF EXISTS marketplace_banner_app_uniq`);
+        await c.queryObject(
+          `CREATE UNIQUE INDEX IF NOT EXISTS marketplace_banner_uniq ON marketplace_banner(app_id, platform)`,
+        );
       });
     })().catch((e) => {
       appsTableEnsured = null; // 失败则清空，下次访问重试
@@ -1282,52 +1291,67 @@ export interface BannerApp {
   sort_order: number;
 }
 
-// 公开：列出当前头部门面应用（按 sort_order 排序）
-export async function listBannerApps(): Promise<BannerApp[]> {
+// 公开：列出当前头部门面应用（按 sort_order 排序）。platform 省略则返回全部平台。
+export async function listBannerApps(platform?: "pc" | "mobile"): Promise<BannerApp[]> {
   ensureDb();
   await ensureAppsTable();
+  const where = platform ? "AND b.platform = $1" : "";
+  const params = platform ? [platform] : [];
   const rows = await query<BannerApp>(
     `SELECT a.id, a.name, a.url, a.icon, a.description, a.banner, u.username, b.sort_order
      FROM marketplace_banner b
      JOIN apps a ON a.id = b.app_id
      JOIN users u ON u.id = a.user_id
-     WHERE b.enabled = true AND a.status = 'approved'
+     WHERE b.enabled = true AND a.status = 'approved' ${where}
      ORDER BY b.sort_order ASC, b.id ASC`,
+    params,
   );
   return rows;
 }
 
-// 管理后台：列出当前 banner 应用 id 集合（用于在前端标记「已设为 Banner」）
-export async function listBannerAppIds(): Promise<number[]> {
-  ensureDb();
-  await ensureAppsTable();
-  const rows = await query<{ app_id: number }>(
-    `SELECT app_id FROM marketplace_banner WHERE enabled = true`,
-  );
-  return rows.map((r) => r.app_id);
+// 公开 / SSR：一次性返回 PC 与移动端两份头部门面列表
+export async function listBannerAppsSplit(): Promise<{ pc: BannerApp[]; mobile: BannerApp[] }> {
+  const [pc, mobile] = await Promise.all([listBannerApps("pc"), listBannerApps("mobile")]);
+  return { pc, mobile };
 }
 
-// 管理后台：把某应用加入头部门面（幂等，重复添加不报错）
-export async function addBannerApp(appId: number): Promise<boolean> {
+// 管理后台：返回当前各平台已设为头部门面的应用 id 集合（用于在前端标记）
+export async function listBannerAppIdsSplit(): Promise<{ pc: number[]; mobile: number[] }> {
+  ensureDb();
+  await ensureAppsTable();
+  const rows = await query<{ app_id: number; platform: string }>(
+    `SELECT app_id, platform FROM marketplace_banner WHERE enabled = true`,
+  );
+  const pc: number[] = [];
+  const mobile: number[] = [];
+  for (const r of rows) {
+    if (r.platform === "mobile") mobile.push(r.app_id);
+    else pc.push(r.app_id); // 'pc' 或历史默认
+  }
+  return { pc, mobile };
+}
+
+// 管理后台：把某应用加入指定平台头部门面（幂等，重复添加不报错）
+export async function addBannerApp(appId: number, platform: "pc" | "mobile" = "pc"): Promise<boolean> {
   ensureDb();
   await ensureAppsTable();
   const rows = await query<{ app_id: number }>(
-    `INSERT INTO marketplace_banner (app_id, enabled)
-     VALUES ($1, true)
-     ON CONFLICT (app_id) DO UPDATE SET enabled = true
+    `INSERT INTO marketplace_banner (app_id, platform, enabled)
+     VALUES ($1, $2, true)
+     ON CONFLICT (app_id, platform) DO UPDATE SET enabled = true
      RETURNING app_id`,
-    [appId],
+    [appId, platform],
   );
   return rows.length > 0;
 }
 
-// 管理后台：把某应用移出头部门面
-export async function removeBannerApp(appId: number): Promise<boolean> {
+// 管理后台：把某应用移出指定平台头部门面
+export async function removeBannerApp(appId: number, platform: "pc" | "mobile" = "pc"): Promise<boolean> {
   ensureDb();
   await ensureAppsTable();
   const rows = await query<{ app_id: number }>(
-    `DELETE FROM marketplace_banner WHERE app_id = $1 RETURNING app_id`,
-    [appId],
+    `DELETE FROM marketplace_banner WHERE app_id = $1 AND platform = $2 RETURNING app_id`,
+    [appId, platform],
   );
   return rows.length > 0;
 }

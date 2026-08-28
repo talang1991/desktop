@@ -91,6 +91,11 @@ html, body {
 .btn.primary:hover { filter: brightness(1.05); }
 .btn.ghost { background: transparent; border-color: var(--border); }
 .btn.ghost:hover { background: var(--surface-2); }
+/* 应用详情：PC / 移动头图开关的激活态 */
+#appDetailActions .d-banner-pc.on, #appDetailActions .d-banner-mobile.on {
+  background: var(--primary); color: #fff; border-color: var(--primary);
+}
+#appDetailActions .d-banner-pc.on:hover, #appDetailActions .d-banner-mobile.on:hover { filter: brightness(1.05); }
 
 /* ---------- Filters ---------- */
 .filters {
