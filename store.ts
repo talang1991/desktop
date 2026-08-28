@@ -336,12 +336,30 @@ export async function initStore(): Promise<void> {
                WHERE u2.username = u.username AND u2.id > u.id
              )`,
           );
-          // users.username 加 UNIQUE 约束：用 DO 块捕获 duplicate_object 容忍已存在的同名约束
-          // 后续 INSERT 出现同名会被 PG 以 unique_violation (SQLSTATE 23505) 拒绝，应用层据此重试或报错
+          // users.username 加唯一索引（幂等、可重复执行）：
+          // - 优先用 CREATE UNIQUE INDEX 而非 ADD CONSTRAINT：ADD CONSTRAINT 内部先建同名索引，
+          //   若索引已存在会抛 42P07 "relation already exists"，而该错误码不是 duplicate_object，
+          //   DO 块兜底接不住，导致部署失败；CREATE UNIQUE INDEX IF NOT EXISTS 原生跳过已存在同名索引。
+          // - DO 块先判断：username 上已有任意唯一约束则直接跳过；若残留同名「非唯一索引」则先删再建唯一。
+          // - 后续 INSERT 同名会被 PG 以 unique_violation (SQLSTATE 23505) 拒绝，应用层据此重试或报错。
           await c.queryObject(
-            `DO $$ BEGIN
-               ALTER TABLE users ADD CONSTRAINT users_username_uniq UNIQUE (username);
-             EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+            `DO $$
+             BEGIN
+               -- 只要 username 上已有任意唯一约束（无论约束名），就无需再建
+               IF EXISTS (
+                 SELECT 1 FROM pg_constraint
+                 WHERE conrelid = 'users'::regclass AND contype = 'u'
+                   AND array_length(conkey, 1) = 1
+                   AND conkey[1] = (SELECT attnum FROM pg_attribute WHERE attrelid = 'users'::regclass AND attname = 'username')
+               ) THEN
+                 RETURN;
+               END IF;
+               -- 残留同名索引（可能是非唯一）则先删，避免 CREATE UNIQUE INDEX 报 already exists
+               IF EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'users_username_uniq') THEN
+                 EXECUTE 'DROP INDEX IF EXISTS users_username_uniq';
+               END IF;
+               EXECUTE 'CREATE UNIQUE INDEX users_username_uniq ON users(username)';
+             END $$;`,
           );
           await c.queryObject(
             `CREATE TABLE IF NOT EXISTS links (
