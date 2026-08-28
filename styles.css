@@ -1036,25 +1036,43 @@ body.resizing { user-select: none; cursor: col-resize; }
   box-shadow: 0 0 0 2px var(--surface-2);
 }
 
-/* 顶栏 💬 按钮上的未读总数徽标（抽屉关闭时仍始终可见） */
-#chatBtn { position: relative; overflow: visible; }
+/* 顶栏 💬 按钮上的未读总数徽标（抽屉关闭时仍始终可见）
+   默认采用「内嵌按钮右侧、垂直居中」样式，确保 .nav-badge 首次出现时（即页面首屏渲染）
+   就已落位，不会先按桌面越界样式渲染再被媒体查询重排造成"位置跳动"。
+   桌面端（≥481px）在下方 @media 反向覆盖为越界样式。*/
+#chatBtn { position: relative; overflow: visible; padding-right: 22px; min-height: 34px; }
 .nav-badge {
   position: absolute;
-  top: -7px;
-  right: -7px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
+  top: 50%;
+  right: 3px;
+  transform: translateY(-50%);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
   border-radius: 9px;
   background: var(--danger, #ff4d4f);
   color: #fff;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
-  line-height: 18px;
+  line-height: 16px;
   text-align: center;
   box-sizing: border-box;
-  box-shadow: 0 0 0 2px var(--surface-2);
   pointer-events: none;
+}
+/* 桌面端：恢复右上角越界式徽标（系统通知风格），并去掉 #chatBtn 的 mobile-only 占位 */
+@media (min-width: 481px) {
+  #chatBtn { padding-right: 0; min-height: 0; }
+  .nav-badge {
+    top: -7px;
+    right: -7px;
+    transform: none;
+    min-width: 18px;
+    height: 18px;
+    line-height: 18px;
+    padding: 0 5px;
+    font-size: 11px;
+    box-shadow: 0 0 0 2px var(--surface-2);
+  }
 }
 
 /* 右侧会话区 */
@@ -2362,22 +2380,9 @@ body.resizing .iframe-frame { pointer-events: none !important; }
   .topbar-actions .btn { flex: 0 0 auto; padding: 8px 11px; font-size: 13px; }
   .search-wrap { order: 3; }
 
-  /* 移动端未读徽标：内嵌按钮右侧、垂直居中。
-     .topbar-actions 在 ≤480 是 overflow-x:auto 横向滚动容器，
-     原「top:-7px / right:-7px」的越界红点会被裁切、与下一按钮挤压变形。
-     改成按钮内部的右上内侧竖直居中，徽标不再越出按钮边界。 */
-  #chatBtn { position: relative; padding-right: 22px; min-height: 34px; }
-  #chatBtn > .nav-badge {
-    top: 50%;
-    right: 3px;
-    transform: translateY(-50%);
-    min-width: 16px;
-    height: 16px;
-    line-height: 16px;
-    padding: 0 4px;
-    font-size: 10px;
-    box-shadow: none;
-  }
+  /* 移动端未读徽标样式已并入 styles.css 默认样式块（line ~1041），
+     默认即为"内嵌按钮右侧、垂直居中"，桌面端用反向 @media 覆盖为越界样式。
+     此处不再覆写，避免元素首次出现时出现位置重排跳动。 */
 
   .content { padding: 12px; }
   .filters { padding: 10px 12px 4px; gap: 6px; }
@@ -2906,10 +2911,9 @@ input, select, textarea, .friend-row, .conv-row, .member-picker, .group-list, .f
 }
 .friend-row:hover, .conv-row:hover { background: var(--surface-2); transform: translateX(3px); }
 .tab-badge, .nav-badge {
-  box-shadow: 0 0 0 2px var(--surface);
-  animation: pop .3s var(--ease-spring);
+  animation: fadeIn .18s ease-out;
 }
-@keyframes pop { 0% { transform: scale(0); } 70% { transform: scale(1.25); } 100% { transform: scale(1); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* ---------- 彩带（由 delight.js 注入） ---------- */
 .confetti {
