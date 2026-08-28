@@ -637,6 +637,9 @@
     registerServiceWorker();
     setupUpdateBanner();
     setupSWUpdateListener();
+    // 头部门面 Banner：尽早发起自身请求（非致命），不等待下面 /api/me、/api/links、loadPlaza 完成即可显示，
+    // 让顶部轮播与主列表请求并行，避免顶部先空着等主列表回来。
+    loadBanner();
     const tk = localStorage.getItem(TOKEN_KEY);
     if (tk) {
       try {
@@ -694,8 +697,6 @@
     if (!hydrateFromSSR()) {
       await loadPlaza();
     }
-    // 头部门面 Banner（非致命，失败也不影响广场浏览）
-    loadBanner();
   }
 
   // ---------------- 应用市场头部 Banner 广告位（轮播）----------------
