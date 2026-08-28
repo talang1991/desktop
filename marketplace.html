@@ -299,6 +299,23 @@
     .avatar-img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; display: block; }
     @media (max-width: 560px) {
       .mk-grid { grid-template-columns: 1fr; }
+      /* 移动端顶栏去掉"应用广场"标题,避免被 [返回应用] 与 [发布应用] 挤压换行 */
+      .mk-top h1 { display: none; }
+      /* 移动端 banner 限高:桌面 300px 在窄屏占满半屏,改 168px (~16:9) 更紧凑。
+         banner item 内容在底部,降低高度不影响图标/标题相对位置。 */
+      .mk-banner-slot { height: 168px; border-radius: 12px; }
+      .mk-banner-item .mk-bi-name { font-size: 14px; }
+      .mk-banner-item .mk-bi-sub { font-size: 11px; }
+      .mk-banner-item .mk-bi-icon { width: 36px; height: 36px; border-radius: 10px; }
+      .mk-banner-item .mk-bi-body { left: 12px; right: 56px; bottom: 10px; gap: 8px; }
+      .mk-banner-item .mk-bi-tag { top: 8px; left: 8px; font-size: 10px; padding: 2px 7px; }
+      .mk-bi-dot { width: 6px; height: 6px; }
+      .mk-bi-dot.active { width: 14px; }
+      .mk-banner-dots { right: 10px; bottom: 10px; gap: 5px; }
+      /* 移动端顶栏内边距收紧一点,给 banner 留更多视口 */
+      .mk-top { padding: 4px 0 10px; gap: 8px; }
+      .mk-back { font-size: 13px; }
+      #publishBtn { padding: 8px 12px; font-size: 13px; }
     }
   /* 版本更新提示条（与首页一致） */
   .update-banner {
