@@ -312,6 +312,10 @@
       /* 移动端 banner 限高:桌面 300px 在窄屏占满半屏,改 168px (~16:9) 更紧凑。
          banner item 内容在底部,降低高度不影响图标/标题相对位置。 */
       .mk-banner-slot { height: 168px; border-radius: 12px; }
+      /* 移动端 banner item 必须 100% 宽,否则 930px 固定宽在 ~400 slot 里只露出 item 中段,
+         用户看到的"居中"和"滚动"都会失真。改 100% 后 measure() 算 itemW≈slotW,
+         go(1) transform = -slotW,vp 0..slotW 显示 item[clone-index=1] 整张 = 真实首张。 */
+      .mk-banner-item { flex-basis: 100%; width: 100%; }
       .mk-banner-item .mk-bi-name { font-size: 14px; }
       .mk-banner-item .mk-bi-sub { font-size: 11px; }
       .mk-banner-item .mk-bi-icon { width: 36px; height: 36px; border-radius: 10px; }
