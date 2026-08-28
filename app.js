@@ -1764,6 +1764,7 @@
       "settings.emailUnbindConfirm": "确认解绑",
       "settings.emailUnbindHint": "解绑需先验证当前邮箱：点击「解绑邮箱」后向该邮箱发送验证码，输入正确验证码方可解绑。",
       "settings.emailUnbindNoEmail": "尚未绑定邮箱",
+      "settings.emailResend": "重新发送",
       "settings.changePassword": "修改密码",
       "settings.change.hint": "需通过绑定邮箱的验证码验证身份",
       "settings.change.oldPh": "原密码",
@@ -2113,6 +2114,7 @@
       "settings.emailUnbindConfirm": "Confirm Unbind",
       "settings.emailUnbindHint": "To unbind, verify your current email first: click \"Unbind Email\", a code is sent to that email, then enter the correct code to confirm.",
       "settings.emailUnbindNoEmail": "No email bound yet",
+      "settings.emailResend": "Resend",
       "settings.changePassword": "Change Password",
       "settings.change.hint": "Verify via a code sent to your bound email",
       "settings.change.oldPh": "Current password",
@@ -3387,16 +3389,23 @@
   }
 
   // ---------- 解绑邮箱：展开验证码区（当前已绑邮箱是已知的）----------
-  function emailUnbindReveal() {
+  // 「解绑邮箱」一键进入流程：展开输入行 + 立即发码到当前邮箱。
+  // 行为与 hint 文案一致：「点击『解绑邮箱』后向该邮箱发送验证码」，避免三步走。
+  async function emailUnbindReveal() {
+    if (!currentUserEmail) { toast(t("settings.emailUnbindNoEmail"), "err"); return; }
     const row = $("#emailUnbindCodeRow");
     if (row) row.hidden = false;
+    $("#emailUnbindCodeInput").value = "";
+    // 自动聚焦验证码框，体验连贯；同时立即发码
+    setTimeout(() => { const i = $("#emailUnbindCodeInput"); if (i) i.focus(); }, 0);
+    await emailUnbindSendCode();
   }
 
   // ---------- 解绑邮箱：向当前已绑定邮箱发送验证码 ----------
   async function emailUnbindSendCode() {
     if (!currentUserEmail) { toast(t("settings.emailUnbindNoEmail"), "err"); return; }
-    const btn = $("#emailUnbindSendCodeBtn");
-    btn.disabled = true;
+    const resend = $("#emailUnbindResendBtn");
+    if (resend) resend.style.pointerEvents = "none";
     try {
       const r = await api("/api/email/unbind-code", { method: "POST" });
       if (r.error) { toast(r.error, "err"); return; }
@@ -3404,7 +3413,7 @@
     } catch (e) {
       toast(t("settings.emailSendErr") + ((e && e.message) || e), "err");
     } finally {
-      btn.disabled = false;
+      if (resend) resend.style.pointerEvents = "";
     }
   }
 
@@ -3437,8 +3446,10 @@
   if (emailBindBtn) emailBindBtn.onclick = emailBind;
   const emailUnbindBtn = $("#emailUnbindBtn");
   if (emailUnbindBtn) emailUnbindBtn.onclick = emailUnbindReveal;
-  const emailUnbindSendCodeBtn = $("#emailUnbindSendCodeBtn");
-  if (emailUnbindSendCodeBtn) emailUnbindSendCodeBtn.onclick = emailUnbindSendCode;
+  const emailUnbindResendBtn = $("#emailUnbindResendBtn");
+  if (emailUnbindResendBtn) {
+    emailUnbindResendBtn.onclick = (e) => { e.preventDefault(); emailUnbindSendCode(); };
+  }
   const emailUnbindConfirmBtn = $("#emailUnbindConfirmBtn");
   if (emailUnbindConfirmBtn) emailUnbindConfirmBtn.onclick = emailUnbind;
 

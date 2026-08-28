@@ -173,7 +173,7 @@ export async function handleApi(req: Request): Promise<Response> {
         return json({ error: msg }, status);
       }
       const token = await createSession(user.id, normalizeDevice(device), String(req.headers.get("user-agent") || ""));
-      return json({ user: { id: user.id, username: user.username, avatar: user.avatar, role: user.role, is_anonymous: false }, token }, 201);
+      return json({ user: { id: user.id, username: user.username, avatar: user.avatar, role: user.role, email: user.email || "", is_anonymous: false }, token }, 201);
     }
 
     // ---- 匿名登录（「立即使用」）：生成游客账号并返回 token ----
@@ -182,7 +182,7 @@ export async function handleApi(req: Request): Promise<Response> {
         const { device } = await req.json().catch(() => ({} as any));
         const { user, token } = await createAnonymousUser();
         return json({
-          user: { id: user.id, username: user.username, avatar: user.avatar, role: user.role, is_anonymous: true },
+          user: { id: user.id, username: user.username, avatar: user.avatar, role: user.role, email: user.email || "", is_anonymous: true },
           token,
         }, 201);
       } catch (e) {
@@ -198,7 +198,7 @@ export async function handleApi(req: Request): Promise<Response> {
       const b = await req.json().catch(() => ({}));
       try {
         const { user: up, token } = await upgradeAnonymousUser(user.id, String(b.username || ""), String(b.password || ""));
-        return json({ user: { id: up.id, username: up.username, avatar: up.avatar, role: up.role, is_anonymous: up.is_anonymous }, token }, 200);
+        return json({ user: { id: up.id, username: up.username, avatar: up.avatar, role: up.role, email: up.email || "", is_anonymous: up.is_anonymous }, token }, 200);
       } catch (e) {
         const msg = (e as Error).message;
         const status = /已存在/.test(msg) ? 409 : 400;
@@ -214,7 +214,7 @@ export async function handleApi(req: Request): Promise<Response> {
       const ok = await verifyPassword(String(password), u.password_hash);
       if (!ok) return json({ error: "用户名或密码错误" }, 401);
       const token = await createSession(u.id, normalizeDevice(device), String(req.headers.get("user-agent") || ""));
-      return json({ user: { id: u.id, username: u.username, avatar: u.avatar, role: u.role, is_anonymous: !!u.is_anonymous }, token });
+      return json({ user: { id: u.id, username: u.username, avatar: u.avatar, role: u.role, email: u.email || "", is_anonymous: !!u.is_anonymous }, token });
     }
 
     // ---- 登出 ----
