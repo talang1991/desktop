@@ -326,6 +326,23 @@ export async function initStore(): Promise<void> {
           await c.queryObject(
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_anonymous BOOLEAN NOT NULL DEFAULT false`,
           );
+          // 历史 username 重复数据修复：保留每组 id 最小的那条，后续重复的改名加 _dup_<id> 后缀
+          // （不删行，仅命名唯一化；新建库没有任何重复，会 0 行受影响，幂等可重复执行）
+          await c.queryObject(
+            `UPDATE users u
+               SET username = u.username || '_dup_' || u.id::text
+             WHERE EXISTS (
+               SELECT 1 FROM users u2
+               WHERE u2.username = u.username AND u2.id > u.id
+             )`,
+          );
+          // users.username 加 UNIQUE 约束：用 DO 块捕获 duplicate_object 容忍已存在的同名约束
+          // 后续 INSERT 出现同名会被 PG 以 unique_violation (SQLSTATE 23505) 拒绝，应用层据此重试或报错
+          await c.queryObject(
+            `DO $$ BEGIN
+               ALTER TABLE users ADD CONSTRAINT users_username_uniq UNIQUE (username);
+             EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+          );
           await c.queryObject(
             `CREATE TABLE IF NOT EXISTS links (
               id SERIAL PRIMARY KEY,
@@ -498,47 +515,60 @@ export async function registerUser(username: string, password: string, avatar = 
   if (!validUsername(username)) throw new Error("用户名需为 3-32 位字母/数字/下划线/连字符");
   if (password.length < 6) throw new Error("密码至少 6 位");
   ensureDb();
-  const exist = await query<{ id: number }>(`SELECT id FROM users WHERE username = $1`, [username]);
-  if (exist.length) throw new Error("用户名已存在");
   const hash = await hashPassword(password);
   const av = String(avatar || "").slice(0, ICON_MAX);
-  const rows = await query<{ id: number; username: string; role: string }>(
-    `INSERT INTO users (username, password_hash, avatar) VALUES ($1,$2,$3) RETURNING id, username, role`,
-    [username, hash, av],
-  );
+  let rows: { id: number; username: string; role: string }[];
+  try {
+    // 直接 INSERT，DB 层 UNIQUE 约束天然防并发撞名；命中时 PG 抛 23505
+    rows = await query<{ id: number; username: string; role: string }>(
+      `INSERT INTO users (username, password_hash, avatar) VALUES ($1,$2,$3) RETURNING id, username, role`,
+      [username, hash, av],
+    );
+  } catch (e) {
+    if ((e as { code?: string })?.code === "23505") throw new Error("用户名已存在");
+    throw e;
+  }
   return { id: rows[0].id, username: rows[0].username, password_hash: hash, avatar: av, role: rows[0].role, email: "", created_at: new Date().toISOString(), is_anonymous: false };
 }
 
 // 生成匿名游客账号（「立即使用」）：随机 guest_<随机串> 用户名、空密码哈希、is_anonymous=true。
 // 成功后创建会话并返回 token，前端凭此直接进入应用（无密码、未绑定邮箱）。
+// 注意：用户名唯一性依靠 DB UNIQUE 约束兜底（应用层不再"先查后插"，避免并发重复 INSERT）。
 export async function createAnonymousUser(): Promise<{ user: StoredUser; token: string }> {
   ensureDb();
   const av = "👤";
+  let id = 0;
   let username = "";
-  // 用户名需全局唯一：碰撞时（概率极低）追加一次重试，最多 5 次
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 8; i++) {
     const rand = newSessionToken().replace(/[^a-zA-Z0-9]/g, "").slice(0, 10);
     const candidate = `guest_${rand}`;
-    const hit = await query<{ id: number }>(`SELECT id FROM users WHERE username = $1`, [candidate]);
-    if (!hit.length) { username = candidate; break; }
+    try {
+      const rows = await query<{ id: number; username: string; role: string; is_anonymous: boolean }>(
+        `INSERT INTO users (username, password_hash, avatar, is_anonymous)
+         VALUES ($1, '', $2, true) RETURNING id, username, role, is_anonymous`,
+        [candidate, av],
+      );
+      id = rows[0].id;
+      username = rows[0].username;
+      break;
+    } catch (e) {
+      // 并发同名时 PG 返回 unique_violation (SQLSTATE 23505)，重试一次生成即可
+      // （典型场景：同一用户连点 / 同时打开两个标签页点「立即使用」）
+      if ((e as { code?: string })?.code === "23505") continue;
+      throw e;
+    }
   }
-  if (!username) throw new Error("生成游客账号失败，请重试");
-  const rows = await query<{ id: number; username: string; role: string; is_anonymous: boolean }>(
-    `INSERT INTO users (username, password_hash, avatar, is_anonymous)
-     VALUES ($1, '', $2, true) RETURNING id, username, role, is_anonymous`,
-    [username, av],
-  );
-  const id = rows[0].id;
+  if (!id) throw new Error("生成游客账号失败，请重试");
   const token = await createSession(id, "desktop", "");
   const user: StoredUser = {
     id,
-    username: rows[0].username,
+    username,
     password_hash: "",
     avatar: av,
-    role: rows[0].role,
+    role: "user",
     email: "",
     created_at: new Date().toISOString(),
-    is_anonymous: rows[0].is_anonymous,
+    is_anonymous: true,
   };
   return { user, token };
 }
@@ -556,14 +586,19 @@ export async function upgradeAnonymousUser(
   const cur = await query<{ is_anonymous: boolean }>(`SELECT is_anonymous FROM users WHERE id = $1`, [userId]);
   if (!cur.length) throw new Error("用户不存在");
   if (!cur[0].is_anonymous) throw new Error("该账号已是正式账号");
-  const exist = await query<{ id: number }>(`SELECT id FROM users WHERE username = $1`, [username]);
-  if (exist.length) throw new Error("用户名已存在");
   const hash = await hashPassword(password);
-  const rows = await query<{ id: number; username: string; role: string; avatar: string; is_anonymous: boolean }>(
-    `UPDATE users SET username = $2, password_hash = $3, is_anonymous = false
-     WHERE id = $1 RETURNING id, username, role, avatar, is_anonymous`,
-    [userId, username, hash],
-  );
+  // 直接 UPDATE 依赖 username UNIQUE 约束兜底：并发升级撞名时 PG 抛 23505 → 转「用户名已存在」
+  let rows: { id: number; username: string; role: string; avatar: string; is_anonymous: boolean }[];
+  try {
+    rows = await query<{ id: number; username: string; role: string; avatar: string; is_anonymous: boolean }>(
+      `UPDATE users SET username = $2, password_hash = $3, is_anonymous = false
+       WHERE id = $1 RETURNING id, username, role, avatar, is_anonymous`,
+      [userId, username, hash],
+    );
+  } catch (e) {
+    if ((e as { code?: string })?.code === "23505") throw new Error("用户名已存在");
+    throw e;
+  }
   const id = rows[0].id;
   const token = await createSession(id, "desktop", "");
   const user: StoredUser = {
