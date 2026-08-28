@@ -190,7 +190,7 @@ function bannerSlotHtml(apps: BannerApp[]): string {
 
 // req 可选：携带 Cookie 时据此判断登录用户并标记「已保存」；不传则按匿名渲染。
 export async function renderMarketplaceHtml(req?: Request): Promise<string> {
-  const tmpl = await Deno.readTextFile("./marketplace.html");
+  const tmpl = await Deno.readTextFile("./dist/marketplace.html");
   try {
     // 解析登录用户：从 Cookie 读取 token（前端登录时写入），用于判断「是否已保存」与「是否已赞」
     let savedSet = new Set<string>();
