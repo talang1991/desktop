@@ -417,6 +417,8 @@
     await checkVersionEnforcement();
     // 版本更新弹窗：后端 show_popup 且版本高于本地已展示版本时展示（失效状态下不再弹）
     if (!appVersionDisabled) checkReleaseNotes();
+    // 首次使用引导：仅对从未看过引导的用户，进入主界面后稍候展示「添加应用 / 应用广场」使用提示
+    maybeShowFirstUseGuide();
   }
   // 匿名账号（「立即使用」生成的游客）：隐藏聊天 / 视频会议入口，并收敛设置页敏感操作
   function applyAnonymousUi() {
@@ -1809,6 +1811,12 @@
       "topbar.reorder.title": "拖动排序：开启后可拖动网站链接调整顺序",
       "reorder.saved": "已保存排序",
       "reorder.hint": "拖动卡片排序",
+      "guide.title": "快速上手",
+      "guide.add": "点这里「添加应用」，可以手动收藏你的常用网站（名称 + 网址），它们会显示在首页卡片中。",
+      "guide.market": "「应用广场」汇集了大家上架的实用小工具，点进去可以发现并一键收藏，无需自己上传。",
+      "guide.next": "下一步",
+      "guide.finish": "开始使用",
+      "guide.skip": "跳过",
       "reorder.done": "完成",
       "topbar.logout": "登出",
       "app.modal.add": "添加应用",
@@ -2157,6 +2165,12 @@
       "topbar.reorder.title": "Toggle drag-to-reorder for your links",
       "reorder.saved": "Order saved",
       "reorder.hint": "Drag cards to reorder",
+      "guide.title": "Quick start",
+      "guide.add": "Tap “Add App” to save your frequently used websites (name + URL); they’ll appear as cards on your home page.",
+      "guide.market": "“App Market” gathers handy tools published by the community — open it to discover and save them in one tap.",
+      "guide.next": "Next",
+      "guide.finish": "Get started",
+      "guide.skip": "Skip",
       "reorder.done": "Done",
       "topbar.logout": "Log Out",
       "app.modal.add": "Add App",
@@ -7394,6 +7408,11 @@
   function showNotifyPermBanner() {
     const b = document.getElementById("notifyPermBanner");
     if (!b) return;
+    // 移动端不再弹这个引导条（底部浮层会挡住卡片区域），桌面端保留引导
+    if (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 768px)").matches) {
+      b.hidden = true;
+      return;
+    }
     // 本次会话内用户主动关闭过 → 不再自动打扰
     try { if (sessionStorage.getItem("notify-banner-dismissed") === "1") { b.hidden = true; return; } } catch {}
     const perm = notificationsSupported() ? Notification.permission : "unsupported";
@@ -7616,6 +7635,126 @@
       const v = await api("/api/version");
       applyVersionEnforcement(v && v.version ? v.version : "", !!(v && v.force_popup));
     } catch (e) { /* 检查失败不影响主流程 */ }
+  }
+
+  // ---------- 首次使用引导（添加应用 / 应用广场） ----------
+  const FIRST_USE_STEPS = [
+    { sel: "#addBtn", titleKey: "topbar.add", textKey: "guide.add" },
+    { sel: "#marketBtn", titleKey: "topbar.market", textKey: "guide.market" },
+  ];
+  const FIRST_USE_DONE_KEY = "firstUseGuideDone";
+  let _fuStep = -1;
+  let _fuOverlay = null, _fuRing = null, _fuTip = null;
+  let _fuCleanup = [];
+
+  function maybeShowFirstUseGuide() {
+    try { if (localStorage.getItem(FIRST_USE_DONE_KEY) === "1") return; } catch (_) {}
+    // 稍候展示，确保顶栏布局完成、字体/图标已就绪
+    setTimeout(showFirstUseGuide, 650);
+  }
+
+  function showFirstUseGuide() {
+    if (_fuOverlay) return; // 已在展示
+    _fuOverlay = document.createElement("div");
+    _fuOverlay.className = "firstuse-overlay";
+    _fuRing = document.createElement("div");
+    _fuRing.className = "firstuse-ring";
+    _fuTip = document.createElement("div");
+    _fuTip.className = "firstuse-tip";
+    _fuTip.setAttribute("role", "dialog");
+    _fuTip.setAttribute("aria-modal", "true");
+    _fuTip.setAttribute("aria-label", t("guide.title"));
+    document.body.append(_fuOverlay, _fuRing, _fuTip);
+    _fuOverlay.addEventListener("click", nextFirstUse); // 点击遮罩 = 下一步
+    const onRepos = () => positionFirstUse();
+    window.addEventListener("resize", onRepos);
+    window.addEventListener("scroll", onRepos, true);
+    _fuCleanup.push(() => {
+      window.removeEventListener("resize", onRepos);
+      window.removeEventListener("scroll", onRepos, true);
+      _fuOverlay.removeEventListener("click", nextFirstUse);
+    });
+    _fuStep = -1;
+    nextFirstUse();
+  }
+
+  function nextFirstUse() {
+    _fuStep++;
+    if (_fuStep >= FIRST_USE_STEPS.length) { finishFirstUse(); return; }
+    renderFirstUseStep();
+  }
+
+  function renderFirstUseStep() {
+    const step = FIRST_USE_STEPS[_fuStep];
+    const el = document.querySelector(step.sel);
+    if (!el) { finishFirstUse(); return; }
+    const tip = _fuTip;
+    tip.innerHTML = "";
+    const head = document.createElement("div");
+    head.className = "firstuse-tip-head";
+    head.textContent = t(step.titleKey);
+    const body = document.createElement("p");
+    body.className = "firstuse-tip-body";
+    body.textContent = t(step.textKey);
+    const bar = document.createElement("div");
+    bar.className = "firstuse-tip-bar";
+    const dots = document.createElement("div");
+    dots.className = "firstuse-dots";
+    FIRST_USE_STEPS.forEach((_, i) => {
+      const d = document.createElement("span");
+      d.className = "firstuse-dot" + (i === _fuStep ? " on" : "");
+      dots.appendChild(d);
+    });
+    const skip = document.createElement("button");
+    skip.type = "button";
+    skip.className = "firstuse-skip";
+    skip.textContent = t("guide.skip");
+    skip.addEventListener("click", (e) => { e.stopPropagation(); finishFirstUse(); });
+    const next = document.createElement("button");
+    next.type = "button";
+    next.className = "btn primary firstuse-next";
+    next.textContent = _fuStep === FIRST_USE_STEPS.length - 1 ? t("guide.finish") : t("guide.next");
+    next.addEventListener("click", (e) => { e.stopPropagation(); nextFirstUse(); });
+    bar.append(dots, skip, next);
+    tip.append(head, body, bar);
+    tip._target = el;
+    _fuRing._target = el;
+    positionFirstUse();
+  }
+
+  function positionFirstUse() {
+    if (!_fuTip || _fuStep < 0) return;
+    const el = _fuTip._target;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    // 高亮环：覆盖在目标按钮位置（pointer-events:none，点击穿透到遮罩）
+    _fuRing.style.top = r.top + "px";
+    _fuRing.style.left = r.left + "px";
+    _fuRing.style.width = r.width + "px";
+    _fuRing.style.height = r.height + "px";
+    // 提示卡：先显示再量尺寸，放在目标下方；空间不足则放上方，水平居中并夹在视口内
+    _fuTip.hidden = false;
+    const tw = _fuTip.offsetWidth, th = _fuTip.offsetHeight;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const margin = 10, gap = 12;
+    let top = r.bottom + gap;
+    if (top + th > vh - margin) top = r.top - th - gap;
+    if (top < margin) top = margin;
+    let left = r.left + r.width / 2 - tw / 2;
+    left = Math.max(margin, Math.min(left, vw - tw - margin));
+    _fuTip.style.top = top + "px";
+    _fuTip.style.left = left + "px";
+  }
+
+  function finishFirstUse() {
+    try { localStorage.setItem(FIRST_USE_DONE_KEY, "1"); } catch (_) {}
+    if (_fuOverlay) _fuOverlay.remove();
+    if (_fuRing) _fuRing.remove();
+    if (_fuTip) _fuTip.remove();
+    _fuCleanup.forEach((fn) => fn());
+    _fuCleanup = [];
+    _fuOverlay = _fuRing = _fuTip = null;
+    _fuStep = -1;
   }
 
   // ---------- Init ----------

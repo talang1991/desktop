@@ -3015,4 +3015,76 @@ input, select, textarea, .friend-row, .conv-row, .member-picker, .group-list, .f
 .force-foot { margin-top: 18px; }
 .force-foot .btn { width: 100%; justify-content: center; }
 
+/* 首次使用引导 coachmark（添加应用 / 应用广场） */
+.firstuse-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 9900;
+  cursor: pointer;
+  animation: fadeIn .18s ease-out;
+}
+.firstuse-ring {
+  position: fixed;
+  z-index: 9901;
+  border-radius: 12px;
+  pointer-events: none;
+  box-shadow: 0 0 0 3px #fff, 0 0 0 6px var(--primary), 0 0 18px 6px rgba(80, 120, 255, .65);
+  transition: top .2s ease, left .2s ease, width .2s ease, height .2s ease;
+}
+.firstuse-tip {
+  position: fixed;
+  z-index: 9902;
+  width: 300px;
+  max-width: calc(100vw - 20px);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .28);
+  padding: 16px 16px 12px;
+  animation: fadeIn .2s ease-out;
+}
+.firstuse-tip-head {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--primary);
+}
+.firstuse-tip-body {
+  font-size: 13.5px;
+  line-height: 1.6;
+  margin: 0 0 14px;
+  color: var(--text-2);
+}
+.firstuse-tip-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.firstuse-dots {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.firstuse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: background .2s ease;
+}
+.firstuse-dot.on { background: var(--primary); }
+.firstuse-skip {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 4px;
+}
+.firstuse-skip:hover { color: var(--text); }
+.firstuse-next { flex: 0 0 auto; }
+
 

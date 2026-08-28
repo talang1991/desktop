@@ -902,7 +902,7 @@
     menu.style.top = y + "px";
     const addBtn = menu.querySelector('[data-act="add"]');
     const openBtn = menu.querySelector('[data-act="open"]');
-    addBtn.onclick = (ev) => { ev.stopPropagation(); hideBannerMenu(); saveApp(a.id); };
+    addBtn.onclick = (ev) => { ev.stopPropagation(); hideBannerMenu(); saveToMyApps(a.id); };
     openBtn.onclick = (ev) => { ev.stopPropagation(); hideBannerMenu(); window.open(a.url, "_blank", "noopener"); };
     setTimeout(() => document.addEventListener("click", hideBannerMenuOnce), 0);
   }
