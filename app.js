@@ -1707,6 +1707,7 @@
       "auth.login.link": "去登录",
       "auth.logging": "登录中…",
       "auth.registering": "注册中…",
+      "auth.registered": "注册成功",
       "auth.verifying": "正在验证登录态…",
       "auth.useNow": "立即使用",
       "auth.useNowing": "正在进入…",
@@ -2052,6 +2053,7 @@
       "auth.login.link": "Sign in",
       "auth.logging": "Signing in…",
       "auth.registering": "Signing up…",
+      "auth.registered": "Signed up",
       "auth.verifying": "Verifying your session…",
       "auth.useNow": "Use Now",
       "auth.useNowing": "Entering…",
@@ -2469,6 +2471,53 @@
       btn.disabled = false; btn.textContent = orig;
     }
   });
+  // 注册账号（「注册一个」展开）
+  const registerForm = $("#registerForm");
+  if (registerForm) registerForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector("button[type=submit]");
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = t("auth.registering");
+    try {
+      const data = await api("/api/register", {
+        method: "POST",
+        body: JSON.stringify({
+          username: $("#regUser").value.trim(),
+          password: $("#regPass").value,
+          device: DEVICE_TYPE,
+        }),
+      });
+      localStorage.setItem(TOKEN_KEY, data.token);
+      syncTokenCookie();
+      registerForm.reset();
+      await enterApp(data.user);
+      toast(t("auth.registered") || "注册成功", "ok");
+    } catch (err) {
+      showAuthError(err.message || "注册失败");
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
+  });
+  // 「注册一个」→ 切换到注册表单
+  const toRegister = $("#toRegister");
+  if (toRegister) toRegister.onclick = (e) => {
+    e.preventDefault();
+    hideAuthSpinner();
+    $("#loginForm").hidden = true;
+    $("#registerForm").hidden = false;
+    $("#authSub").textContent = "创建账号以保存你的应用";
+    clearAuthError();
+  };
+  // 「去登录」→ 切回登录表单
+  const toLogin = $("#toLogin");
+  if (toLogin) toLogin.onclick = (e) => {
+    e.preventDefault();
+    hideAuthSpinner();
+    $("#registerForm").hidden = true;
+    $("#loginForm").hidden = false;
+    $("#authSub").textContent = "登录以同步你的应用";
+    clearAuthError();
+  };
   // 立即使用（匿名游客）：无需注册直接生成游客账号进入应用
   const anonBtn = $("#anonUseBtn");
   if (anonBtn) anonBtn.addEventListener("click", async () => {

@@ -448,6 +448,11 @@
       toast("请先在应用中登录后再发布", "err");
       return;
     }
+    // 前置拦截：匿名游客不能直接发布，弹窗引导先升级为正式账号
+    if (currentUser && currentUser.is_anonymous) {
+      openAnonPublishModal();
+      return;
+    }
     editingId = null;
     document.getElementById("publishForm").reset();
     setPublishMode();
