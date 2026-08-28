@@ -136,6 +136,10 @@ html, body {
   flex-direction: column;
   align-items: center;
   gap: 10px;
+  /* flex 子项默认 min-width:auto = 内容固有宽度，会让长 URL 撑爆父容器；
+     显式置 0 让子元素的 text-overflow:ellipsis 真正生效 */
+  min-width: 0;
+  overflow: hidden;
 }
 .card:hover { transform: translateY(-3px); border-color: var(--primary); }
 .card .icon {
@@ -168,6 +172,10 @@ html, body {
   font-size: 11px;
   color: var(--text-soft);
   max-width: 100%;
+  width: 100%;
+  /* block + min-width:0 是 flex 列布局下让 ellipsis 真正生效的必备条件 */
+  display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -443,9 +451,19 @@ body.selection-mode .card:hover { transform: none; }
 .ctx-menu button.danger { color: var(--danger); }
 
 @media (max-width: 640px) {
-  .topbar { flex-wrap: wrap; }
+  .topbar { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+  .brand { flex: 1 1 auto; min-width: 0; }
+  .brand-text h1 { font-size: 16px; }
+  .brand-text p { display: none; }
   .search-wrap { order: 3; max-width: 100%; flex-basis: 100%; }
-  .topbar-actions { margin-left: 0; }
+  .topbar-actions { margin-left: 0; flex-wrap: wrap; gap: 6px; flex: 0 0 auto; }
+  /* 窄屏顶栏：按钮只保留图标+最简文本（视频会议/排序等长名进一步收成 1 字） */
+  .topbar-actions .btn { padding: 7px 9px; font-size: 13px; }
+  .topbar-actions .btn .ico { margin-right: 4px; }
+  /* 关键：切断可能的「flex 子项最小尺寸 = 内容」造成的横向溢出 */
+  .topbar, .topbar-actions, .brand, .search-wrap { min-width: 0; }
+  /* 兜底：整页不出现水平滚动（任何子元素溢出都不会再撑出 body 横向滚动条） */
+  html, body { overflow-x: hidden; }
 }
 
 /* ---------- Auth (登录 / 注册) ---------- */
