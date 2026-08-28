@@ -331,11 +331,31 @@ export async function handleApi(req: Request): Promise<Response> {
       return json({ ok: true, email });
     }
 
-    // ---- 解绑邮箱（需登录；清空 email 字段）----
+    // ---- 解绑邮箱：向当前已绑定的邮箱发送验证码（需登录；验证当前邮箱所有权）----
+    if (path === "/api/email/unbind-code" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      if (!user.email) return json({ error: "尚未绑定邮箱" }, 400);
+      const code = String(Math.floor(100000 + Math.random() * 900000)); // 6 位纯数字
+      await saveEmailOtp(user.id, user.email, code, "unbind");
+      try {
+        await sendBindCodeEmail(user.email, code, "解绑邮箱");
+      } catch (e) {
+        return json({ error: (e as Error).message || "验证码发送失败" }, 502);
+      }
+      return json({ ok: true });
+    }
+
+    // ---- 解绑邮箱：校验当前邮箱验证码后清空 email 字段（需登录）----
     if (path === "/api/email/unbind" && method === "POST") {
       const user = await requireUser(req);
       if (!user) return json({ error: "未登录" }, 401);
       if (!user.email) return json({ error: "尚未绑定邮箱" }, 400);
+      const b = await req.json().catch(() => ({}));
+      const code = String(b.code || "").trim();
+      if (!/^\d{6}$/.test(code)) return json({ error: "请输入 6 位验证码" }, 400);
+      const ok = await verifyEmailOtp(user.id, user.email, code, "unbind");
+      if (!ok) return json({ error: "验证码错误或已过期" }, 400);
       await setUserEmail(user.id, "");
       return json({ ok: true });
     }

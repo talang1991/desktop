@@ -673,6 +673,12 @@
               <span id="emailBoundText" class="email-bound-text"></span>
             </div>
             <button id="emailUnbindBtn" class="btn ghost block danger" data-i18n="settings.emailUnbind">解绑邮箱</button>
+            <div id="emailUnbindCodeRow" hidden class="email-code-row">
+              <input id="emailUnbindCodeInput" type="text" inputmode="numeric" maxlength="6" class="input" placeholder="6 位验证码" data-i18n-ph="settings.emailCodePh" autocomplete="off" />
+              <button id="emailUnbindSendCodeBtn" class="btn ghost" data-i18n="settings.emailSendCode">发送验证码</button>
+              <button id="emailUnbindConfirmBtn" class="btn primary" data-i18n="settings.emailUnbindConfirm">确认解绑</button>
+            </div>
+            <p class="settings-hint" data-i18n="settings.emailUnbindHint">解绑需先验证当前邮箱：点击「解绑邮箱」后向该邮箱发送验证码，输入正确验证码方可解绑。</p>
           </div>
           <div id="emailFormBox">
             <div class="row email-row">

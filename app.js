@@ -1761,6 +1761,9 @@
       "settings.emailSendErr": "发送失败：",
       "settings.emailBindErr": "绑定失败：",
       "settings.emailUnbindDone": "已解绑邮箱",
+      "settings.emailUnbindConfirm": "确认解绑",
+      "settings.emailUnbindHint": "解绑需先验证当前邮箱：点击「解绑邮箱」后向该邮箱发送验证码，输入正确验证码方可解绑。",
+      "settings.emailUnbindNoEmail": "尚未绑定邮箱",
       "settings.changePassword": "修改密码",
       "settings.change.hint": "需通过绑定邮箱的验证码验证身份",
       "settings.change.oldPh": "原密码",
@@ -2107,6 +2110,9 @@
       "settings.emailSendErr": "Send failed: ",
       "settings.emailBindErr": "Bind failed: ",
       "settings.emailUnbindDone": "Email unbound",
+      "settings.emailUnbindConfirm": "Confirm Unbind",
+      "settings.emailUnbindHint": "To unbind, verify your current email first: click \"Unbind Email\", a code is sent to that email, then enter the correct code to confirm.",
+      "settings.emailUnbindNoEmail": "No email bound yet",
       "settings.changePassword": "Change Password",
       "settings.change.hint": "Verify via a code sent to your bound email",
       "settings.change.oldPh": "Current password",
@@ -3328,6 +3334,11 @@
       boundBox.hidden = false;
       formBox.hidden = true;
       $("#emailBoundText").textContent = currentUserEmail;
+      // 重置解绑验证码区：每次重渲染都收起，避免旧状态残留
+      const ubRow = $("#emailUnbindCodeRow");
+      if (ubRow) ubRow.hidden = true;
+      const ubInput = $("#emailUnbindCodeInput");
+      if (ubInput) ubInput.value = "";
     } else {
       boundBox.hidden = true;
       formBox.hidden = false;
@@ -3375,16 +3386,44 @@
     }
   }
 
-  // ---------- 解绑邮箱 ----------
-  async function emailUnbind() {
+  // ---------- 解绑邮箱：展开验证码区（当前已绑邮箱是已知的）----------
+  function emailUnbindReveal() {
+    const row = $("#emailUnbindCodeRow");
+    if (row) row.hidden = false;
+  }
+
+  // ---------- 解绑邮箱：向当前已绑定邮箱发送验证码 ----------
+  async function emailUnbindSendCode() {
+    if (!currentUserEmail) { toast(t("settings.emailUnbindNoEmail"), "err"); return; }
+    const btn = $("#emailUnbindSendCodeBtn");
+    btn.disabled = true;
     try {
-      const r = await api("/api/email/unbind", { method: "POST" });
+      const r = await api("/api/email/unbind-code", { method: "POST" });
+      if (r.error) { toast(r.error, "err"); return; }
+      toast(t("settings.emailSendCode") + " ✅");
+    } catch (e) {
+      toast(t("settings.emailSendErr") + ((e && e.message) || e), "err");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ---------- 解绑邮箱：校验当前邮箱验证码后解绑 ----------
+  async function emailUnbind() {
+    const code = $("#emailUnbindCodeInput").value.trim();
+    if (!/^\d{6}$/.test(code)) { toast(t("settings.emailCodePh"), "err"); return; }
+    const btn = $("#emailUnbindConfirmBtn");
+    btn.disabled = true;
+    try {
+      const r = await api("/api/email/unbind", { method: "POST", body: JSON.stringify({ code }) });
       if (r.error) { toast(r.error, "err"); return; }
       currentUserEmail = "";
       renderEmailSection();
       toast(t("settings.emailUnbindDone"));
     } catch (e) {
       toast((e && e.message) || String(e), "err");
+    } finally {
+      btn.disabled = false;
     }
   }
   function closeSettings() { settingsPanel.hidden = true; }
@@ -3397,7 +3436,11 @@
   const emailBindBtn = $("#emailBindBtn");
   if (emailBindBtn) emailBindBtn.onclick = emailBind;
   const emailUnbindBtn = $("#emailUnbindBtn");
-  if (emailUnbindBtn) emailUnbindBtn.onclick = emailUnbind;
+  if (emailUnbindBtn) emailUnbindBtn.onclick = emailUnbindReveal;
+  const emailUnbindSendCodeBtn = $("#emailUnbindSendCodeBtn");
+  if (emailUnbindSendCodeBtn) emailUnbindSendCodeBtn.onclick = emailUnbindSendCode;
+  const emailUnbindConfirmBtn = $("#emailUnbindConfirmBtn");
+  if (emailUnbindConfirmBtn) emailUnbindConfirmBtn.onclick = emailUnbind;
 
   // ---------- 修改密码（需通过绑定邮箱验证码）----------
   const changeSendCode = $("#changeSendCode");
