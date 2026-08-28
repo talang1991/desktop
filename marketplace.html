@@ -75,6 +75,9 @@
     .mk-top h1 { font-size: 18px; font-weight: 600; margin: 0; flex: 1; }
     .mk-who { font-size: 13px; color: var(--text-2); }
     .mk-who b { color: var(--primary); font-weight: 600; }
+    /* 桌面端无变化(h1 flex:1 撑开中间,mk-who + publishBtn 自然靠右)。
+       移动端 h1 display:none 后,顶栏布局靠左,需把 .mk-who margin-left:auto
+       让 [你好 + 发布] 推到右端,与左侧 [← 返回应用] 对称。 */
     .mk-tabs { display: flex; gap: 8px; margin: 16px 0 10px; }
     .mk-tab {
       border: 1px solid var(--border); background: var(--surface); color: var(--text-2);
@@ -103,9 +106,14 @@
     }
     .mk-banner-track {
       display: flex; height: 100%; transition: transform .5s ease; will-change: transform;
-      /* 无限轮播：克隆数组 [末张, 真实..., 首张]，首张真实位于 clone-index=1，
-         首屏居中 = (1080-930)/2 - 930 = -855px；客户端会按真实宽度重算 */
-      transform: translateX(-855px);
+      /* 默认偏移 0：移动端 itemW ≈ slot.clientWidth，0 等于居中。
+         桌面端在下方 @media (min-width:931px) 里用 CSS 变量覆写为 -855px
+         （首张真实居中：offset = (1080-930)/2 - 930 = -855）。
+         这样 SSR 首帧 paint 即可居中,无需等待 JS measure()。 */
+      transform: translateX(var(--banner-track-x, 0));
+    }
+    @media (min-width: 931px) {
+      .mk-banner-slot { --banner-track-x: -855px; }
     }
     .mk-banner-item {
       position: relative; flex: 0 0 930px; width: 930px; max-width: 100%; height: 100%;
@@ -316,6 +324,10 @@
       .mk-top { padding: 4px 0 10px; gap: 8px; }
       .mk-back { font-size: 13px; }
       #publishBtn { padding: 8px 12px; font-size: 13px; }
+      /* h1 display:none 后,顶栏 [← 返回应用][你好 踏浪][+ 发布应用] 整体靠左,
+         不符合常见 UI 模式。给 .mk-who 加 margin-left:auto 让 [你好 + 发布] 推到右端,
+         与左侧返回键对称。 */
+      .mk-who { margin-left: auto; }
     }
   /* 版本更新提示条（与首页一致） */
   .update-banner {

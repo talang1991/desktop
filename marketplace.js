@@ -772,9 +772,10 @@
     } else {
       items = apps.map((a, i) => bannerItemHtml(a, i)).join("");
     }
-    // 首屏首张真实（clone-index=1）居中：translateX = (1080-930)/2 - 930 = -855px
-    slot.innerHTML =
-      '<div class="mk-banner-track" style="transform:translateX(-855px)">' + items + "</div>" + extra;
+    // SSR 首帧 paint 即居中: 移动端默认 --banner-track-x=0 (itemW ≈ slot.width),
+    // 桌面端在 marketplace.html @media (min-width:931px) 设为 -855px。
+    // 这里不再写 inline transform (避免首帧前 inline 覆盖 CSS 变量导致位置错)。
+    slot.innerHTML = '<div class="mk-banner-track">' + items + "</div>" + extra;
   }
 
   let bannerTimer = null;
@@ -802,7 +803,9 @@
       target = Math.max(0, Math.min(cloneLast, target)); // 夹紧在 [0, count+1]
       const { itemW, offset } = measure();
       track.style.transition = animate ? "" : "none";
-      track.style.transform = "translateX(" + (offset - target * itemW) + "px)";
+      // 用 CSS 变量写偏移,保持 .mk-banner-track 的 transform 表达式生效,
+      // 避免直接写 inline transform 覆盖变量(后续 transition 才能正确过渡)。
+      track.style.setProperty("--banner-track-x", (offset - target * itemW) + "px");
       if (!animate) { void track.offsetHeight; } // 强制回流，无动画跳变立即生效
       idx = target;
       const real = ((idx - 1) % count + count) % count; // 真实张索引（克隆边缘也映射到对应真实张）
