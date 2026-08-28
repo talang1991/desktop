@@ -433,9 +433,12 @@
     const upgradeSec = $("#upgradeSection");
     const emailSec = $("#emailSection");
     const passSec = $("#passwordSection");
+    const devicesSec = $("#devicesSection");
     if (upgradeSec) upgradeSec.hidden = !anon;
     if (emailSec) emailSec.hidden = anon;
     if (passSec) passSec.hidden = anon;
+    // 登录设备模块对匿名游客整体隐藏（游客无多端账号概念）
+    if (devicesSec) devicesSec.hidden = anon;
   }
   async function checkAuth() {
     const tk = localStorage.getItem(TOKEN_KEY);
@@ -3312,7 +3315,8 @@
     refreshThemeToggle();
     applySettingsAnonVisibility();
     renderEmailSection();
-    loadSessions(); // 进入设置即刷新「登录设备」列表
+    // 登录设备模块对匿名游客隐藏（游客无多端账号概念），不发起 /api/sessions 请求
+    if (!currentUserIsAnonymous) loadSessions();
   }
 
   // ---------- 绑定邮箱：根据当前是否已绑定渲染区块 ----------
