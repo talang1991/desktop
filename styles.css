@@ -2362,6 +2362,23 @@ body.resizing .iframe-frame { pointer-events: none !important; }
   .topbar-actions .btn { flex: 0 0 auto; padding: 8px 11px; font-size: 13px; }
   .search-wrap { order: 3; }
 
+  /* 移动端未读徽标：内嵌按钮右侧、垂直居中。
+     .topbar-actions 在 ≤480 是 overflow-x:auto 横向滚动容器，
+     原「top:-7px / right:-7px」的越界红点会被裁切、与下一按钮挤压变形。
+     改成按钮内部的右上内侧竖直居中，徽标不再越出按钮边界。 */
+  #chatBtn { position: relative; padding-right: 22px; min-height: 34px; }
+  #chatBtn > .nav-badge {
+    top: 50%;
+    right: 3px;
+    transform: translateY(-50%);
+    min-width: 16px;
+    height: 16px;
+    line-height: 16px;
+    padding: 0 4px;
+    font-size: 10px;
+    box-shadow: none;
+  }
+
   .content { padding: 12px; }
   .filters { padding: 10px 12px 4px; gap: 6px; }
 
