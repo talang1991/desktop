@@ -772,10 +772,14 @@
     } else {
       items = apps.map((a, i) => bannerItemHtml(a, i)).join("");
     }
-    // SSR 首帧 paint 即居中: 移动端默认 --banner-track-x=0 (itemW ≈ slot.width),
-    // 桌面端在 marketplace.html @media (min-width:931px) 设为 -855px。
-    // 这里不再写 inline transform (避免首帧前 inline 覆盖 CSS 变量导致位置错)。
-    slot.innerHTML = '<div class="mk-banner-track">' + items + "</div>" + extra;
+    // 首屏 paint 即居中：写入 innerHTML 时直接给 track 设 inline transform，
+    // 用动态计算的初始偏移（桌面 item 固定 930、移动端 item 100% = slot.clientWidth）。
+    // 这样 JS 跑之前的首帧就已停在「真实首张」（clone-index=1）居中位置，无 FOUC；
+    // attachBanner() 末尾的 go(1, false) 会用 measure() 重算并校正（通常一致）。
+    const itemW = slot.clientWidth < 931 ? slot.clientWidth : 930;
+    const offset = (slot.clientWidth - itemW) / 2;
+    const initialX = offset - itemW; // = go(1) 的位置（首张真实居中）
+    slot.innerHTML = '<div class="mk-banner-track" style="transform:translateX(' + initialX + 'px)">' + items + "</div>" + extra;
   }
 
   let bannerTimer = null;
@@ -803,9 +807,7 @@
       target = Math.max(0, Math.min(cloneLast, target)); // 夹紧在 [0, count+1]
       const { itemW, offset } = measure();
       track.style.transition = animate ? "" : "none";
-      // 用 CSS 变量写偏移,保持 .mk-banner-track 的 transform 表达式生效,
-      // 避免直接写 inline transform 覆盖变量(后续 transition 才能正确过渡)。
-      track.style.setProperty("--banner-track-x", (offset - target * itemW) + "px");
+      track.style.transform = "translateX(" + (offset - target * itemW) + "px)";
       if (!animate) { void track.offsetHeight; } // 强制回流，无动画跳变立即生效
       idx = target;
       const real = ((idx - 1) % count + count) % count; // 真实张索引（克隆边缘也映射到对应真实张）
