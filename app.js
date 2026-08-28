@@ -384,6 +384,9 @@
     isAuthed = true;
     $("#authView").hidden = true;
     $("#appView").hidden = false;
+    // 首次使用引导：进入主界面即启动（650ms 后展示），仅对从未看过引导的用户，
+    // 放在最前避免被后续版本弹窗 / 加载流程盖住
+    maybeShowFirstUseGuide();
     currentUsername = user.username;
     currentUserId = user.id;
     myAvatar = user.avatar || "";
@@ -417,8 +420,6 @@
     await checkVersionEnforcement();
     // 版本更新弹窗：后端 show_popup 且版本高于本地已展示版本时展示（失效状态下不再弹）
     if (!appVersionDisabled) checkReleaseNotes();
-    // 首次使用引导：仅对从未看过引导的用户，进入主界面后稍候展示「添加应用 / 应用广场」使用提示
-    maybeShowFirstUseGuide();
   }
   // 匿名账号（「立即使用」生成的游客）：隐藏聊天 / 视频会议入口，并收敛设置页敏感操作
   function applyAnonymousUi() {
