@@ -1037,42 +1037,27 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 
 /* 顶栏 💬 按钮上的未读总数徽标（抽屉关闭时仍始终可见）
-   默认采用「内嵌按钮右侧、垂直居中」样式，确保 .nav-badge 首次出现时（即页面首屏渲染）
-   就已落位，不会先按桌面越界样式渲染再被媒体查询重排造成"位置跳动"。
-   桌面端（≥481px）在下方 @media 反向覆盖为越界样式。*/
-#chatBtn { position: relative; overflow: visible; padding-right: 22px; min-height: 34px; }
+   桌面默认采用右上角越界样式（系统通知风格），让桌面顶栏按钮宽度不被任何 mobile
+   占位污染。≤480px 时在下方媒体查询里改为内嵌右侧竖直居中，避免被 .topbar-actions
+   的横向滚动条裁切。 */
+#chatBtn { position: relative; overflow: visible; }
 .nav-badge {
   position: absolute;
-  top: 50%;
-  right: 3px;
-  transform: translateY(-50%);
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
+  top: -7px;
+  right: -7px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
   border-radius: 9px;
   background: var(--danger, #ff4d4f);
   color: #fff;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
-  line-height: 16px;
+  line-height: 18px;
   text-align: center;
   box-sizing: border-box;
+  box-shadow: 0 0 0 2px var(--surface-2);
   pointer-events: none;
-}
-/* 桌面端：恢复右上角越界式徽标（系统通知风格），并去掉 #chatBtn 的 mobile-only 占位 */
-@media (min-width: 481px) {
-  #chatBtn { padding-right: 0; min-height: 0; }
-  .nav-badge {
-    top: -7px;
-    right: -7px;
-    transform: none;
-    min-width: 18px;
-    height: 18px;
-    line-height: 18px;
-    padding: 0 5px;
-    font-size: 11px;
-    box-shadow: 0 0 0 2px var(--surface-2);
-  }
 }
 
 /* 右侧会话区 */
@@ -2380,9 +2365,22 @@ body.resizing .iframe-frame { pointer-events: none !important; }
   .topbar-actions .btn { flex: 0 0 auto; padding: 8px 11px; font-size: 13px; }
   .search-wrap { order: 3; }
 
-  /* 移动端未读徽标样式已并入 styles.css 默认样式块（line ~1041），
-     默认即为"内嵌按钮右侧、垂直居中"，桌面端用反向 @media 覆盖为越界样式。
-     此处不再覆写，避免元素首次出现时出现位置重排跳动。 */
+  /* 移动端未读徽标：在按钮内右侧、垂直居中。
+     桌面默认 (line ~1041) 是右上角越界式徽标；这里在 ≤480 改为内嵌版式，
+     既避免被 .topbar-actions 的 overflow-x:auto 横向滚动条裁切，
+     也让窄屏更紧凑。mobile 浏览器首屏即命中此规则，无 "突变等待期"。 */
+  #chatBtn { padding-right: 22px; min-height: 34px; }
+  #chatBtn > .nav-badge {
+    top: 50%;
+    right: 3px;
+    transform: translateY(-50%);
+    min-width: 16px;
+    height: 16px;
+    line-height: 16px;
+    padding: 0 4px;
+    font-size: 10px;
+    box-shadow: none;
+  }
 
   .content { padding: 12px; }
   .filters { padding: 10px 12px 4px; gap: 6px; }
