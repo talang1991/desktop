@@ -50,6 +50,7 @@
   let myAvatar = "";
   let currentUserRole = "user";   // 当前登录用户角色：user | admin（来自 /api/me）
   let currentUserEmail = "";      // 当前登录用户已绑定的邮箱（来自 /api/me）
+  let currentUserIsAnonymous = false; // 当前用户是否为「立即使用」生成的匿名游客账号
 
   // ---------- DOM ----------
   const $ = (sel) => document.querySelector(sel);
@@ -375,7 +376,7 @@
     // 回到账号/密码输入框（隐藏转圈）
     hideAuthSpinner();
     $("#loginForm").hidden = false;
-    $("#registerForm").hidden = true;
+    const regF = $("#registerForm"); if (regF) regF.hidden = true;
     apps = [];
     clearAuthError();
   }
@@ -388,6 +389,8 @@
     myAvatar = user.avatar || "";
     currentUserRole = (user.role === "admin") ? "admin" : "user";
     currentUserEmail = user.email || "";
+    currentUserIsAnonymous = !!user.is_anonymous;
+    applyAnonymousUi();
     refreshAdminEntry();
     $("#userName").textContent = user.username;
     renderAvatarInto($("#userAvatar"), myAvatar, (user.username || "?").charAt(0).toUpperCase());
@@ -414,6 +417,25 @@
     await checkVersionEnforcement();
     // 版本更新弹窗：后端 show_popup 且版本高于本地已展示版本时展示（失效状态下不再弹）
     if (!appVersionDisabled) checkReleaseNotes();
+  }
+  // 匿名账号（「立即使用」生成的游客）：隐藏聊天 / 视频会议入口，并收敛设置页敏感操作
+  function applyAnonymousUi() {
+    const hide = !!currentUserIsAnonymous;
+    const chatBtn = $("#chatBtn");
+    const meetingBtn = $("#meetingStartBtn");
+    if (chatBtn) chatBtn.hidden = hide;
+    if (meetingBtn) meetingBtn.hidden = hide;
+    applySettingsAnonVisibility();
+  }
+  // 设置页：匿名账号隐藏「绑定邮箱 / 修改密码」，显示「升级为正式账号」；反之相反
+  function applySettingsAnonVisibility() {
+    const anon = !!currentUserIsAnonymous;
+    const upgradeSec = $("#upgradeSection");
+    const emailSec = $("#emailSection");
+    const passSec = $("#passwordSection");
+    if (upgradeSec) upgradeSec.hidden = !anon;
+    if (emailSec) emailSec.hidden = anon;
+    if (passSec) passSec.hidden = anon;
   }
   async function checkAuth() {
     const tk = localStorage.getItem(TOKEN_KEY);
@@ -452,7 +474,7 @@
     if (txt && msg) txt.textContent = msg;
     sp.hidden = false;
     $("#loginForm").hidden = true;
-    $("#registerForm").hidden = true;
+    const regF2 = $("#registerForm"); if (regF2) regF2.hidden = true;
     clearAuthError();
   }
   function hideAuthSpinner() {
@@ -1686,6 +1708,10 @@
       "auth.logging": "登录中…",
       "auth.registering": "注册中…",
       "auth.verifying": "正在验证登录态…",
+      "auth.useNow": "立即使用",
+      "auth.useNowing": "正在进入…",
+      "auth.anon.hint": "点击「立即使用」免注册体验，之后可在设置中升级为正式账号",
+      "auth.anon.welcome": "已进入游客模式，可在设置中升级为正式账号",
       "auth.forgot": "忘记密码？",
       "auth.forgot.hint": "通过绑定邮箱的验证码重置密码",
       "auth.forgot.emailPh": "绑定邮箱",
@@ -1738,6 +1764,16 @@
       "settings.change.codePh": "6 位验证码",
       "settings.change.sendCode": "发送验证码",
       "settings.change.submit": "修改密码",
+      "settings.upgrade.title": "升级为正式账号",
+      "settings.upgrade.hint": "当前为游客账号（无密码、未绑定邮箱）。升级后账号永久保存，可使用聊天、视频会议、发布应用等全部功能。",
+      "settings.upgrade.usernamePh": "用户名（3-32 位）",
+      "settings.upgrade.passwordPh": "密码（至少 6 位）",
+      "settings.upgrade.submit": "升级为正式账号",
+      "settings.upgrade.submitting": "升级中…",
+      "settings.upgrade.emptyUser": "请输入用户名",
+      "settings.upgrade.shortPass": "密码至少 6 位",
+      "settings.upgrade.success": "已升级为正式账号",
+      "settings.upgrade.fail": "升级失败",
       "settings.change.sendErr": "发送失败：",
       "settings.change.done": "密码已修改",
       "settings.change.noEmail": "请先在上方绑定邮箱再修改密码",
@@ -2017,6 +2053,10 @@
       "auth.logging": "Signing in…",
       "auth.registering": "Signing up…",
       "auth.verifying": "Verifying your session…",
+      "auth.useNow": "Use Now",
+      "auth.useNowing": "Entering…",
+      "auth.anon.hint": "Tap “Use Now” to explore without signing up, then upgrade to a full account in Settings",
+      "auth.anon.welcome": "You are in guest mode. Upgrade to a full account in Settings",
       "auth.sessionExpired": "Session expired, please log in again",
       "auth.forgot": "Forgot password?",
       "auth.forgot.hint": "Reset password via a code sent to your bound email",
@@ -2069,6 +2109,16 @@
       "settings.change.codePh": "6-digit code",
       "settings.change.sendCode": "Send code",
       "settings.change.submit": "Change password",
+      "settings.upgrade.title": "Upgrade to full account",
+      "settings.upgrade.hint": "You are using a guest account (no password, email unbound). After upgrading, your account is saved permanently and you can use chat, meetings, publishing and all features.",
+      "settings.upgrade.usernamePh": "Username (3-32 chars)",
+      "settings.upgrade.passwordPh": "Password (min 6 chars)",
+      "settings.upgrade.submit": "Upgrade to full account",
+      "settings.upgrade.submitting": "Upgrading…",
+      "settings.upgrade.emptyUser": "Please enter a username",
+      "settings.upgrade.shortPass": "Password must be at least 6 characters",
+      "settings.upgrade.success": "Upgraded to a full account",
+      "settings.upgrade.fail": "Upgrade failed",
       "settings.change.sendErr": "Send failed: ",
       "settings.change.done": "Password changed",
       "settings.change.noEmail": "Bind your email first before changing password",
@@ -2419,46 +2469,59 @@
       btn.disabled = false; btn.textContent = orig;
     }
   });
-  $("#registerForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const btn = e.target.querySelector("button[type=submit]");
-    const orig = btn.textContent;
-    btn.disabled = true; btn.textContent = t("auth.registering");
+  // 立即使用（匿名游客）：无需注册直接生成游客账号进入应用
+  const anonBtn = $("#anonUseBtn");
+  if (anonBtn) anonBtn.addEventListener("click", async () => {
+    clearAuthError();
+    anonBtn.disabled = true;
+    const orig = anonBtn.textContent;
+    anonBtn.textContent = t("auth.useNowing");
     try {
-      const data = await api("/api/register", {
+      const data = await api("/api/anonymous", {
         method: "POST",
-        body: JSON.stringify({
-          username: $("#regUser").value.trim(),
-          password: $("#regPass").value,
-          device: DEVICE_TYPE,
-        }),
+        body: JSON.stringify({ device: DEVICE_TYPE }),
       });
       localStorage.setItem(TOKEN_KEY, data.token);
       syncTokenCookie();
-      $("#registerForm").reset();
       await enterApp(data.user);
+      toast(t("auth.anon.welcome"), "ok");
     } catch (err) {
-      showAuthError(err.message || "注册失败");
+      showAuthError(err.message || "生成游客账号失败");
     } finally {
-      btn.disabled = false; btn.textContent = orig;
+      anonBtn.disabled = false; anonBtn.textContent = orig;
     }
   });
-  $("#toRegister").onclick = (e) => {
-    e.preventDefault();
-    hideAuthSpinner();
-    $("#loginForm").hidden = true;
-    $("#registerForm").hidden = false;
-    $("#authSub").textContent = "创建账号以保存你的应用";
-    clearAuthError();
-  };
-  $("#toLogin").onclick = (e) => {
-    e.preventDefault();
-    hideAuthSpinner();
-    $("#registerForm").hidden = true;
-    $("#loginForm").hidden = false;
-    $("#authSub").textContent = "登录以同步你的应用";
-    clearAuthError();
-  };
+  // 升级为正式账号（设置页；仅匿名账号可见）
+  const upgradeSubmit = $("#upgradeSubmit");
+  if (upgradeSubmit) upgradeSubmit.addEventListener("click", async () => {
+    const msg = $("#upgradeMsg");
+    const u = $("#upgradeUser").value.trim();
+    const p = $("#upgradePass").value;
+    if (!u) { if (msg) { msg.hidden = false; msg.textContent = t("settings.upgrade.emptyUser"); } return; }
+    if (p.length < 6) { if (msg) { msg.hidden = false; msg.textContent = t("settings.upgrade.shortPass"); } return; }
+    upgradeSubmit.disabled = true;
+    const orig = upgradeSubmit.textContent;
+    upgradeSubmit.textContent = t("settings.upgrade.submitting");
+    try {
+      const data = await api("/api/upgrade", {
+        method: "POST",
+        body: JSON.stringify({ username: u, password: p }),
+      });
+      localStorage.setItem(TOKEN_KEY, data.token);
+      syncTokenCookie();
+      currentUserIsAnonymous = false;
+      currentUsername = data.user.username;
+      applyAnonymousUi();
+      if (msg) { msg.hidden = false; msg.className = "settings-msg ok"; msg.textContent = t("settings.upgrade.success"); }
+      toast(t("settings.upgrade.success"), "ok");
+      // 升级后刷新设置页：显示绑定邮箱 / 修改密码，隐藏升级入口
+      openSettings();
+    } catch (err) {
+      if (msg) { msg.hidden = false; msg.className = "settings-msg err"; msg.textContent = err.message || t("settings.upgrade.fail"); }
+    } finally {
+      upgradeSubmit.disabled = false; upgradeSubmit.textContent = orig;
+    }
+  });
 
   // ---------- 忘记密码（未登录，邮箱验证码重置）----------
   $("#toForgot").onclick = (e) => {
@@ -3198,6 +3261,7 @@
   function openSettings() {
     settingsPanel.hidden = false;
     refreshThemeToggle();
+    applySettingsAnonVisibility();
     renderEmailSection();
     loadSessions(); // 进入设置即刷新「登录设备」列表
   }

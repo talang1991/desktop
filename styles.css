@@ -600,6 +600,9 @@ body.selection-mode .card:hover { transform: none; }
 }
 .settings-panel .btn.block { display: block; width: 100%; margin-bottom: 10px; text-align: left; }
 .settings-hint { font-size: 12px; color: var(--text-2); line-height: 1.5; margin: 6px 0 10px; }
+.settings-msg { font-size: 12px; line-height: 1.5; margin: 8px 0 4px; padding: 8px 10px; border-radius: 8px; }
+.settings-msg.ok { background: color-mix(in srgb, #16a34a 14%, transparent); color: #15803d; }
+.settings-msg.err { background: color-mix(in srgb, #dc2626 12%, transparent); color: #b91c1c; }
 /* 紧跟在标题后的提示，需要与下方输入框再拉开一点 */
 .settings-section-title + .settings-hint { margin-bottom: 6px; }
 /* 设置面板内的文本输入框：统一边框/圆角/内边距（避免浏览器默认 inset 风格） */
@@ -718,6 +721,7 @@ body.selection-mode .card:hover { transform: none; }
 }
 .role-admin { background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary); }
 .role-user { background: var(--surface-2); color: var(--text-2); }
+.role-anon { background: color-mix(in srgb, #f59e0b 18%, transparent); color: #b45309; }
 .admin-self { font-size: 12px; color: var(--text-2); }
 .version-tag {
   display: inline-block; padding: 2px 9px; border-radius: 999px;

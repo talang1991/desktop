@@ -26,6 +26,7 @@ export interface StoredUser {
   role: string;
   email: string;
   created_at: string;
+  is_anonymous: boolean;
 }
 export type UserRole = "user" | "admin";
 interface LinkRow {
@@ -321,6 +322,10 @@ export async function initStore(): Promise<void> {
           await c.queryObject(
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS current_build_time TIMESTAMPTZ`,
           );
+          // 匿名用户标识：true 表示「立即使用」生成的游客账号，无密码、未绑定邮箱，需升级为正式账号
+          await c.queryObject(
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_anonymous BOOLEAN NOT NULL DEFAULT false`,
+          );
           await c.queryObject(
             `CREATE TABLE IF NOT EXISTS links (
               id SERIAL PRIMARY KEY,
@@ -501,13 +506,83 @@ export async function registerUser(username: string, password: string, avatar = 
     `INSERT INTO users (username, password_hash, avatar) VALUES ($1,$2,$3) RETURNING id, username, role`,
     [username, hash, av],
   );
-  return { id: rows[0].id, username: rows[0].username, password_hash: hash, avatar: av, role: rows[0].role, created_at: new Date().toISOString() };
+  return { id: rows[0].id, username: rows[0].username, password_hash: hash, avatar: av, role: rows[0].role, email: "", created_at: new Date().toISOString(), is_anonymous: false };
+}
+
+// 生成匿名游客账号（「立即使用」）：随机 guest_<随机串> 用户名、空密码哈希、is_anonymous=true。
+// 成功后创建会话并返回 token，前端凭此直接进入应用（无密码、未绑定邮箱）。
+export async function createAnonymousUser(): Promise<{ user: StoredUser; token: string }> {
+  ensureDb();
+  const av = "👤";
+  let username = "";
+  // 用户名需全局唯一：碰撞时（概率极低）追加一次重试，最多 5 次
+  for (let i = 0; i < 5; i++) {
+    const rand = newSessionToken().replace(/[^a-zA-Z0-9]/g, "").slice(0, 10);
+    const candidate = `guest_${rand}`;
+    const hit = await query<{ id: number }>(`SELECT id FROM users WHERE username = $1`, [candidate]);
+    if (!hit.length) { username = candidate; break; }
+  }
+  if (!username) throw new Error("生成游客账号失败，请重试");
+  const rows = await query<{ id: number; username: string; role: string; is_anonymous: boolean }>(
+    `INSERT INTO users (username, password_hash, avatar, is_anonymous)
+     VALUES ($1, '', $2, true) RETURNING id, username, role, is_anonymous`,
+    [username, av],
+  );
+  const id = rows[0].id;
+  const token = await createSession(id, "desktop", "");
+  const user: StoredUser = {
+    id,
+    username: rows[0].username,
+    password_hash: "",
+    avatar: av,
+    role: rows[0].role,
+    email: "",
+    created_at: new Date().toISOString(),
+    is_anonymous: rows[0].is_anonymous,
+  };
+  return { user, token };
+}
+
+// 将匿名账号升级为正式账号：写入用户名 + 密码哈希，并置 is_anonymous=false。
+// 校验用户名/密码格式、用户名唯一，且目标账号当前确为匿名；升级成功后创建新会话返回 token。
+export async function upgradeAnonymousUser(
+  userId: number,
+  username: string,
+  password: string,
+): Promise<{ user: StoredUser; token: string }> {
+  if (!validUsername(username)) throw new Error("用户名需为 3-32 位字母/数字/下划线/连字符");
+  if (password.length < 6) throw new Error("密码至少 6 位");
+  ensureDb();
+  const cur = await query<{ is_anonymous: boolean }>(`SELECT is_anonymous FROM users WHERE id = $1`, [userId]);
+  if (!cur.length) throw new Error("用户不存在");
+  if (!cur[0].is_anonymous) throw new Error("该账号已是正式账号");
+  const exist = await query<{ id: number }>(`SELECT id FROM users WHERE username = $1`, [username]);
+  if (exist.length) throw new Error("用户名已存在");
+  const hash = await hashPassword(password);
+  const rows = await query<{ id: number; username: string; role: string; avatar: string; is_anonymous: boolean }>(
+    `UPDATE users SET username = $2, password_hash = $3, is_anonymous = false
+     WHERE id = $1 RETURNING id, username, role, avatar, is_anonymous`,
+    [userId, username, hash],
+  );
+  const id = rows[0].id;
+  const token = await createSession(id, "desktop", "");
+  const user: StoredUser = {
+    id,
+    username: rows[0].username,
+    password_hash: hash,
+    avatar: rows[0].avatar,
+    role: rows[0].role,
+    email: "",
+    created_at: new Date().toISOString(),
+    is_anonymous: rows[0].is_anonymous,
+  };
+  return { user, token };
 }
 
 export async function findUserByUsername(username: string): Promise<StoredUser | null> {
   ensureDb();
   const rows = await query<StoredUser>(
-    `SELECT id, username, password_hash, avatar, role, email, created_at FROM users WHERE username = $1`,
+    `SELECT id, username, password_hash, avatar, role, email, created_at, is_anonymous FROM users WHERE username = $1`,
     [username],
   );
   return rows[0] ?? null;
@@ -776,17 +851,17 @@ export async function revokeSession(token: string, userId: number): Promise<bool
   return rows.length > 0;
 }
 
-export async function getUserByToken(token: string): Promise<{ id: number; username: string; avatar: string; role: string; email: string; current_version: string } | null> {
+export async function getUserByToken(token: string): Promise<{ id: number; username: string; avatar: string; role: string; email: string; current_version: string; is_anonymous: boolean } | null> {
   if (!token) return null;
   ensureDb();
   // 在【同一条连接】上完成「读取用户 + 刷新活跃时间」：
   // 这样只要能认证成功（读到了会话），就一定能更新 last_active，
   // 避免池化代理（Prisma 等）在 flaky 时「读走健康连接、写走坏连接」导致活跃时间静默丢失。
   return withClient(async (c: any) => {
-    const res = await c.queryObject<{ id: number; username: string; avatar: string; role: string; email: string; current_version: string; expires_at: string }>(
+    const res = await c.queryObject<{ id: number; username: string; avatar: string; role: string; email: string; current_version: string; is_anonymous: boolean; expires_at: string }>(
       // 左联 versions 表，按“打包时间”匹配出该用户运行构建对应的版本号：
       // 若该构建后台已补填版本号则优先显示语义版本，否则回退到上报的构建指纹（哈希）。
-      `SELECT u.id, u.username, u.avatar, u.role, u.email,
+      `SELECT u.id, u.username, u.avatar, u.role, u.email, u.is_anonymous,
               COALESCE(NULLIF(v.version, ''), u.current_version) AS current_version,
               s.expires_at
        FROM sessions s
@@ -804,7 +879,7 @@ export async function getUserByToken(token: string): Promise<{ id: number; usern
     // 刷新活跃时间（与读同连接；写失败不阻断请求，但静默吞掉只在此处发生，
     // 正常健康连接下必然成功）
     await c.queryObject(`UPDATE sessions SET last_active = now() WHERE token = $1`, [token]).catch(() => {});
-    return { id: r.id, username: r.username, avatar: r.avatar, role: r.role, email: r.email, current_version: r.current_version || "" };
+    return { id: r.id, username: r.username, avatar: r.avatar, role: r.role, email: r.email, current_version: r.current_version || "", is_anonymous: !!r.is_anonymous };
   });
 }
 
@@ -874,15 +949,15 @@ export async function updateUserRole(userId: number, role: string): Promise<bool
 // ---------------- 管理后台聚合查询 ----------------
 // 全部用户：含角色、头像、注册时间、链接数、当前使用版本（按注册时间倒序）
 export async function listAllUsers(): Promise<
-  Array<{ id: number; username: string; avatar: string; role: string; created_at: string; link_count: number; last_active: string | null; current_version: string }>
+  Array<{ id: number; username: string; avatar: string; role: string; created_at: string; link_count: number; last_active: string | null; current_version: string; is_anonymous: boolean }>
 > {
   ensureDb();
   const rows = await query<{
-    id: number; username: string; avatar: string; role: string; created_at: string; link_count: number; last_active: string | null; current_version: string;
+    id: number; username: string; avatar: string; role: string; created_at: string; link_count: number; last_active: string | null; current_version: string; is_anonymous: boolean;
   }>(
     // 左联 versions 表，按“打包时间”匹配出每个用户运行构建对应的版本号
     // （未携带版本号的构建：后台给对应 build_time 补填版本号后即生效，回退则为上报的构建指纹）。
-    `SELECT u.id, u.username, u.avatar, u.role, u.created_at,
+    `SELECT u.id, u.username, u.avatar, u.role, u.created_at, u.is_anonymous,
             COALESCE(NULLIF(v.version, ''), u.current_version) AS current_version,
             (SELECT COUNT(*) FROM links l WHERE l.user_id = u.id)::int AS link_count,
             (SELECT MAX(s.last_active) FROM sessions s WHERE s.user_id = u.id) AS last_active

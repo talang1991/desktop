@@ -392,6 +392,20 @@
     </div>
   </div>
 
+  <!-- 匿名账号发布拦截：提醒先升级为正式账号 -->
+  <div id="anonPublishModal" class="mk-modal" hidden>
+    <div class="mk-modal-card">
+      <div class="mk-modal-head"><span data-i18n="mk.publish.needUpgrade.title">请先完成注册</span> <button id="anonPublishClose" title="关闭">✕</button></div>
+      <div class="mk-modal-body">
+        <p data-i18n="mk.publish.needUpgrade.desc">发布应用需要正式账号。当前为游客账号，请先升级为正式账号（在「Web 应用导航」中：设置 → 升级为正式账号）后再来发布。</p>
+        <div class="mk-modal-actions">
+          <button id="anonPublishStay" class="btn ghost" data-i18n="mk.publish.needUpgrade.stay">稍后再说</button>
+          <a id="anonPublishGo" class="btn primary" href="index.html" data-i18n="mk.publish.needUpgrade.go">去升级为正式账号</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="marketplace.js?v=15"></script>
 </body>
 </html>

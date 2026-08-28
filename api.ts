@@ -1,6 +1,6 @@
 // api.ts —— 认证与链接 CRUD 路由处理（基于本地可靠存储 store.ts）
 import {
-  registerUser, findUserByUsername, verifyPassword, createSession,
+  registerUser, createAnonymousUser, upgradeAnonymousUser, findUserByUsername, verifyPassword, createSession,
   getUserByToken, deleteSession, listSessions, deleteOtherSessions, revokeSession,
   listLinks, createLink, updateLink, deleteLink,
   bulkImportLinks,
@@ -48,7 +48,7 @@ function isHttpUrl(s: unknown): boolean {
 import { getWsPublicUrl, getIceServers, isOnline, pushToUser } from "./signaling.ts";
 import { saveMessage, getMessages, saveGroupMessage, getGroupMessages, chatKvReady, saveReadCursor, getReadCursor } from "./chatstore.ts";
 
-interface User { id: number; username: string; avatar: string; role: string; email?: string; }
+interface User { id: number; username: string; avatar: string; role: string; email?: string; current_version?: string; is_anonymous?: boolean; }
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -173,7 +173,37 @@ export async function handleApi(req: Request): Promise<Response> {
         return json({ error: msg }, status);
       }
       const token = await createSession(user.id, normalizeDevice(device), String(req.headers.get("user-agent") || ""));
-      return json({ user: { id: user.id, username: user.username, avatar: user.avatar, role: user.role }, token }, 201);
+      return json({ user: { id: user.id, username: user.username, avatar: user.avatar, role: user.role, is_anonymous: false }, token }, 201);
+    }
+
+    // ---- 匿名登录（「立即使用」）：生成游客账号并返回 token ----
+    if (path === "/api/anonymous" && method === "POST") {
+      try {
+        const { device } = await req.json().catch(() => ({} as any));
+        const { user, token } = await createAnonymousUser();
+        return json({
+          user: { id: user.id, username: user.username, avatar: user.avatar, role: user.role, is_anonymous: true },
+          token,
+        }, 201);
+      } catch (e) {
+        return json({ error: (e as Error).message || "生成游客账号失败" }, 500);
+      }
+    }
+
+    // ---- 匿名账号升级为正式账号（需登录且当前为匿名）----
+    if (path === "/api/upgrade" && method === "POST") {
+      const user = await requireUser(req);
+      if (!user) return json({ error: "未登录" }, 401);
+      if (!user.is_anonymous) return json({ error: "该账号已是正式账号" }, 400);
+      const b = await req.json().catch(() => ({}));
+      try {
+        const { user: up, token } = await upgradeAnonymousUser(user.id, String(b.username || ""), String(b.password || ""));
+        return json({ user: { id: up.id, username: up.username, avatar: up.avatar, role: up.role, is_anonymous: up.is_anonymous }, token }, 200);
+      } catch (e) {
+        const msg = (e as Error).message;
+        const status = /已存在/.test(msg) ? 409 : 400;
+        return json({ error: msg }, status);
+      }
     }
 
     // ---- 登录 ----
@@ -184,7 +214,7 @@ export async function handleApi(req: Request): Promise<Response> {
       const ok = await verifyPassword(String(password), u.password_hash);
       if (!ok) return json({ error: "用户名或密码错误" }, 401);
       const token = await createSession(u.id, normalizeDevice(device), String(req.headers.get("user-agent") || ""));
-      return json({ user: { id: u.id, username: u.username, avatar: u.avatar, role: u.role }, token });
+      return json({ user: { id: u.id, username: u.username, avatar: u.avatar, role: u.role, is_anonymous: !!u.is_anonymous }, token });
     }
 
     // ---- 登出 ----
@@ -198,7 +228,7 @@ export async function handleApi(req: Request): Promise<Response> {
     if (path === "/api/me" && method === "GET") {
       // getUserByToken 内部已在同一连接上刷新 last_active（见 store.ts）
       const user = await requireUser(req);
-      return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar, role: user.role, email: user.email || "", current_version: user.current_version || "" } : null });
+      return json({ user: user ? { id: user.id, username: user.username, avatar: user.avatar, role: user.role, email: user.email || "", current_version: user.current_version || "", is_anonymous: !!user.is_anonymous } : null });
     }
 
     // ---- 前端上报“当前使用的客户端版本号”（登录态；供管理后台展示）----
@@ -536,10 +566,11 @@ export async function handleApi(req: Request): Promise<Response> {
       return json({ apps });
     }
 
-    // ---- 应用广场：发布应用（需登录）----
+    // ---- 应用广场：发布应用（需登录；匿名账号需先升级为正式账号）----
     if (path === "/api/apps" && method === "POST") {
       const user = await requireUser(req);
       if (!user) return json({ error: "请先登录" }, 401);
+      if (user.is_anonymous) return json({ error: "请先完成注册再发布应用", needUpgrade: true }, 403);
       const b = await req.json().catch(() => ({}));
       const name = String(b.name || "").trim();
       const rawUrl = String(b.url || "").trim();

@@ -137,15 +137,9 @@
         <input id="loginUser" type="text" placeholder="用户名" data-i18n-ph="auth.username.ph" autocomplete="username" required />
         <input id="loginPass" type="password" placeholder="密码" data-i18n-ph="auth.password.ph" autocomplete="current-password" required />
         <button class="btn primary block" type="submit" data-i18n="auth.login">登录</button>
+        <button id="anonUseBtn" class="btn ghost block" type="button" data-i18n="auth.useNow">立即使用</button>
         <p class="auth-toggle"><a id="toForgot" href="#" data-i18n="auth.forgot">忘记密码？</a></p>
-        <p class="auth-toggle"><span data-i18n="auth.noAccount.pre">还没有账号？</span><a id="toRegister" href="#" data-i18n="auth.register.link">注册一个</a></p>
-      </form>
-
-      <form id="registerForm" class="auth-form" hidden>
-        <input id="regUser" type="text" placeholder="用户名（3-32 位）" data-i18n-ph="auth.regUsername.ph" autocomplete="username" required />
-        <input id="regPass" type="password" placeholder="密码（至少 6 位）" data-i18n-ph="auth.regPassword.ph" autocomplete="new-password" required />
-        <button class="btn primary block" type="submit" data-i18n="auth.register">注册</button>
-        <p class="auth-toggle"><span data-i18n="auth.hasAccount.pre">已有账号？</span><a id="toLogin" href="#" data-i18n="auth.login.link">去登录</a></p>
+        <p class="auth-toggle"><span data-i18n="auth.noAccount.pre">还没有账号？</span><span data-i18n="auth.anon.hint">点击「立即使用」免注册体验，之后可在设置中升级为正式账号</span></p>
       </form>
 
       <!-- 忘记密码：邮箱验证码重置（未登录） -->
@@ -654,7 +648,15 @@
           <button id="clearCacheBtn" class="btn ghost block" data-i18n="settings.clearCache">🧹 清空缓存</button>
           <p class="settings-hint" data-i18n="settings.cacheHint">仅清除本机缓存（界面布局），保留登录状态、语言与主题。</p>
         </div>
-        <div class="settings-section">
+        <div class="settings-section" id="upgradeSection" hidden>
+          <div class="settings-section-title" data-i18n="settings.upgrade.title">升级为正式账号</div>
+          <p class="settings-hint" data-i18n="settings.upgrade.hint">当前为游客账号（无密码、未绑定邮箱）。升级后账号永久保存，可使用聊天、视频会议、发布应用等全部功能。</p>
+          <input id="upgradeUser" type="text" class="input" placeholder="用户名（3-32 位）" data-i18n-ph="settings.upgrade.usernamePh" autocomplete="username" maxlength="32" />
+          <input id="upgradePass" type="password" class="input" placeholder="密码（至少 6 位）" data-i18n-ph="settings.upgrade.passwordPh" autocomplete="new-password" />
+          <button id="upgradeSubmit" class="btn primary block" data-i18n="settings.upgrade.submit">升级为正式账号</button>
+          <p id="upgradeMsg" class="settings-msg" hidden></p>
+        </div>
+        <div class="settings-section" id="emailSection">
           <div class="settings-section-title" data-i18n="settings.email">绑定邮箱</div>
           <div id="emailBoundBox" hidden>
             <div class="email-bound-row">
@@ -675,7 +677,7 @@
             <p class="settings-hint" data-i18n="settings.emailHint">用于接收重要通知，验证码通过邮件发送。</p>
           </div>
         </div>
-        <div class="settings-section">
+        <div class="settings-section" id="passwordSection">
           <div class="settings-section-title" data-i18n="settings.changePassword">修改密码</div>
           <p class="settings-hint" data-i18n="settings.change.hint">需通过绑定邮箱的验证码验证身份</p>
           <input id="changeOldPass" type="password" class="input" placeholder="原密码" data-i18n-ph="settings.change.oldPh" autocomplete="current-password" />

@@ -150,6 +150,12 @@
       nm.textContent = u.username;
       nameTd.appendChild(av);
       nameTd.appendChild(nm);
+      if (u.is_anonymous) {
+        const anon = document.createElement("span");
+        anon.className = "role-badge role-anon";
+        anon.textContent = "匿名";
+        nameTd.appendChild(anon);
+      }
       tr.appendChild(nameTd);
       tr.insertAdjacentHTML("beforeend",
         "<td>" + roleBadge + "</td><td>" + escapeHtml(u.link_count) +

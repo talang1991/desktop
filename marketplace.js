@@ -87,6 +87,7 @@
           const body = await res.json().catch(() => ({}));
           const e = new Error(body.error || (res.status === 401 ? "请先登录" : "无权访问"));
           e.status = res.status;
+          if (body && body.needUpgrade) e.needUpgrade = true;
           throw e;
         }
         if (!res.ok) {
@@ -506,10 +507,24 @@
       switchTab("mine");
       await loadMine();
     } catch (err) {
+      if (err && err.needUpgrade) {
+        // 匿名账号发布被拦截：引导先升级为正式账号
+        openAnonPublishModal();
+        return;
+      }
       toast((err && err.message) || "提交失败", "err");
     } finally {
       btn.disabled = false;
     }
+  }
+  // 匿名账号点击发布：弹窗提醒先完成注册（升级为正式账号）再发布
+  function openAnonPublishModal() {
+    const modal = document.getElementById("anonPublishModal");
+    if (modal) modal.hidden = false;
+  }
+  function closeAnonPublishModal() {
+    const modal = document.getElementById("anonPublishModal");
+    if (modal) modal.hidden = true;
   }
 
   // 首屏水合（hydration）：若服务端已渲染了广场卡片（携带 #ssrPlazaData 数据），
@@ -660,6 +675,15 @@
     document.getElementById("publishForm").addEventListener("submit", submitPublish);
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && !document.getElementById("publishModal").hidden) closePublish();
+    });
+    // 匿名账号发布拦截弹窗
+    const anonClose = document.getElementById("anonPublishClose");
+    if (anonClose) anonClose.addEventListener("click", closeAnonPublishModal);
+    const anonStay = document.getElementById("anonPublishStay");
+    if (anonStay) anonStay.addEventListener("click", closeAnonPublishModal);
+    const anonModal = document.getElementById("anonPublishModal");
+    if (anonModal) anonModal.addEventListener("click", (e) => {
+      if (e.target.id === "anonPublishModal") closeAnonPublishModal();
     });
     // 首屏优先用服务端渲染的数据水合；否则客户端拉取（含筛选/切换 tab 时也会走 loadPlaza）
     if (!hydrateFromSSR()) {
